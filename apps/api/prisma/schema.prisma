@@ -1,0 +1,325 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  pending
+  approved
+  blocked
+  deleted
+}
+
+enum SourceType {
+  gto
+  ga4
+  redmine
+}
+
+enum JobType {
+  fetch
+  analyze
+  deliver
+}
+
+enum JobStatus {
+  pending
+  running
+  success
+  failed
+  skipped
+}
+
+enum RunStatus {
+  pending
+  running
+  full_success
+  partial_success
+  full_failure
+}
+
+enum TriggerType {
+  scheduled
+  manual
+}
+
+enum MessageStatus {
+  sent
+  failed
+  skipped
+}
+
+enum ActorType {
+  admin
+  system
+  bot
+}
+
+model AdminUser {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String
+  role          String    @default("operator")
+  isActive      Boolean   @default(true) @map("is_active")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  promptVersions PromptVersion[]
+  reportRuns     ReportRun[]
+  auditLogs      AuditLog[]
+  systemSettings SystemSetting[]
+
+  @@map("admin_users")
+}
+
+model User {
+  id                    String     @id @default(uuid())
+  telegramId            BigInt     @unique @map("telegram_id")
+  username              String?
+  firstName             String?    @map("first_name")
+  lastName              String?    @map("last_name")
+  languageCode          String?    @map("language_code")
+  status                UserStatus @default(pending)
+  globalReportsEnabled  Boolean    @default(true) @map("global_reports_enabled")
+  notes                 String?
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+
+  reportPreferences UserReportPreference[]
+  sentMessages      SentMessage[]
+
+  @@map("users")
+}
+
+model DataSource {
+  id          String     @id @default(uuid())
+  name        String
+  type        SourceType @unique
+  isEnabled   Boolean    @default(false) @map("is_enabled")
+  description String?
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  credentials       SourceCredential?
+  settings          SourceSetting[]
+  reportPreferences UserReportPreference[]
+  promptTemplate    PromptTemplate?
+  reportJobs        ReportJob[]
+  reportResults     ReportResult[]
+
+  @@map("data_sources")
+}
+
+model SourceCredential {
+  id                   String    @id @default(uuid())
+  sourceId             String    @unique @map("source_id")
+  encryptedPayload     String    @map("encrypted_payload")
+  encryptionKeyVersion Int       @default(1) @map("encryption_key_version")
+  isValid              Boolean?  @map("is_valid")
+  lastValidatedAt      DateTime? @map("last_validated_at")
+  validationError      String?   @map("validation_error")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  source DataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@map("source_credentials")
+}
+
+model SourceSetting {
+  id        String   @id @default(uuid())
+  sourceId  String   @map("source_id")
+  key       String
+  value     String
+  valueType String   @default("string") @map("value_type")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  source DataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, key])
+  @@map("source_settings")
+}
+
+model UserReportPreference {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  sourceId       String   @map("source_id")
+  reportsEnabled Boolean  @default(true) @map("reports_enabled")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source DataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceId])
+  @@map("user_report_preferences")
+}
+
+model PromptTemplate {
+  id              String    @id @default(uuid())
+  sourceId        String    @unique @map("source_id")
+  name            String
+  description     String?
+  activeVersionId String?   @map("active_version_id")
+  createdBy       String?   @map("created_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  source        DataSource      @relation(fields: [sourceId], references: [id])
+  versions      PromptVersion[]
+
+  @@map("prompt_templates")
+}
+
+model PromptVersion {
+  id             String   @id @default(uuid())
+  templateId     String   @map("template_id")
+  versionNumber  Int      @map("version_number")
+  systemPrompt   String   @map("system_prompt")
+  userPrompt     String   @map("user_prompt")
+  variables      Json     @default("[]")
+  outputSchema   Json?    @map("output_schema")
+  isActive       Boolean  @default(false) @map("is_active")
+  createdBy      String?  @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  template      PromptTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  createdByUser AdminUser?      @relation(fields: [createdBy], references: [id])
+  reportResults ReportResult[]
+
+  @@unique([templateId, versionNumber])
+  @@map("prompt_versions")
+}
+
+model ReportRun {
+  id           String      @id @default(uuid())
+  periodStart  DateTime    @map("period_start")
+  periodEnd    DateTime    @map("period_end")
+  status       RunStatus   @default(pending)
+  triggerType  TriggerType @default(scheduled) @map("trigger_type")
+  triggeredBy  String?     @map("triggered_by")
+  startedAt    DateTime?   @map("started_at")
+  completedAt  DateTime?   @map("completed_at")
+  errorSummary String?     @map("error_summary")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  triggeredByUser AdminUser?   @relation(fields: [triggeredBy], references: [id])
+  jobs            ReportJob[]
+  results         ReportResult[]
+
+  @@map("report_runs")
+}
+
+model ReportJob {
+  id          String    @id @default(uuid())
+  runId       String    @map("run_id")
+  sourceId    String    @map("source_id")
+  jobType     JobType   @map("job_type")
+  status      JobStatus @default(pending)
+  queueJobId  String?   @map("queue_job_id")
+  attemptCount Int      @default(0) @map("attempt_count")
+  lastError   String?   @map("last_error")
+  skipReason  String?   @map("skip_reason")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  run    ReportRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  source DataSource @relation(fields: [sourceId], references: [id])
+
+  @@unique([runId, sourceId, jobType])
+  @@map("report_jobs")
+}
+
+model ReportResult {
+  id               String   @id @default(uuid())
+  runId            String   @map("run_id")
+  sourceId         String   @map("source_id")
+  promptVersionId  String?  @map("prompt_version_id")
+  normalizedData   Json     @map("normalized_data")
+  llmRequest       Json?    @map("llm_request")
+  llmResponse      Json?    @map("llm_response")
+  structuredOutput Json?    @map("structured_output")
+  formattedMessage String   @map("formatted_message")
+  tokenUsage       Json?    @map("token_usage")
+  llmModel         String?  @map("llm_model")
+  llmCostUsd       Decimal? @map("llm_cost_usd") @db.Decimal(10, 6)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  run           ReportRun      @relation(fields: [runId], references: [id])
+  source        DataSource     @relation(fields: [sourceId], references: [id])
+  promptVersion PromptVersion? @relation(fields: [promptVersionId], references: [id])
+  sentMessages  SentMessage[]
+
+  @@unique([runId, sourceId])
+  @@map("report_results")
+}
+
+model SentMessage {
+  id                String        @id @default(uuid())
+  resultId          String        @map("result_id")
+  userId            String        @map("user_id")
+  telegramMessageId BigInt?       @map("telegram_message_id")
+  status            MessageStatus @default(sent)
+  failureReason     String?       @map("failure_reason")
+  sentAt            DateTime?     @map("sent_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+
+  result           ReportResult      @relation(fields: [resultId], references: [id])
+  user             User              @relation(fields: [userId], references: [id])
+  deliveryAttempts DeliveryAttempt[]
+
+  @@map("sent_messages")
+}
+
+model DeliveryAttempt {
+  id            String        @id @default(uuid())
+  sentMessageId String        @map("sent_message_id")
+  attemptNumber Int           @map("attempt_number")
+  status        MessageStatus
+  error         String?
+  attemptedAt   DateTime      @default(now()) @map("attempted_at")
+
+  sentMessage SentMessage @relation(fields: [sentMessageId], references: [id], onDelete: Cascade)
+
+  @@map("delivery_attempts")
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  actorType   ActorType @map("actor_type")
+  actorId     String?   @map("actor_id")
+  action      String
+  entityType  String?   @map("entity_type")
+  entityId    String?   @map("entity_id")
+  beforeState Json?     @map("before_state")
+  afterState  Json?     @map("after_state")
+  ipAddress   String?   @map("ip_address")
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  actor AdminUser? @relation(fields: [actorId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedBy   String?  @map("updated_by")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  updatedByUser AdminUser? @relation(fields: [updatedBy], references: [id])
+
+  @@map("system_settings")
+}
