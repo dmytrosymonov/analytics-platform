@@ -14,10 +14,17 @@ export interface LLMAnalysisResult {
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 class LLMService {
-  private openai: OpenAI;
+  private _openai: OpenAI | null = null;
 
-  constructor() {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  private get openai(): OpenAI {
+    if (!this._openai) {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey || apiKey.startsWith('sk-placeholder')) {
+        throw new Error('OPENAI_API_KEY is not configured. Set a real key in .env to enable LLM analysis.');
+      }
+      this._openai = new OpenAI({ apiKey });
+    }
+    return this._openai;
   }
 
   async analyze(params: { systemPrompt: string; userPrompt: string; sourceId: string; runId: string }): Promise<LLMAnalysisResult> {
