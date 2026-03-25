@@ -58,6 +58,11 @@ export default function SourcesPage() {
       { key: 'redmine_api_key', label: 'API Key', type: 'password' },
       { key: 'default_project_id', label: 'Default Project ID (optional)' },
     ],
+    youtrack: [
+      { key: 'youtrack_base_url', label: 'YouTrack Base URL (e.g. https://yourcompany.youtrack.cloud)' },
+      { key: 'youtrack_token', label: 'Permanent Token', type: 'password' },
+      { key: 'youtrack_project', label: 'Project Short Name (optional, e.g. APP)' },
+    ],
   };
 
   return (

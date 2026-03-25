@@ -21,6 +21,7 @@ async function main() {
     { name: 'GTO Sales API', type: 'gto' as const, description: 'GTO sales, orders, payments analytics' },
     { name: 'Google Analytics 4', type: 'ga4' as const, description: 'Web traffic and user behavior analytics' },
     { name: 'Redmine', type: 'redmine' as const, description: 'Project management and issue tracking analytics' },
+    { name: 'YouTrack', type: 'youtrack' as const, description: 'YouTrack issue tracker and project analytics' },
   ];
 
   for (const src of sources) {
@@ -35,6 +36,7 @@ async function main() {
       gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'UTC' },
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
+      youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },
     };
 
     for (const [key, value] of Object.entries(defaultSettings[src.type] || {})) {
@@ -120,6 +122,34 @@ Return ONLY valid JSON:
   "telegram_message": "Formatted Telegram message with markdown"
 }`,
       },
+      youtrack: {
+        system: `You are a project management analyst specializing in agile development and issue tracking.
+Analyze the provided YouTrack data and generate a structured JSON report.
+Focus on team velocity, bottlenecks, priority distribution, and workload balance.
+Always respond with valid JSON only.`,
+        user: `Analyze YouTrack issue tracker data for {{report_period_start}} to {{report_period_end}}.
+
+Source: {{source_name}}
+Data:
+{{normalized_metrics_json}}
+
+Return ONLY valid JSON:
+{
+  "executive_summary": "2-3 sentence summary of team performance",
+  "key_metrics": {
+    "issues_created": 0,
+    "issues_resolved": 0,
+    "issues_unresolved": 0,
+    "resolution_rate": 0,
+    "avg_resolution_hours": 0
+  },
+  "team_insights": ["insight about workload distribution", "insight about velocity"],
+  "bottlenecks": ["bottleneck 1"],
+  "priority_analysis": "Analysis of priority distribution and critical issues",
+  "recommendations": ["rec 1", "rec 2"],
+  "telegram_message": "Formatted Telegram message with markdown, max 3500 chars"
+}`,
+      },
     };
 
     const promptData = prompts[src.type];
@@ -160,6 +190,7 @@ Return ONLY valid JSON:
     { key: 'scheduler.gto_cron', value: '0 8 * * *', description: 'GTO daily cron' },
     { key: 'scheduler.ga4_cron', value: '0 8 * * *', description: 'GA4 daily cron' },
     { key: 'scheduler.redmine_cron', value: '0 8 * * *', description: 'Redmine daily cron' },
+    { key: 'scheduler.youtrack_cron', value: '0 8 * * *', description: 'YouTrack daily cron' },
   ];
 
   for (const s of settings) {

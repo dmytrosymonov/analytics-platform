@@ -18,6 +18,7 @@ enum SourceType {
   gto
   ga4
   redmine
+  youtrack
 }
 
 enum JobType {
