@@ -37,7 +37,7 @@ export async function buildApp() {
 
   await app.register(jwt, {
     secret: process.env.JWT_SECRET || 'dev-secret-change-in-production',
-    sign: { expiresIn: process.env.NODE_ENV === 'production' ? '15m' : '8h' },
+    sign: { expiresIn: '8h' },
   });
 
   // Auth decorator
