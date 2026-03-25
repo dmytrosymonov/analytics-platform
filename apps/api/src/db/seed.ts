@@ -191,6 +191,8 @@ Return ONLY valid JSON:
     { key: 'scheduler.ga4_cron', value: '0 8 * * *', description: 'GA4 daily cron' },
     { key: 'scheduler.redmine_cron', value: '0 8 * * *', description: 'Redmine daily cron' },
     { key: 'scheduler.youtrack_cron', value: '0 8 * * *', description: 'YouTrack daily cron' },
+    { key: 'telegram.bot_token', value: '', description: 'Telegram Bot Token from @BotFather' },
+    { key: 'telegram.admin_chat_id', value: '', description: 'Telegram Chat ID for admin notifications' },
   ];
 
   for (const s of settings) {

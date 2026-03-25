@@ -14,6 +14,52 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 export async function userRoutes(app: FastifyInstance) {
   const auth = { onRequest: [(app as any).authenticate] };
 
+  // Manually add a user by Telegram ID
+  app.post('/', auth, async (request, reply) => {
+    const actor = (request.user as any);
+    const body = z.object({
+      telegramId: z.string().regex(/^\d+$/, 'Must be numeric'),
+      firstName: z.string().optional(),
+      lastName: z.string().optional(),
+      username: z.string().optional(),
+      status: z.enum(['pending', 'approved']).default('approved'),
+    }).parse(request.body);
+
+    const existing = await prisma.user.findUnique({ where: { telegramId: BigInt(body.telegramId) } });
+    if (existing) {
+      return reply.status(409).send({ success: false, error: { message: 'User with this Telegram ID already exists' } });
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        telegramId: BigInt(body.telegramId),
+        firstName: body.firstName,
+        lastName: body.lastName,
+        username: body.username,
+        status: body.status,
+        globalReportsEnabled: true,
+      },
+    });
+
+    // Create default preferences for all sources
+    const sources = await prisma.dataSource.findMany();
+    for (const source of sources) {
+      await prisma.userReportPreference.upsert({
+        where: { userId_sourceId: { userId: user.id, sourceId: source.id } },
+        create: { userId: user.id, sourceId: source.id, reportsEnabled: true },
+        update: {},
+      });
+    }
+
+    await writeAuditLog({
+      actorType: 'admin', actorId: actor.sub,
+      action: 'user.created_manually', entityType: 'user', entityId: user.id,
+      afterState: { telegramId: body.telegramId, status: body.status },
+    });
+
+    return reply.status(201).send({ success: true, data: user });
+  });
+
   app.get('/', auth, async (request, reply) => {
     const query = request.query as any;
     const page = parseInt(query.page || '1');

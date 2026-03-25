@@ -3,11 +3,19 @@ import { prisma } from '../lib/prisma';
 import { writeAuditLog } from '../lib/audit';
 import { logger } from '../lib/logger';
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token';
-export const bot = new Telegraf(BOT_TOKEN);
+// Mutable bot instance — replaced on reload
+let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
+let _botRunning = false;
 
-export async function startBot() {
-  bot.command('start', async (ctx) => {
+// Proxy so other modules always get the current instance
+export const bot = new Proxy({} as Telegraf, {
+  get(_target, prop) {
+    return (_bot as any)[prop];
+  },
+});
+
+function registerHandlers(instance: Telegraf) {
+  instance.command('start', async (ctx) => {
     const from = ctx.from!;
     try {
       let user = await prisma.user.findUnique({ where: { telegramId: BigInt(from.id) } });
@@ -24,7 +32,6 @@ export async function startBot() {
           },
         });
 
-        // Create default preferences for all sources
         const sources = await prisma.dataSource.findMany();
         for (const source of sources) {
           await prisma.userReportPreference.upsert({
@@ -36,10 +43,9 @@ export async function startBot() {
 
         await writeAuditLog({ actorType: 'bot', action: 'user.registered', entityType: 'user', entityId: user.id });
 
-        // Notify admins
         const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
         if (adminChatId) {
-          await bot.telegram.sendMessage(adminChatId,
+          await instance.telegram.sendMessage(adminChatId,
             `👤 *New subscription request*\nName: ${from.first_name || ''} ${from.last_name || ''}\nUsername: @${from.username || 'unknown'}\nTelegram ID: \`${from.id}\`\n\nReview in admin panel.`,
             { parse_mode: 'Markdown' }
           ).catch(() => {});
@@ -60,7 +66,7 @@ export async function startBot() {
     }
   });
 
-  bot.command('status', async (ctx) => {
+  instance.command('status', async (ctx) => {
     const user = await prisma.user.findUnique({ where: { telegramId: BigInt(ctx.from!.id) } });
     if (!user) return ctx.reply('You are not registered. Use /start to subscribe.');
 
@@ -78,7 +84,7 @@ export async function startBot() {
     );
   });
 
-  bot.command('help', async (ctx) => {
+  instance.command('help', async (ctx) => {
     await ctx.reply(
       `*Analytics Report Bot*\n\n` +
       `/start — Subscribe to analytics reports\n` +
@@ -90,16 +96,45 @@ export async function startBot() {
     );
   });
 
-  bot.catch((err) => {
+  instance.catch((err) => {
     logger.error({ err }, 'Telegram bot error');
   });
+}
 
-  // Use polling in development, webhook in production
+export async function startBot(token?: string) {
+  const resolvedToken = token
+    || (await prisma.systemSetting.findUnique({ where: { key: 'telegram.bot_token' } }))?.value
+    || process.env.TELEGRAM_BOT_TOKEN
+    || '';
+
+  if (!resolvedToken || resolvedToken === 'placeholder:token') {
+    throw new Error('No valid Telegram bot token configured');
+  }
+
+  // Stop previous instance if running
+  if (_botRunning) {
+    try { _bot.stop('RELOAD'); } catch (_) {}
+    _botRunning = false;
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  _bot = new Telegraf(resolvedToken);
+  registerHandlers(_bot);
+
   if (process.env.TELEGRAM_WEBHOOK_URL) {
     logger.info({ url: process.env.TELEGRAM_WEBHOOK_URL }, 'Bot using webhook mode');
-    // Webhook is set up via the webhook controller
   } else {
     logger.info('Bot using polling mode');
-    await bot.launch();
+    await _bot.launch();
   }
+
+  _botRunning = true;
+  logger.info('Telegram bot started successfully');
+}
+
+export function getBotStatus(): { running: boolean; hasToken: boolean } {
+  return {
+    running: _botRunning,
+    hasToken: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'placeholder:token'),
+  };
 }
