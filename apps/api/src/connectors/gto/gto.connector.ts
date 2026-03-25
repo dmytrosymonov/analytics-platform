@@ -1,10 +1,13 @@
 import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
 import { logger } from '../../lib/logger';
+import { CurrencyService, CurrencyRates } from '../../lib/currency.service';
+import { prisma } from '../../lib/prisma';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
+const DEFAULT_BASE_URL   = 'https://api.gto.ua/api/private';
+const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 
 export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
@@ -38,24 +41,35 @@ export class GTOConnector implements SourceConnector {
     period: { start: Date; end: Date }
   ): Promise<ConnectorResult> {
     const { api_key, base_url } = credentials as any;
-    const baseUrl = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
-    const timeout = parseInt(settings['request_timeout_seconds'] || '30') * 1000;
-    const retryCount = parseInt(settings['retry_count'] || '3');
-    const retryBackoff = parseInt(settings['retry_backoff_seconds'] || '2');
+    const baseUrl   = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
+    const timeout   = parseInt(settings['request_timeout_seconds'] || '30') * 1000;
+    const retryCount    = parseInt(settings['retry_count'] || '3');
+    const retryBackoff  = parseInt(settings['retry_backoff_seconds'] || '2');
+
+    // GTO v3 base URL — from system settings or default
+    const v3BaseUrl = await this.getV3BaseUrl();
+
+    // Fetch currency rates (cached daily in Redis)
+    let rates: CurrencyRates | null = null;
+    try {
+      rates = await CurrencyService.getRates(api_key, v3BaseUrl);
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Currency rates unavailable, amounts will not be converted to EUR');
+    }
 
     const http = this.client(baseUrl, api_key, timeout);
 
     const dateFrom = period.start.toISOString().slice(0, 10);
-    const dateTo = period.end.toISOString().slice(0, 10);
+    const dateTo   = period.end.toISOString().slice(0, 10);
 
     const warnings: string[] = [];
+    if (!rates) warnings.push('Currency rates unavailable — amounts shown in original currencies');
 
     const fetchEndpoint = async (path: string, params: Record<string, unknown>): Promise<any[]> => {
       for (let attempt = 0; attempt <= retryCount; attempt++) {
         try {
           const resp = await http.get(path, { params: { ...params, per_page: 1000 } });
           const data = resp.data;
-          // GTO returns { data: [...] } or just [...]
           if (Array.isArray(data)) return data;
           if (data && Array.isArray(data.data)) return data.data;
           return [];
@@ -80,7 +94,11 @@ export class GTOConnector implements SourceConnector {
         .catch(e => { warnings.push(`invoices_list(out): ${e.message}`); return []; }),
     ]);
 
-    const computed = this.computeAnalytics({ orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut }, period);
+    const computed = this.computeAnalytics(
+      { orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut },
+      period,
+      rates,
+    );
 
     return {
       success: true,
@@ -91,8 +109,14 @@ export class GTOConnector implements SourceConnector {
         periodStart: period.start.toISOString(),
         periodEnd: period.end.toISOString(),
         timezone: settings['timezone'] || 'Europe/Kiev',
+        currency: {
+          base: 'EUR',
+          ratesDate: rates?.fetchedAt?.slice(0, 10) ?? null,
+          ratesAvailable: !!rates,
+        },
         metrics: {
-          raw: { orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut },
+          // Raw data intentionally omitted from LLM payload to save tokens.
+          // Only computed (EUR-normalized) metrics go to ChatGPT.
           computed,
         },
         warnings,
@@ -100,11 +124,26 @@ export class GTOConnector implements SourceConnector {
     };
   }
 
+  private async getV3BaseUrl(): Promise<string> {
+    try {
+      const setting = await prisma.systemSetting.findUnique({ where: { key: 'gto.v3_base_url' } });
+      return (setting?.value || DEFAULT_V3_BASE_URL).replace(/\/$/, '');
+    } catch {
+      return DEFAULT_V3_BASE_URL;
+    }
+  }
+
   private computeAnalytics(
     data: { orders: any[]; paymentsIn: any[]; paymentsOut: any[]; invoicesIn: any[]; invoicesOut: any[] },
-    period: { start: Date; end: Date }
+    period: { start: Date; end: Date },
+    rates: CurrencyRates | null,
   ) {
     const { orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut } = data;
+
+    const toEur = (amount: number, currency: string): number => {
+      if (!rates) return amount;
+      return CurrencyService.toEur(amount, currency || 'EUR', rates);
+    };
 
     // Orders by status
     const confirmedOrders = orders.filter(o => o.status === 'CNF');
@@ -115,20 +154,29 @@ export class GTOConnector implements SourceConnector {
     const activePaymentsIn  = paymentsIn.filter(p => !p.is_revoked);
     const activePaymentsOut = paymentsOut.filter(p => !p.is_revoked);
 
-    // Revenue by currency
-    const revenueByCurrency: Record<string, number> = {};
+    // Revenue in EUR
+    let incomingEur = 0;
+    let outgoingEur = 0;
+    const paymentsDetail: Array<{ date: string; amountEur: number; currency: string; form: string }> = [];
+
     for (const p of activePaymentsIn) {
       const currency = p.currency_code || p.balance_currency_code || 'UAH';
-      revenueByCurrency[currency] = (revenueByCurrency[currency] || 0) + (parseFloat(p.amount) || 0);
+      const amountEur = toEur(parseFloat(p.amount) || 0, currency);
+      incomingEur += amountEur;
+      paymentsDetail.push({ date: p.date, amountEur, currency, form: p.payment_form || '' });
+    }
+    for (const p of activePaymentsOut) {
+      const currency = p.currency_code || p.balance_currency_code || 'UAH';
+      outgoingEur += toEur(parseFloat(p.amount) || 0, currency);
     }
 
-    const totalIncoming = activePaymentsIn.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-    const totalOutgoing = activePaymentsOut.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-
-    // Invoices (exclude revoked)
+    // Invoices in EUR
     const activeInvoicesIn  = invoicesIn.filter(i => !i.is_revoked);
     const activeInvoicesOut = invoicesOut.filter(i => !i.is_revoked);
-    const invoicedAmount    = activeInvoicesIn.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+    let invoicedEur = 0;
+    for (const i of activeInvoicesIn) {
+      invoicedEur += toEur(parseFloat(i.amount) || 0, i.currency || 'UAH');
+    }
 
     // Top companies by order count
     const companyCounts: Record<string, number> = {};
@@ -137,7 +185,7 @@ export class GTOConnector implements SourceConnector {
     }
     const topCompanies = Object.entries(companyCounts)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
+      .slice(0, 10)
       .map(([name, count]) => ({ name, orders: count }));
 
     // Orders by day
@@ -148,34 +196,36 @@ export class GTOConnector implements SourceConnector {
     }
 
     const periodDays = Math.max(1, Math.ceil((period.end.getTime() - period.start.getTime()) / 86400000));
-    const avgOrdersPerDay = orders.length / periodDays;
 
     return {
+      currency_note: rates
+        ? `All monetary values in EUR (rates from ${rates.fetchedAt.slice(0, 10)})`
+        : 'Currency rates unavailable — values in original currencies',
       period_days: periodDays,
       orders: {
         total: orders.length,
         confirmed: confirmedOrders.length,
         cancelled: cancelledOrders.length,
         pending: pendingOrders.length,
-        cancellation_rate: orders.length > 0 ? Math.round(cancelledOrders.length / orders.length * 100) : 0,
-        avg_per_day: Math.round(avgOrdersPerDay * 10) / 10,
+        cancellation_rate_pct: orders.length > 0 ? Math.round(cancelledOrders.length / orders.length * 100) : 0,
+        avg_per_day: Math.round(orders.length / periodDays * 10) / 10,
         by_day: ordersByDay,
         top_companies: topCompanies,
       },
       payments: {
-        incoming_total: Math.round(totalIncoming * 100) / 100,
-        outgoing_total: Math.round(totalOutgoing * 100) / 100,
-        net: Math.round((totalIncoming - totalOutgoing) * 100) / 100,
-        by_currency: revenueByCurrency,
+        incoming_eur: Math.round(incomingEur * 100) / 100,
+        outgoing_eur: Math.round(outgoingEur * 100) / 100,
+        net_eur: Math.round((incomingEur - outgoingEur) * 100) / 100,
         incoming_count: activePaymentsIn.length,
         outgoing_count: activePaymentsOut.length,
-        avg_payment: activePaymentsIn.length > 0
-          ? Math.round(totalIncoming / activePaymentsIn.length * 100) / 100
+        avg_payment_eur: activePaymentsIn.length > 0
+          ? Math.round(incomingEur / activePaymentsIn.length * 100) / 100
           : 0,
+        daily_detail: paymentsDetail,
       },
       invoices: {
         issued_count: activeInvoicesIn.length,
-        issued_amount: Math.round(invoicedAmount * 100) / 100,
+        issued_amount_eur: Math.round(invoicedEur * 100) / 100,
         outgoing_count: activeInvoicesOut.length,
       },
       data_available: orders.length > 0 || activePaymentsIn.length > 0,

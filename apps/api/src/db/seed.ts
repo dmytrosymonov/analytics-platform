@@ -70,7 +70,7 @@ async function main() {
 
     // Default settings
     const defaultSettings: Record<string, Record<string, string>> = {
-      gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'UTC' },
+      gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'Europe/Kiev' },
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
       youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },
@@ -271,6 +271,8 @@ Return ONLY valid JSON:
     { key: 'scheduler.fireflies_cron', value: '0 8 * * *', description: 'Fireflies daily cron' },
     { key: 'telegram.bot_token', value: '', description: 'Telegram Bot Token from @BotFather' },
     { key: 'telegram.admin_chat_id', value: '', description: 'Telegram Chat ID for admin notifications' },
+    { key: 'gto.v3_base_url', value: 'https://api.gto.ua/api/v3', description: 'GTO v3 API base URL for currency rates and static data' },
+    { key: 'currency.base', value: 'EUR', description: 'Base currency for all analytics (all amounts converted to this currency)' },
   ];
 
   for (const s of settings) {

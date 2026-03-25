@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authFetch, authPost } from '@/lib/api';
 import toast from 'react-hot-toast';
-import { Bot, Cpu, Clock, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { Bot, Cpu, Clock, CheckCircle, XCircle, RefreshCw, Globe } from 'lucide-react';
 
 type SettingsField = { key: string; label: string; placeholder?: string; type?: string; hint?: string };
 type SettingsSection = { key: string; label: string; icon: any; color: string; bg: string; description: string; fields: SettingsField[] };
@@ -45,6 +45,28 @@ const SECTIONS: SettingsSection[] = [
       { key: 'llm.max_tokens', label: 'Max Tokens', placeholder: '4096' },
       { key: 'llm.temperature', label: 'Temperature (0–1)', placeholder: '0.3' },
       { key: 'llm.max_cost_per_run_usd', label: 'Max Cost per Run (USD)', placeholder: '5.00' },
+    ],
+  },
+  {
+    key: 'gto',
+    label: 'GTO API',
+    icon: Globe,
+    color: 'text-orange-600',
+    bg: 'bg-orange-50',
+    description: 'GTO v3 API for currency rates and static reference data (regions, hotels, destinations).',
+    fields: [
+      {
+        key: 'gto.v3_base_url',
+        label: 'GTO v3 Base URL',
+        placeholder: 'https://api.gto.ua/api/v3',
+        hint: 'Used for daily currency rates. API key is taken from the GTO data source credentials.',
+      },
+      {
+        key: 'currency.base',
+        label: 'Base Currency',
+        placeholder: 'EUR',
+        hint: 'All monetary values are converted to this currency before AI analysis.',
+      },
     ],
   },
   {
