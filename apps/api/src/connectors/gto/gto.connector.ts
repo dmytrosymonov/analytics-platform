@@ -2,44 +2,28 @@ import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
 import { logger } from '../../lib/logger';
 
-class Semaphore {
-  private count: number;
-  private queue: Array<() => void> = [];
-
-  constructor(count: number) { this.count = count; }
-
-  async acquire(): Promise<() => void> {
-    return new Promise((resolve) => {
-      if (this.count > 0) {
-        this.count--;
-        resolve(() => this.release());
-      } else {
-        this.queue.push(() => { this.count--; resolve(() => this.release()); });
-      }
-    });
-  }
-
-  private release() {
-    this.count++;
-    if (this.queue.length > 0) {
-      const next = this.queue.shift()!;
-      this.count--;
-      next();
-    }
-  }
-}
-
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 
 export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
 
+  private client(baseUrl: string, apiKey: string, timeout: number) {
+    return axios.create({
+      baseURL: baseUrl,
+      params: { apikey: apiKey },
+      timeout,
+    });
+  }
+
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {
     const { api_key, base_url } = credentials as any;
-    if (!api_key || !base_url) return false;
+    if (!api_key) return false;
+    const url = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
     try {
-      const resp = await axios.get(`${base_url}/api/private/openapi`, {
-        headers: { 'X-Api-Key': api_key },
+      const resp = await axios.get(`${url}/orders_list`, {
+        params: { apikey: api_key, per_page: 1 },
         timeout: 10000,
       });
       return resp.status < 400;
@@ -48,41 +32,55 @@ export class GTOConnector implements SourceConnector {
     }
   }
 
-  async fetchData(credentials: Record<string, unknown>, settings: Record<string, string>, period: { start: Date; end: Date }): Promise<ConnectorResult> {
+  async fetchData(
+    credentials: Record<string, unknown>,
+    settings: Record<string, string>,
+    period: { start: Date; end: Date }
+  ): Promise<ConnectorResult> {
     const { api_key, base_url } = credentials as any;
+    const baseUrl = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
     const timeout = parseInt(settings['request_timeout_seconds'] || '30') * 1000;
     const retryCount = parseInt(settings['retry_count'] || '3');
     const retryBackoff = parseInt(settings['retry_backoff_seconds'] || '2');
-    const maxParallel = parseInt(settings['max_parallel_requests'] || '5');
-    const semaphore = new Semaphore(maxParallel);
 
-    const periodParams = {
-      date_from: period.start.toISOString().slice(0, 10),
-      date_to: period.end.toISOString().slice(0, 10),
-    };
+    const http = this.client(baseUrl, api_key, timeout);
 
-    const endpoints = [
-      { name: 'orders', path: '/api/private/orders', params: periodParams },
-      { name: 'payments', path: '/api/private/payments', params: periodParams },
-    ];
+    const dateFrom = period.start.toISOString().slice(0, 10);
+    const dateTo = period.end.toISOString().slice(0, 10);
 
     const warnings: string[] = [];
-    const metrics: Record<string, unknown> = {};
 
-    await Promise.all(endpoints.map(async (ep) => {
-      const release = await semaphore.acquire();
-      try {
-        const data = await this.fetchWithRetry(base_url, ep.path, ep.params, api_key, timeout, retryCount, retryBackoff);
-        metrics[ep.name] = data;
-      } catch (err: any) {
-        warnings.push(`Failed to fetch ${ep.name}: ${err.message}`);
-        metrics[ep.name] = null;
-      } finally {
-        release();
+    const fetchEndpoint = async (path: string, params: Record<string, unknown>): Promise<any[]> => {
+      for (let attempt = 0; attempt <= retryCount; attempt++) {
+        try {
+          const resp = await http.get(path, { params: { ...params, per_page: 1000 } });
+          const data = resp.data;
+          // GTO returns { data: [...] } or just [...]
+          if (Array.isArray(data)) return data;
+          if (data && Array.isArray(data.data)) return data.data;
+          return [];
+        } catch (err: any) {
+          if (attempt === retryCount) throw err;
+          await sleep(retryBackoff * Math.pow(2, attempt) * 1000);
+        }
       }
-    }));
+      return [];
+    };
 
-    const computed = this.computeAnalytics(metrics, period);
+    const [orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut] = await Promise.all([
+      fetchEndpoint('/orders_list', { date_from: dateFrom, date_to: dateTo, sort_by: 'created_at' })
+        .catch(e => { warnings.push(`orders_list: ${e.message}`); return []; }),
+      fetchEndpoint('/payments_list', { type: 'in', date_from: dateFrom, date_to: dateTo })
+        .catch(e => { warnings.push(`payments_list(in): ${e.message}`); return []; }),
+      fetchEndpoint('/payments_list', { type: 'out', date_from: dateFrom, date_to: dateTo })
+        .catch(e => { warnings.push(`payments_list(out): ${e.message}`); return []; }),
+      fetchEndpoint('/invoices_list', { type: 'in', date_from: dateFrom, date_to: dateTo })
+        .catch(e => { warnings.push(`invoices_list(in): ${e.message}`); return []; }),
+      fetchEndpoint('/invoices_list', { type: 'out', date_from: dateFrom, date_to: dateTo })
+        .catch(e => { warnings.push(`invoices_list(out): ${e.message}`); return []; }),
+    ]);
+
+    const computed = this.computeAnalytics({ orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut }, period);
 
     return {
       success: true,
@@ -92,40 +90,95 @@ export class GTOConnector implements SourceConnector {
         fetchedAt: new Date().toISOString(),
         periodStart: period.start.toISOString(),
         periodEnd: period.end.toISOString(),
-        timezone: settings['timezone'] || 'UTC',
-        metrics: { raw: metrics, computed },
-        rawSampleSize: Object.values(metrics).filter(Boolean).length,
+        timezone: settings['timezone'] || 'Europe/Kiev',
+        metrics: {
+          raw: { orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut },
+          computed,
+        },
         warnings,
       },
     };
   }
 
-  private async fetchWithRetry(baseUrl: string, path: string, params: any, apiKey: string, timeout: number, retryCount: number, backoffSec: number): Promise<unknown> {
-    for (let attempt = 0; attempt <= retryCount; attempt++) {
-      try {
-        const resp = await axios.get(`${baseUrl}${path}`, {
-          params,
-          headers: { 'X-Api-Key': apiKey },
-          timeout,
-        });
-        return resp.data;
-      } catch (err: any) {
-        if (attempt === retryCount) throw err;
-        await sleep(backoffSec * Math.pow(2, attempt) * 1000);
-      }
-    }
-  }
+  private computeAnalytics(
+    data: { orders: any[]; paymentsIn: any[]; paymentsOut: any[]; invoicesIn: any[]; invoicesOut: any[] },
+    period: { start: Date; end: Date }
+  ) {
+    const { orders, paymentsIn, paymentsOut, invoicesIn, invoicesOut } = data;
 
-  private computeAnalytics(metrics: Record<string, unknown>, period: { start: Date; end: Date }) {
-    const orders = Array.isArray(metrics['orders']) ? metrics['orders'] as any[] : [];
-    const payments = Array.isArray(metrics['payments']) ? metrics['payments'] as any[] : [];
-    const totalRevenue = payments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+    // Orders by status
+    const confirmedOrders = orders.filter(o => o.status === 'CNF');
+    const cancelledOrders = orders.filter(o => o.status === 'CNX');
+    const pendingOrders   = orders.filter(o => !['CNF', 'CNX'].includes(o.status));
+
+    // Payments (exclude revoked)
+    const activePaymentsIn  = paymentsIn.filter(p => !p.is_revoked);
+    const activePaymentsOut = paymentsOut.filter(p => !p.is_revoked);
+
+    // Revenue by currency
+    const revenueByCurrency: Record<string, number> = {};
+    for (const p of activePaymentsIn) {
+      const currency = p.currency_code || p.balance_currency_code || 'UAH';
+      revenueByCurrency[currency] = (revenueByCurrency[currency] || 0) + (parseFloat(p.amount) || 0);
+    }
+
+    const totalIncoming = activePaymentsIn.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+    const totalOutgoing = activePaymentsOut.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+
+    // Invoices (exclude revoked)
+    const activeInvoicesIn  = invoicesIn.filter(i => !i.is_revoked);
+    const activeInvoicesOut = invoicesOut.filter(i => !i.is_revoked);
+    const invoicedAmount    = activeInvoicesIn.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+
+    // Top companies by order count
+    const companyCounts: Record<string, number> = {};
+    for (const o of confirmedOrders) {
+      if (o.company_name) companyCounts[o.company_name] = (companyCounts[o.company_name] || 0) + 1;
+    }
+    const topCompanies = Object.entries(companyCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, orders: count }));
+
+    // Orders by day
+    const ordersByDay: Record<string, number> = {};
+    for (const o of orders) {
+      const day = (o.created_at || '').slice(0, 10);
+      if (day) ordersByDay[day] = (ordersByDay[day] || 0) + 1;
+    }
+
+    const periodDays = Math.max(1, Math.ceil((period.end.getTime() - period.start.getTime()) / 86400000));
+    const avgOrdersPerDay = orders.length / periodDays;
+
     return {
-      total_orders: orders.length,
-      total_revenue: totalRevenue,
-      avg_order_value: orders.length > 0 ? totalRevenue / orders.length : 0,
-      period_days: Math.ceil((period.end.getTime() - period.start.getTime()) / 86400000),
-      data_available: orders.length > 0 || payments.length > 0,
+      period_days: periodDays,
+      orders: {
+        total: orders.length,
+        confirmed: confirmedOrders.length,
+        cancelled: cancelledOrders.length,
+        pending: pendingOrders.length,
+        cancellation_rate: orders.length > 0 ? Math.round(cancelledOrders.length / orders.length * 100) : 0,
+        avg_per_day: Math.round(avgOrdersPerDay * 10) / 10,
+        by_day: ordersByDay,
+        top_companies: topCompanies,
+      },
+      payments: {
+        incoming_total: Math.round(totalIncoming * 100) / 100,
+        outgoing_total: Math.round(totalOutgoing * 100) / 100,
+        net: Math.round((totalIncoming - totalOutgoing) * 100) / 100,
+        by_currency: revenueByCurrency,
+        incoming_count: activePaymentsIn.length,
+        outgoing_count: activePaymentsOut.length,
+        avg_payment: activePaymentsIn.length > 0
+          ? Math.round(totalIncoming / activePaymentsIn.length * 100) / 100
+          : 0,
+      },
+      invoices: {
+        issued_count: activeInvoicesIn.length,
+        issued_amount: Math.round(invoicedAmount * 100) / 100,
+        outgoing_count: activeInvoicesOut.length,
+      },
+      data_available: orders.length > 0 || activePaymentsIn.length > 0,
     };
   }
 }

@@ -88,27 +88,38 @@ async function main() {
     // Default prompt templates
     const prompts: Record<string, { system: string; user: string }> = {
       gto: {
-        system: `You are a senior business analyst specializing in e-commerce and sales analytics.
-Analyze the provided sales data and generate a structured JSON report.
-Always respond with valid JSON only.`,
+        system: `You are a senior business analyst specializing in tourism and travel sales analytics.
+You analyze data from GTO (tourism management system) which tracks orders, payments, and invoices.
+Order statuses: CNF = confirmed, CNX = cancelled. Payments are split into incoming (from clients) and outgoing (to suppliers).
+Always respond with valid JSON only. Use Ukrainian hryvnia (UAH) as primary currency unless data shows otherwise.`,
         user: `Analyze GTO sales data for the period {{report_period_start}} to {{report_period_end}}.
 
 Source: {{source_name}}
 Data:
 {{normalized_metrics_json}}
 
+The data contains:
+- orders: { total, confirmed (CNF), cancelled (CNX), pending, cancellation_rate, avg_per_day, by_day, top_companies }
+- payments: { incoming_total, outgoing_total, net, by_currency, avg_payment }
+- invoices: { issued_count, issued_amount }
+
 Return ONLY a valid JSON object with this structure:
 {
-  "executive_summary": "2-3 sentence summary",
+  "executive_summary": "2-3 sentence summary of the sales period in Russian",
   "key_metrics": {
-    "total_revenue": 0,
     "total_orders": 0,
-    "avg_order_value": 0
+    "confirmed_orders": 0,
+    "cancellation_rate_pct": 0,
+    "incoming_revenue": 0,
+    "net_revenue": 0,
+    "avg_payment": 0,
+    "currency": "UAH"
   },
-  "trends": ["trend 1", "trend 2"],
-  "anomalies": ["anomaly 1"],
-  "recommendations": ["rec 1"],
-  "telegram_message": "Formatted Telegram message with markdown, max 3500 chars"
+  "trends": ["trend 1 in Russian", "trend 2 in Russian"],
+  "anomalies": ["anomaly in Russian if any, else empty array"],
+  "recommendations": ["recommendation in Russian"],
+  "top_companies": [{"name": "...", "orders": 0}],
+  "telegram_message": "Краткий отчёт по продажам на русском языке с эмодзи, markdown форматирование, до 3500 символов"
 }`,
       },
       ga4: {

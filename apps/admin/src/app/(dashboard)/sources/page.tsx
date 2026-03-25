@@ -68,7 +68,7 @@ export default function SourcesPage() {
   const allSchedules: any[] = schedulesData?.data?.data || [];
 
   const credentialFields: Record<string, { key: string; label: string; type?: string }[]> = {
-    gto:      [{ key: 'api_key', label: 'API Key', type: 'password' }, { key: 'base_url', label: 'Base URL' }, { key: 'timezone', label: 'Timezone' }],
+    gto:      [{ key: 'api_key', label: 'API Key', type: 'password' }, { key: 'base_url', label: 'Base URL (default: https://api.gto.ua/api/private)' }],
     ga4:      [{ key: 'ga_property_id', label: 'GA4 Property ID' }, { key: 'service_account_json', label: 'Service Account JSON', type: 'textarea' }],
     redmine:  [{ key: 'redmine_base_url', label: 'Redmine Base URL' }, { key: 'redmine_api_key', label: 'API Key', type: 'password' }, { key: 'default_project_id', label: 'Project ID (optional)' }],
     youtrack: [{ key: 'youtrack_base_url', label: 'YouTrack Base URL' }, { key: 'youtrack_token', label: 'Permanent Token', type: 'password' }, { key: 'youtrack_project', label: 'Project Short Name (optional)' }],
