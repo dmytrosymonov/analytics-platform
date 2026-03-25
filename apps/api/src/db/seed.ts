@@ -88,38 +88,54 @@ async function main() {
     // Default prompt templates
     const prompts: Record<string, { system: string; user: string }> = {
       gto: {
-        system: `You are a senior business analyst specializing in tourism and travel sales analytics.
-You analyze data from GTO (tourism management system) which tracks orders, payments, and invoices.
-Order statuses: CNF = confirmed, CNX = cancelled. Payments are split into incoming (from clients) and outgoing (to suppliers).
-Always respond with valid JSON only. Use Ukrainian hryvnia (UAH) as primary currency unless data shows otherwise.`,
-        user: `Analyze GTO sales data for the period {{report_period_start}} to {{report_period_end}}.
+        system: `Ты — старший бизнес-аналитик туристической компании, специализирующийся на анализе продаж через систему GTO.
+Анализируешь данные о заказах, платежах и счетах. Все суммы уже сконвертированы в EUR.
+Статусы заказов: CNF = подтверждённый, CNX = отменённый.
+Платежи: incoming = поступления от клиентов, outgoing = выплаты поставщикам.
+Всегда отвечай ТОЛЬКО валидным JSON. Язык ответа: РУССКИЙ.`,
+        user: `Проанализируй данные о продажах GTO за период {{report_period_start}} — {{report_period_end}}.
 
-Source: {{source_name}}
-Data:
+Источник: {{source_name}}
+Данные (все суммы в EUR):
 {{normalized_metrics_json}}
 
-The data contains:
-- orders: { total, confirmed (CNF), cancelled (CNX), pending, cancellation_rate, avg_per_day, by_day, top_companies }
-- payments: { incoming_total, outgoing_total, net, by_currency, avg_payment }
-- invoices: { issued_count, issued_amount }
+Структура данных:
+- orders.total — всего заказов, orders.confirmed — подтверждённых, orders.cancelled — отменённых
+- orders.cancellation_rate_pct — процент отмен, orders.avg_per_day — в среднем в день
+- orders.top_companies — топ компаний по количеству заказов
+- payments.incoming_eur — поступления от клиентов (EUR), payments.outgoing_eur — выплаты
+- payments.net_eur — чистый денежный поток, payments.avg_payment_eur — средний платёж
+- invoices.issued_count — выставлено счетов, invoices.issued_amount_eur — сумма счетов
 
-Return ONLY a valid JSON object with this structure:
+Верни ТОЛЬКО валидный JSON следующей структуры (без markdown, без пояснений):
 {
-  "executive_summary": "2-3 sentence summary of the sales period in Russian",
+  "executive_summary": "2-3 предложения: итог периода, ключевой результат, главная проблема если есть",
   "key_metrics": {
     "total_orders": 0,
     "confirmed_orders": 0,
+    "cancelled_orders": 0,
     "cancellation_rate_pct": 0,
-    "incoming_revenue": 0,
-    "net_revenue": 0,
-    "avg_payment": 0,
-    "currency": "UAH"
+    "incoming_revenue_eur": 0,
+    "outgoing_eur": 0,
+    "net_eur": 0,
+    "avg_payment_eur": 0,
+    "avg_orders_per_day": 0
   },
-  "trends": ["trend 1 in Russian", "trend 2 in Russian"],
-  "anomalies": ["anomaly in Russian if any, else empty array"],
-  "recommendations": ["recommendation in Russian"],
-  "top_companies": [{"name": "...", "orders": 0}],
-  "telegram_message": "Краткий отчёт по продажам на русском языке с эмодзи, markdown форматирование, до 3500 символов"
+  "trends": [
+    "тренд 1 — конкретное наблюдение с цифрами",
+    "тренд 2 — динамика по дням или компаниям"
+  ],
+  "problems": [
+    "проблема 1 — если процент отмен высокий или доход низкий, иначе пустой массив"
+  ],
+  "actions": [
+    "конкретное действие 1 для улучшения показателей",
+    "конкретное действие 2"
+  ],
+  "top_companies": [
+    {"name": "название компании", "orders": 0}
+  ],
+  "telegram_message": "📊 *Отчёт по продажам GTO*\\n📅 {{report_period_start}} — {{report_period_end}}\\n\\n📦 *Заказов:* 0 (подтверждённых: 0, отменённых: 0)\\n❌ *Процент отмен:* 0%\\n💶 *Поступления:* 0 EUR\\n📤 *Выплаты:* 0 EUR\\n💰 *Чистый поток:* 0 EUR\\n\\n📈 *Тренды:*\\n- тренд 1\\n\\n⚠️ *Проблемы:*\\n- проблема или 'нет'\\n\\n✅ *Рекомендации:*\\n- действие 1"
 }`,
       },
       ga4: {
