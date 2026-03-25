@@ -22,6 +22,7 @@ async function main() {
     { name: 'Google Analytics 4', type: 'ga4' as const, description: 'Web traffic and user behavior analytics' },
     { name: 'Redmine', type: 'redmine' as const, description: 'Project management and issue tracking analytics' },
     { name: 'YouTrack', type: 'youtrack' as const, description: 'YouTrack issue tracker and project analytics' },
+    { name: 'Fireflies.ai', type: 'fireflies' as const, description: 'Meeting transcripts, action items, and conversation analytics' },
   ];
 
   for (const src of sources) {
@@ -50,6 +51,10 @@ async function main() {
         { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
         { name: 'Weekly Sprint Summary', description: 'Sprint progress for the past week',   cron: '0 9 * * 1',   periodType: 'weekly'  },
       ],
+      fireflies: [
+        { name: 'Daily Meetings Report', description: 'Meeting activity for yesterday',       cron: '0 8 * * *',   periodType: 'daily'   },
+        { name: 'Weekly Meetings Summary', description: 'Meeting analytics for the past week', cron: '0 9 * * 1', periodType: 'weekly'  },
+      ],
     };
 
     for (const sch of defaultSchedules[src.type] || []) {
@@ -69,6 +74,7 @@ async function main() {
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
       youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },
+      fireflies: { timeout: '30', timezone: 'UTC' },
     };
 
     for (const [key, value] of Object.entries(defaultSettings[src.type] || {})) {
@@ -182,6 +188,33 @@ Return ONLY valid JSON:
   "telegram_message": "Formatted Telegram message with markdown, max 3500 chars"
 }`,
       },
+      fireflies: {
+        system: `You are a business analyst specializing in meeting effectiveness and organizational communication.
+Analyze the provided Fireflies.ai meeting data and generate a structured JSON report.
+Focus on meeting load, key topics, action items, and team collaboration patterns.
+Always respond with valid JSON only.`,
+        user: `Analyze Fireflies.ai meeting data for {{report_period_start}} to {{report_period_end}}.
+
+Source: {{source_name}}
+Data:
+{{normalized_metrics_json}}
+
+Return ONLY valid JSON:
+{
+  "executive_summary": "2-3 sentence summary of meeting activity",
+  "key_metrics": {
+    "total_meetings": 0,
+    "total_hours": 0,
+    "avg_duration_minutes": 0,
+    "total_action_items": 0
+  },
+  "meeting_insights": ["insight about meeting patterns", "insight about participation"],
+  "top_topics": ["topic 1", "topic 2"],
+  "action_items_summary": "Summary of key action items and commitments",
+  "recommendations": ["rec 1", "rec 2"],
+  "telegram_message": "Formatted Telegram message with markdown, max 3500 chars"
+}`,
+      },
     };
 
     const promptData = prompts[src.type];
@@ -224,6 +257,7 @@ Return ONLY valid JSON:
     { key: 'scheduler.ga4_cron', value: '0 8 * * *', description: 'GA4 daily cron' },
     { key: 'scheduler.redmine_cron', value: '0 8 * * *', description: 'Redmine daily cron' },
     { key: 'scheduler.youtrack_cron', value: '0 8 * * *', description: 'YouTrack daily cron' },
+    { key: 'scheduler.fireflies_cron', value: '0 8 * * *', description: 'Fireflies daily cron' },
     { key: 'telegram.bot_token', value: '', description: 'Telegram Bot Token from @BotFather' },
     { key: 'telegram.admin_chat_id', value: '', description: 'Telegram Chat ID for admin notifications' },
   ];

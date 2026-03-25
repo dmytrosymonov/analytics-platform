@@ -3,6 +3,7 @@ import { GTOConnector } from './gto/gto.connector';
 import { GA4Connector } from './ga4/ga4.connector';
 import { RedmineConnector } from './redmine/redmine.connector';
 import { YouTrackConnector } from './youtrack/youtrack.connector';
+import { FirefliesConnector } from './fireflies/fireflies.connector';
 
 class ConnectorRegistry {
   private connectors = new Map<string, SourceConnector>([
@@ -10,6 +11,7 @@ class ConnectorRegistry {
     ['ga4', new GA4Connector()],
     ['redmine', new RedmineConnector()],
     ['youtrack', new YouTrackConnector()],
+    ['fireflies', new FirefliesConnector()],
   ]);
 
   get(type: string): SourceConnector {

@@ -19,6 +19,7 @@ enum SourceType {
   ga4
   redmine
   youtrack
+  fireflies
 }
 
 enum JobType {
