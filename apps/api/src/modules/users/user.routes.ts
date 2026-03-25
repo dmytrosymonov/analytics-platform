@@ -11,6 +11,12 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   deleted: [],
 };
 
+// BigInt cannot be serialized to JSON — convert telegramId to string
+function serializeUser(user: any) {
+  if (!user) return user;
+  return { ...user, telegramId: user.telegramId?.toString() };
+}
+
 export async function userRoutes(app: FastifyInstance) {
   const auth = { onRequest: [(app as any).authenticate] };
 
@@ -57,7 +63,7 @@ export async function userRoutes(app: FastifyInstance) {
       afterState: { telegramId: body.telegramId, status: body.status },
     });
 
-    return reply.status(201).send({ success: true, data: user });
+    return reply.status(201).send({ success: true, data: serializeUser(user) });
   });
 
   app.get('/', auth, async (request, reply) => {
@@ -77,7 +83,7 @@ export async function userRoutes(app: FastifyInstance) {
       prisma.user.count({ where }),
     ]);
 
-    return reply.send({ success: true, data: users, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    return reply.send({ success: true, data: users.map(serializeUser), meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   });
 
   app.get('/:id', auth, async (request, reply) => {
@@ -87,7 +93,7 @@ export async function userRoutes(app: FastifyInstance) {
       include: { reportPreferences: { include: { source: true } } },
     });
     if (!user) return reply.status(404).send({ success: false, error: { message: 'User not found' } });
-    return reply.send({ success: true, data: user });
+    return reply.send({ success: true, data: serializeUser(user) });
   });
 
   app.patch('/:id/status', auth, async (request, reply) => {
@@ -128,7 +134,7 @@ export async function userRoutes(app: FastifyInstance) {
       }
     } catch (_) { /* ignore telegram errors */ }
 
-    return reply.send({ success: true, data: updated });
+    return reply.send({ success: true, data: serializeUser(updated) });
   });
 
   app.patch('/:id/reports', auth, async (request, reply) => {
@@ -148,7 +154,7 @@ export async function userRoutes(app: FastifyInstance) {
       afterState: { globalReportsEnabled },
     });
 
-    return reply.send({ success: true, data: updated });
+    return reply.send({ success: true, data: serializeUser(updated) });
   });
 
   app.get('/:id/preferences', auth, async (request, reply) => {
