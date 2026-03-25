@@ -182,6 +182,7 @@ Return ONLY valid JSON:
 
   // System settings
   const settings = [
+    { key: 'llm.api_key', value: '', description: 'OpenAI API Key (from platform.openai.com)' },
     { key: 'llm.default_model', value: 'gpt-4o-mini', description: 'Default ChatGPT model' },
     { key: 'llm.fallback_model', value: 'gpt-4o-mini', description: 'Fallback model if primary fails' },
     { key: 'llm.max_tokens', value: '4096', description: 'Max tokens per LLM completion' },

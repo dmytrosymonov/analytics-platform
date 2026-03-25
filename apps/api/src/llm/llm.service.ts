@@ -16,12 +16,15 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 class LLMService {
   private _openai: OpenAI | null = null;
 
-  private get openai(): OpenAI {
-    if (!this._openai) {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey || apiKey.startsWith('sk-placeholder')) {
-        throw new Error('OPENAI_API_KEY is not configured. Set a real key in .env to enable LLM analysis.');
-      }
+  private async getOpenAI(): Promise<OpenAI> {
+    // Prefer key from DB settings, fall back to env
+    const dbKeySetting = await prisma.systemSetting.findUnique({ where: { key: 'llm.api_key' } });
+    const apiKey = dbKeySetting?.value || process.env.OPENAI_API_KEY || '';
+    if (!apiKey || apiKey.startsWith('sk-placeholder') || apiKey.startsWith('sk-your')) {
+      throw new Error('OpenAI API key is not configured. Add it in Settings → AI / LLM → OpenAI API Key.');
+    }
+    // Reinitialize if key changed
+    if (!this._openai || (this._openai as any).apiKey !== apiKey) {
       this._openai = new OpenAI({ apiKey });
     }
     return this._openai;
@@ -43,13 +46,15 @@ class LLMService {
     let response: OpenAI.Chat.ChatCompletion | null = null;
     let usedModel = model;
 
+    const openai = await this.getOpenAI();
+
     try {
-      response = await this.callWithRetry(model, maxTokens, temperature, params.systemPrompt, params.userPrompt);
+      response = await this.callWithRetry(openai, model, maxTokens, temperature, params.systemPrompt, params.userPrompt);
     } catch (err) {
       logger.warn({ err }, 'Primary LLM model failed, trying fallback');
       const fallbackSetting = await prisma.systemSetting.findUnique({ where: { key: 'llm.fallback_model' } });
       usedModel = fallbackSetting?.value || 'gpt-4o-mini';
-      response = await this.callWithRetry(usedModel, maxTokens, temperature, params.systemPrompt, params.userPrompt);
+      response = await this.callWithRetry(openai, usedModel, maxTokens, temperature, params.systemPrompt, params.userPrompt);
     }
 
     const content = response.choices[0]?.message?.content || '{}';
@@ -74,10 +79,10 @@ class LLMService {
     };
   }
 
-  private async callWithRetry(model: string, maxTokens: number, temperature: number, system: string, user: string): Promise<OpenAI.Chat.ChatCompletion> {
+  private async callWithRetry(openai: OpenAI, model: string, maxTokens: number, temperature: number, system: string, user: string): Promise<OpenAI.Chat.ChatCompletion> {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await this.openai.chat.completions.create({
+        return await openai.chat.completions.create({
           model,
           max_tokens: maxTokens,
           temperature,

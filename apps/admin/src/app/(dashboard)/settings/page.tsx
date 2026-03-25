@@ -38,10 +38,10 @@ const SECTIONS: SettingsSection[] = [
     icon: Cpu,
     color: 'text-purple-600',
     bg: 'bg-purple-50',
-    description: 'ChatGPT settings for report analysis.',
+    description: 'ChatGPT API settings for automatic report analysis.',
     fields: [
-      { key: 'llm.default_model', label: 'Default Model', placeholder: 'gpt-4o-mini' },
-      { key: 'llm.fallback_model', label: 'Fallback Model', placeholder: 'gpt-4o-mini' },
+      { key: 'llm.api_key', label: 'OpenAI API Key', type: 'password', placeholder: 'sk-...', hint: 'Get from platform.openai.com → API keys' },
+      { key: 'llm.default_model', label: 'Model', placeholder: 'gpt-4o-mini', hint: 'Recommended: gpt-4o-mini (cheap) or gpt-4o (best quality)' },
       { key: 'llm.max_tokens', label: 'Max Tokens', placeholder: '4096' },
       { key: 'llm.temperature', label: 'Temperature (0–1)', placeholder: '0.3' },
       { key: 'llm.max_cost_per_run_usd', label: 'Max Cost per Run (USD)', placeholder: '5.00' },
