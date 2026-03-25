@@ -60,6 +60,12 @@ enum ActorType {
   bot
 }
 
+enum PeriodType {
+  daily
+  weekly
+  monthly
+}
+
 model AdminUser {
   id            String    @id @default(uuid())
   email         String    @unique
@@ -92,8 +98,9 @@ model User {
   createdAt             DateTime   @default(now()) @map("created_at")
   updatedAt             DateTime   @updatedAt @map("updated_at")
 
-  reportPreferences UserReportPreference[]
-  sentMessages      SentMessage[]
+  reportPreferences    UserReportPreference[]
+  schedulePreferences  UserSchedulePreference[]
+  sentMessages         SentMessage[]
 
   @@map("users")
 }
@@ -113,6 +120,7 @@ model DataSource {
   promptTemplate    PromptTemplate?
   reportJobs        ReportJob[]
   reportResults     ReportResult[]
+  schedules         ReportSchedule[]
 
   @@map("data_sources")
 }
@@ -146,6 +154,38 @@ model SourceSetting {
 
   @@unique([sourceId, key])
   @@map("source_settings")
+}
+
+model ReportSchedule {
+  id             String     @id @default(uuid())
+  sourceId       String     @map("source_id")
+  name           String
+  description    String?
+  cronExpression String     @map("cron_expression")
+  periodType     PeriodType @map("period_type")
+  isEnabled      Boolean    @default(false) @map("is_enabled")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  source          DataSource               @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  userPreferences UserSchedulePreference[]
+
+  @@map("report_schedules")
+}
+
+model UserSchedulePreference {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  scheduleId String   @map("schedule_id")
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedule ReportSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scheduleId])
+  @@map("user_schedule_preferences")
 }
 
 model UserReportPreference {
@@ -201,6 +241,7 @@ model PromptVersion {
 
 model ReportRun {
   id           String      @id @default(uuid())
+  scheduleId   String?     @map("schedule_id")
   periodStart  DateTime    @map("period_start")
   periodEnd    DateTime    @map("period_end")
   status       RunStatus   @default(pending)

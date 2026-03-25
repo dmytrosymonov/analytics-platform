@@ -11,6 +11,7 @@ import { promptRoutes } from './modules/prompts/prompt.routes';
 import { reportRoutes } from './modules/reports/report.routes';
 import { auditRoutes } from './modules/audit/audit.routes';
 import { settingRoutes } from './modules/settings/setting.routes';
+import { scheduleRoutes } from './modules/schedules/schedule.routes';
 import { telegramWebhookRoute } from './bot/webhook.controller';
 
 export async function buildApp() {
@@ -67,6 +68,7 @@ export async function buildApp() {
   await app.register(reportRoutes, { prefix: '/api/v1/reports' });
   await app.register(auditRoutes, { prefix: '/api/v1/audit' });
   await app.register(settingRoutes, { prefix: '/api/v1/settings' });
+  await app.register(scheduleRoutes, { prefix: '/api/v1/schedules' });
   await app.register(telegramWebhookRoute, { prefix: '/webhook' });
 
   // Error handler

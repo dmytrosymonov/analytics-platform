@@ -32,14 +32,39 @@ export async function handleDeliverJob(job: Job) {
     return;
   }
 
-  // Eligible users
-  const users = await prisma.user.findMany({
-    where: {
-      status: 'approved',
-      globalReportsEnabled: true,
-      reportPreferences: { some: { sourceId, reportsEnabled: true } },
-    },
-  });
+  // Get scheduleId from run to filter by schedule preferences
+  const run = await prisma.reportRun.findUnique({ where: { id: runId } });
+  const scheduleId = run?.scheduleId ?? job.data.scheduleId;
+
+  // Eligible users: approved + global enabled + subscribed to this schedule (or source if legacy)
+  let users;
+  if (scheduleId) {
+    users = await prisma.user.findMany({
+      where: {
+        status: 'approved',
+        globalReportsEnabled: true,
+        schedulePreferences: { some: { scheduleId, enabled: true } },
+      },
+    });
+    // If no schedule prefs yet, fall back to source prefs (for users added before schedules)
+    if (users.length === 0) {
+      users = await prisma.user.findMany({
+        where: {
+          status: 'approved',
+          globalReportsEnabled: true,
+          reportPreferences: { some: { sourceId, reportsEnabled: true } },
+        },
+      });
+    }
+  } else {
+    users = await prisma.user.findMany({
+      where: {
+        status: 'approved',
+        globalReportsEnabled: true,
+        reportPreferences: { some: { sourceId, reportsEnabled: true } },
+      },
+    });
+  }
 
   logger.info({ runId, sourceId, userCount: users.length }, 'Delivering to eligible users');
 

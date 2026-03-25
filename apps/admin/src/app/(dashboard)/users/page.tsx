@@ -16,11 +16,6 @@ export default function UsersPage() {
     queryFn: () => authFetch(`/api/v1/users${statusFilter ? `?status=${statusFilter}` : ''}`),
   });
 
-  const { data: sourcesData } = useQuery({
-    queryKey: ['sources'],
-    queryFn: () => authFetch('/api/v1/sources'),
-  });
-
   const updateStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
       authPost(`/api/v1/users/${id}/status`, { status }, 'PATCH'),
@@ -29,7 +24,6 @@ export default function UsersPage() {
   });
 
   const users = data?.data?.data || [];
-  const sources = sourcesData?.data?.data || [];
 
   return (
     <div>
@@ -108,7 +102,7 @@ export default function UsersPage() {
                   {expandedId === user.id && (
                     <tr key={`${user.id}-expand`}>
                       <td colSpan={7} className="bg-gray-50 px-6 py-4 border-b border-gray-100">
-                        <UserPreferences userId={user.id} sources={sources} />
+                        <UserPreferences userId={user.id} />
                       </td>
                     </tr>
                   )}
@@ -124,49 +118,70 @@ export default function UsersPage() {
   );
 }
 
-function UserPreferences({ userId, sources }: { userId: string; sources: any[] }) {
+const PERIOD_COLORS: Record<string, string> = {
+  daily:   'bg-blue-50 border-blue-200 text-blue-700',
+  weekly:  'bg-purple-50 border-purple-200 text-purple-700',
+  monthly: 'bg-orange-50 border-orange-200 text-orange-700',
+};
+
+function UserPreferences({ userId }: { userId: string }) {
   const qc = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ['user-prefs', userId],
-    queryFn: () => authFetch(`/api/v1/users/${userId}/preferences`),
+
+  const { data: schedulesData } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: () => authFetch('/api/v1/schedules'),
   });
 
-  const toggleGlobal = useMutation({
-    mutationFn: (enabled: boolean) => authPost(`/api/v1/users/${userId}/reports`, { globalReportsEnabled: enabled }, 'PATCH'),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast.success('Updated'); },
+  const { data: prefsData } = useQuery({
+    queryKey: ['schedule-prefs', userId],
+    queryFn: () => authFetch(`/api/v1/schedules/preferences/${userId}`),
   });
 
-  const toggleSource = useMutation({
-    mutationFn: ({ sourceId, enabled }: { sourceId: string; enabled: boolean }) =>
-      authPost(`/api/v1/users/${userId}/preferences/${sourceId}`, { reportsEnabled: enabled }, 'PATCH'),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['user-prefs', userId] }); toast.success('Updated'); },
+  const toggle = useMutation({
+    mutationFn: ({ scheduleId, enabled }: { scheduleId: string; enabled: boolean }) =>
+      authPost(`/api/v1/schedules/preferences/${userId}/${scheduleId}`, { enabled }, 'PATCH'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['schedule-prefs', userId] }); toast.success('Updated'); },
   });
 
-  const prefs = data?.data?.data || [];
+  const allSchedules: any[] = schedulesData?.data?.data || [];
+  const prefs: any[] = prefsData?.data?.data || [];
   const prefMap: Record<string, boolean> = {};
-  prefs.forEach((p: any) => { prefMap[p.sourceId] = p.reportsEnabled; });
+  prefs.forEach((p: any) => { prefMap[p.scheduleId] = p.enabled; });
+
+  // Group schedules by source
+  const bySource: Record<string, { sourceName: string; schedules: any[] }> = {};
+  allSchedules.forEach((sch: any) => {
+    if (!bySource[sch.sourceId]) bySource[sch.sourceId] = { sourceName: sch.source?.name || sch.sourceId, schedules: [] };
+    bySource[sch.sourceId].schedules.push(sch);
+  });
+
+  if (allSchedules.length === 0) {
+    return <p className="text-sm text-gray-400">No schedules configured yet. Add schedules in the Sources section.</p>;
+  }
 
   return (
-    <div>
-      <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Report Subscriptions</p>
-      <div className="flex flex-wrap gap-2">
-        {sources.map((source: any) => {
-          const enabled = prefMap[source.id] ?? true;
-          return (
-            <button
-              key={source.id}
-              onClick={() => toggleSource.mutate({ sourceId: source.id, enabled: !enabled })}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                enabled
-                  ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                  : 'bg-gray-100 border-gray-200 text-gray-400 hover:bg-gray-200'
-              }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-blue-500' : 'bg-gray-300'}`} />
-              {source.name}
-            </button>
-          );
-        })}
-      </div>
+    <div className="space-y-3">
+      <p className="text-xs font-semibold text-gray-500 uppercase">Report Subscriptions</p>
+      {Object.values(bySource).map(({ sourceName, schedules }) => (
+        <div key={sourceName}>
+          <p className="text-xs text-gray-400 mb-1.5">{sourceName}</p>
+          <div className="flex flex-wrap gap-2">
+            {schedules.map((sch: any) => {
+              const enabled = prefMap[sch.id] ?? true;
+              return (
+                <button key={sch.id}
+                  onClick={() => toggle.mutate({ scheduleId: sch.id, enabled: !enabled })}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                    enabled ? PERIOD_COLORS[sch.periodType] : 'bg-gray-100 border-gray-200 text-gray-400'
+                  }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-current' : 'bg-gray-300'}`} />
+                  {sch.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
