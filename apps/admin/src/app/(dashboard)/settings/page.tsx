@@ -5,7 +5,10 @@ import { authFetch, authPost } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { Bot, Cpu, Clock, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
 
-const SECTIONS = [
+type SettingsField = { key: string; label: string; placeholder?: string; type?: string; hint?: string };
+type SettingsSection = { key: string; label: string; icon: any; color: string; bg: string; description: string; fields: SettingsField[] };
+
+const SECTIONS: SettingsSection[] = [
   {
     key: 'telegram',
     label: 'Telegram Bot',
