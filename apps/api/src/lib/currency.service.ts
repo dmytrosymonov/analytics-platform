@@ -48,56 +48,64 @@ export class CurrencyService {
 
   /**
    * Parse GTO v3 /currency_rates response.
-   * Normalizes to EUR base regardless of what the API returns.
    *
-   * GTO v3 may return:
-   *   - Array of { code, rate, ... } where rate = units of currency per some base
-   *   - Object { rates: { CODE: number } }
-   * We detect the base by checking EUR rate:
-   *   - If EUR rate == 1 → EUR is already base
-   *   - Otherwise → divide all rates by EUR rate to make EUR the base
+   * GTO v3 returns cross-rates as an array of:
+   *   { currency_from, currency_to, value_from, value_to }
+   * e.g. { currency_from:"EUR", currency_to:"UAH", value_from:100, value_to:5178 }
+   * meaning 100 EUR = 5178 UAH → 1 EUR = 51.78 UAH
+   *
+   * We build a directed graph of all known rates and do BFS from EUR
+   * to derive rates for all currencies in terms of "units per 1 EUR".
    */
   private static parseResponse(data: unknown): CurrencyRates {
-    let rawRates: Record<string, number> = {};
+    const obj = data as any;
+    const items: any[] = Array.isArray(obj) ? obj : (Array.isArray(obj?.data) ? obj.data : []);
 
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        const code = item.code || item.currency_code || item.iso;
-        const rate = parseFloat(item.rate || item.value || item.exchange_rate || '0');
-        if (code && rate > 0) rawRates[code.toUpperCase()] = rate;
-      }
-    } else if (data && typeof data === 'object') {
-      const obj = data as any;
-      const inner = obj.rates || obj.data || obj.currencies || obj;
-      if (typeof inner === 'object' && !Array.isArray(inner)) {
-        for (const [code, rate] of Object.entries(inner)) {
-          const r = parseFloat(String(rate));
-          if (r > 0) rawRates[code.toUpperCase()] = r;
-        }
+    // Build graph: graph[A][B] = rate  (1 A = rate B)
+    const graph: Record<string, Record<string, number>> = {};
+
+    const addEdge = (from: string, to: string, rate: number) => {
+      if (!graph[from]) graph[from] = {};
+      if (!graph[to]) graph[to] = {};
+      graph[from][to] = rate;
+      graph[to][from] = 1 / rate; // reverse edge
+    };
+
+    for (const item of items) {
+      const from = String(item.currency_from || '').toUpperCase();
+      const to   = String(item.currency_to   || '').toUpperCase();
+      const vf   = parseFloat(item.value_from) || 0;
+      const vt   = parseFloat(item.value_to)   || 0;
+      if (!from || !to || vf === 0) continue;
+      addEdge(from, to, vt / vf); // 1 FROM = (vt/vf) TO
+    }
+
+    logger.debug({ graph }, 'Currency rate graph from GTO v3');
+
+    // BFS from EUR to find all reachable currencies
+    // rates[CODE] = how many CODE per 1 EUR
+    const rates: Record<string, number> = { EUR: 1 };
+    const queue = ['EUR'];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const currentRate = rates[current]; // units of `current` per 1 EUR
+      const neighbors = graph[current] || {};
+
+      for (const [neighbor, edgeRate] of Object.entries(neighbors)) {
+        if (rates[neighbor] !== undefined) continue;
+        // 1 EUR = currentRate CURRENT, 1 CURRENT = edgeRate NEIGHBOR
+        // → 1 EUR = currentRate * edgeRate NEIGHBOR
+        rates[neighbor] = currentRate * edgeRate;
+        queue.push(neighbor);
       }
     }
 
-    logger.debug({ rawRates }, 'Raw currency rates from GTO v3');
-
-    // Normalize: make EUR the base
-    const eurRate = rawRates['EUR'];
-    if (!eurRate || eurRate === 1) {
-      // EUR is already base (or EUR not present — assume rates are per EUR)
-      rawRates['EUR'] = 1;
-    } else {
-      // Base is something else (e.g., UAH). Normalize so EUR=1
-      const normalized: Record<string, number> = { EUR: 1 };
-      for (const [code, rate] of Object.entries(rawRates)) {
-        if (code !== 'EUR') {
-          normalized[code] = rate / eurRate;
-        }
-      }
-      rawRates = normalized;
-    }
+    logger.info({ rates, currencies: Object.keys(rates) }, 'Currency rates normalized to EUR base');
 
     return {
       base: 'EUR',
-      rates: rawRates,
+      rates,
       fetchedAt: new Date().toISOString(),
       source: 'gto_v3',
     };
