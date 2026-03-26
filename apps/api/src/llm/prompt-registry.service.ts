@@ -7,11 +7,18 @@ export interface RenderedPrompt {
 
 class PromptRegistryService {
   async getActivePrompt(sourceId: string) {
-    const template = await prisma.promptTemplate.findUnique({
-      where: { sourceId },
-      include: { versions: { where: { isActive: true }, take: 1 } },
+    const template = await prisma.promptTemplate.findUnique({ where: { sourceId } });
+    if (!template) return null;
+
+    // Prefer activeVersionId (set explicitly in admin panel), fall back to latest isActive
+    if (template.activeVersionId) {
+      const version = await prisma.promptVersion.findUnique({ where: { id: template.activeVersionId } });
+      if (version) return version;
+    }
+    return prisma.promptVersion.findFirst({
+      where: { templateId: template.id, isActive: true },
+      orderBy: { versionNumber: 'desc' },
     });
-    return template?.versions?.[0] ?? null;
   }
 
   async renderPrompt(version: { systemPrompt: string; userPrompt: string }, variables: Record<string, unknown>): Promise<RenderedPrompt> {
