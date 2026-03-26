@@ -393,6 +393,7 @@ export class GTOConnector implements SourceConnector {
       },
       tourists: totalTourists,
       financials: {
+        note:          'Revenue, cost and profit are calculated for CONFIRMED (CNF) orders only. Cancelled orders are excluded.',
         revenue_eur:   r2(revenueEur),
         cost_eur:      r2(costEur),
         profit_eur:    r2(profitEur),
