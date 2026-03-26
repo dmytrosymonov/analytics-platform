@@ -88,54 +88,75 @@ async function main() {
     // Default prompt templates
     const prompts: Record<string, { system: string; user: string }> = {
       gto: {
-        system: `Ты — старший бизнес-аналитик туристической компании, специализирующийся на анализе продаж через систему GTO.
-Анализируешь данные о заказах, платежах и счетах. Все суммы уже сконвертированы в EUR.
-Статусы заказов: CNF = подтверждённый, CNX = отменённый.
-Платежи: incoming = поступления от клиентов, outgoing = выплаты поставщикам.
-Всегда отвечай ТОЛЬКО валидным JSON. Язык ответа: РУССКИЙ.`,
-        user: `Проанализируй данные о продажах GTO за период {{report_period_start}} — {{report_period_end}}.
-
+        system: `Ты — старший аналитик туристической компании. Анализируешь данные продаж из системы GTO.
+Все суммы в EUR. Продукты: package = тур (отель + перелёт), hotel = только отель, flight = только перелёт, transfer = трансфер.
+Статусы: CNF = подтверждён, CNX = отменён.
+Отвечай ТОЛЬКО валидным JSON без markdown и пояснений. Язык: РУССКИЙ.`,
+        user: `Ты получаешь данные о продажах GTO за {{report_period_start}} — {{report_period_end}}.
 Источник: {{source_name}}
-Данные (все суммы в EUR):
+
+ДАННЫЕ (все суммы в EUR):
 {{normalized_metrics_json}}
 
-Структура данных:
-- orders.total — всего заказов, orders.confirmed — подтверждённых, orders.cancelled — отменённых
-- orders.cancellation_rate_pct — процент отмен, orders.avg_per_day — в среднем в день
-- orders.top_companies — топ компаний по количеству заказов
-- payments.incoming_eur — поступления от клиентов (EUR), payments.outgoing_eur — выплаты
-- payments.net_eur — чистый денежный поток, payments.avg_payment_eur — средний платёж
-- invoices.issued_count — выставлено счетов, invoices.issued_amount_eur — сумма счетов
+Данные разделены на 4 секции:
+• section1_yesterday — продажи за вчера
+• section2_last_7_days — продажи за последние 7 дней
+• section3_upcoming_tours — туры, стартующие в ближайшие 7 дней (уже подтверждённые)
+• section4_summer — подтверждённые туры со стартом в июне/июле/августе
 
-Верни ТОЛЬКО валидный JSON следующей структуры (без markdown, без пояснений):
+Каждая секция содержит:
+- orders: {total, confirmed, cancelled, cancellation_rate_pct}
+- tourists: кол-во туристов (из order_data)
+- financials: {revenue_eur, cost_eur, profit_eur, profit_pct, avg_order_eur}
+- top_destinations: [{country, orders}]
+- product_breakdown: {package, hotel, flight, transfer, other, insurance}
+- top_agents_by_orders / top_agents_by_revenue: [{name, orders, revenue_eur}]
+- top_suppliers_by_orders / top_suppliers_by_revenue: [{name, orders, revenue_eur}]
+- most_expensive_order: {order_id, price_eur}
+- most_profitable_abs: {order_id, profit_eur}
+- most_profitable_rel: {order_id, profit_pct}
+- anomalies: [строки]
+
+Верни ТОЛЬКО валидный JSON:
 {
-  "executive_summary": "2-3 предложения: итог периода, ключевой результат, главная проблема если есть",
-  "key_metrics": {
-    "total_orders": 0,
-    "confirmed_orders": 0,
-    "cancelled_orders": 0,
-    "cancellation_rate_pct": 0,
-    "incoming_revenue_eur": 0,
-    "outgoing_eur": 0,
-    "net_eur": 0,
-    "avg_payment_eur": 0,
-    "avg_orders_per_day": 0
+  "yesterday": {
+    "summary": "1-2 предложения об итогах вчерашнего дня",
+    "orders_total": 0, "orders_confirmed": 0, "orders_cancelled": 0, "cancellation_rate_pct": 0,
+    "tourists": 0,
+    "revenue_eur": 0, "cost_eur": 0, "profit_eur": 0, "profit_pct": 0, "avg_order_eur": 0,
+    "top_destinations": [{"country": "", "orders": 0}],
+    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
+    "top_agents": [{"name": "", "orders": 0, "revenue_eur": 0}],
+    "top_suppliers": [{"name": "", "orders": 0, "revenue_eur": 0}],
+    "most_expensive_order": {"order_id": "", "price_eur": 0},
+    "most_profitable_abs": {"order_id": "", "profit_eur": 0},
+    "most_profitable_rel": {"order_id": "", "profit_pct": 0},
+    "anomalies": []
   },
-  "trends": [
-    "тренд 1 — конкретное наблюдение с цифрами",
-    "тренд 2 — динамика по дням или компаниям"
-  ],
-  "problems": [
-    "проблема 1 — если процент отмен высокий или доход низкий, иначе пустой массив"
-  ],
-  "actions": [
-    "конкретное действие 1 для улучшения показателей",
-    "конкретное действие 2"
-  ],
-  "top_companies": [
-    {"name": "название компании", "orders": 0}
-  ],
-  "telegram_message": "📊 *Отчёт по продажам GTO*\\n📅 {{report_period_start}} — {{report_period_end}}\\n\\n📦 *Заказов:* 0 (подтверждённых: 0, отменённых: 0)\\n❌ *Процент отмен:* 0%\\n💶 *Поступления:* 0 EUR\\n📤 *Выплаты:* 0 EUR\\n💰 *Чистый поток:* 0 EUR\\n\\n📈 *Тренды:*\\n- тренд 1\\n\\n⚠️ *Проблемы:*\\n- проблема или 'нет'\\n\\n✅ *Рекомендации:*\\n- действие 1"
+  "last_7_days": {
+    "summary": "1-2 предложения о тренде за 7 дней",
+    "orders_total": 0, "orders_confirmed": 0, "cancellation_rate_pct": 0,
+    "tourists": 0,
+    "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0, "avg_order_eur": 0,
+    "top_destinations": [{"country": "", "orders": 0}],
+    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0},
+    "top_agents": [{"name": "", "orders": 0, "revenue_eur": 0}],
+    "top_suppliers": [{"name": "", "orders": 0, "revenue_eur": 0}]
+  },
+  "upcoming_7_days": {
+    "summary": "что предстоит в ближайшую неделю",
+    "confirmed_orders": 0, "tourists": 0, "revenue_eur": 0,
+    "top_destinations": [{"country": "", "orders": 0}],
+    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0}
+  },
+  "summer": {
+    "june":   {"orders": 0, "tourists": 0, "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0},
+    "july":   {"orders": 0, "tourists": 0, "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0},
+    "august": {"orders": 0, "tourists": 0, "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0},
+    "summary": "1 предложение о загрузке на лето"
+  },
+  "recommendations": ["конкретное действие 1", "конкретное действие 2"],
+  "telegram_message": "📊 *Ежедневный отчёт GTO* | {{report_period_start}}\\n\\n*📦 Вчера:*\\nЗаявок: 0 (✅ 0 подтв, ❌ 0 отмен, 0% отмен)\\nТуристов: 0\\n💶 Выручка: 0 EUR | Прибыль: 0 EUR (0%)\\nСредний чек: 0 EUR\\n\\n🏆 *Топ направлений вчера:*\\n1. Турция — 0\\n2. Египет — 0\\n\\n📦 *Продукты:* Пакет: 0 | Отель: 0 | Перелёт: 0\\n\\n👥 *Топ агентов:*\\n1. Агент — 0 зак\\n\\n🔮 *Ближайшие 7 дней:*\\n0 туров, 0 туристов, 0 EUR\\n\\n☀️ *Лето {{section4_summer.year}}:*\\nИюнь: 0 зак / 0 EUR\\nИюль: 0 зак / 0 EUR\\nАвгуст: 0 зак / 0 EUR\\n\\n✅ *Рекомендации:*\\n- действие 1"
 }`,
       },
       ga4: {
