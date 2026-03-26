@@ -76,10 +76,11 @@ export class GTOConnector implements SourceConnector {
 
     // ── Date ranges ────────────────────────────────────────────────────────
     // period.end = start of today (UTC), period.start = start of yesterday
-    const today      = new Date(period.end);
-    const yesterday  = new Date(period.start);
-    const last7dFrom = new Date(today.getTime() - 7 * 86400000);
-    const next7dTo   = new Date(today.getTime() + 7 * 86400000);
+    const today       = new Date(period.end);
+    const yesterday   = new Date(period.start);
+    const last7dFrom  = new Date(today.getTime() - 7 * 86400000);
+    const prev14dFrom = new Date(today.getTime() - 14 * 86400000);
+    const next7dTo    = new Date(today.getTime() + 7 * 86400000);
 
     // Summer months relative to today
     const year = today.getMonth() >= 9 ? today.getFullYear() + 1 : today.getFullYear();
@@ -118,7 +119,9 @@ export class GTOConnector implements SourceConnector {
     const [
       ordersYesterday,
       ordersLast7d,
+      ordersPrev7d,
       ordersUpcoming,
+      ordersPrevUpcoming,
       ordersJune,
       ordersJuly,
       ordersAugust,
@@ -127,8 +130,12 @@ export class GTOConnector implements SourceConnector {
       fetchList('/orders_list', { date_from: fmt(yesterday), date_to: fmt(today), sort_by: 'created_at' }),
       // Section 2 — last 7 days (by created_at)
       fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'created_at' }),
+      // Section 2 comparison — previous 7 days (days 8-14 ago, by created_at)
+      fetchList('/orders_list', { date_from: fmt(prev14dFrom), date_to: fmt(last7dFrom), sort_by: 'created_at' }),
       // Section 3 — upcoming tours (start date = next 7 days, confirmed only)
       fetchList('/orders_list', { date_from: fmt(today), date_to: fmt(next7dTo), sort_by: 'date_start', status: 'CNF' }),
+      // Section 3 comparison — tours that started in past 7 days (confirmed only)
+      fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'date_start', status: 'CNF' }),
       // Section 4 — summer months by date_start (confirmed only)
       fetchList('/orders_list', { date_from: `${year}-06-01`, date_to: `${year}-06-30`, sort_by: 'date_start', status: 'CNF' }),
       fetchList('/orders_list', { date_from: `${year}-07-01`, date_to: `${year}-07-31`, sort_by: 'date_start', status: 'CNF' }),
@@ -136,7 +143,6 @@ export class GTOConnector implements SourceConnector {
     ]);
 
     // ── Collect unique order IDs to fetch details for ──────────────────────
-    // Priority: yesterday first (small, need all), then upcoming, last7d, summer (larger, limit)
     const detailIds = new Set<number>();
     const addIds = (list: any[], limit = MAX_DETAIL_ORDERS) => {
       let n = 0;
@@ -147,6 +153,8 @@ export class GTOConnector implements SourceConnector {
     };
     addIds(ordersYesterday, 200);
     addIds(ordersUpcoming, 200);
+    addIds(ordersPrevUpcoming, 200);
+    addIds(ordersPrev7d, MAX_DETAIL_ORDERS);
     addIds(ordersLast7d, MAX_DETAIL_ORDERS);
     addIds(ordersJune, MAX_DETAIL_ORDERS);
     addIds(ordersJuly, MAX_DETAIL_ORDERS);
@@ -163,9 +171,11 @@ export class GTOConnector implements SourceConnector {
     logger.info({ fetched: detailMap.size }, 'GTO: order details fetched');
 
     // ── Compute sections ───────────────────────────────────────────────────
-    const s1 = this.computeSalesSection(ordersYesterday, detailMap, rates);
-    const s2 = this.computeSalesSection(ordersLast7d, detailMap, rates);
-    const s3 = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
+    const s1     = this.computeSalesSection(ordersYesterday, detailMap, rates);
+    const s2     = this.computeSalesSection(ordersLast7d, detailMap, rates);
+    const s2prev = this.computeSalesSection(ordersPrev7d, detailMap, rates);
+    const s3     = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
+    const s3prev = this.computeUpcomingSection(ordersPrevUpcoming, detailMap, rates);
     const s4 = {
       year,
       june:   this.computeSummerMonth('Июнь',   ordersJune,   detailMap, rates),
@@ -188,10 +198,47 @@ export class GTOConnector implements SourceConnector {
             currency_note: rates
               ? `All amounts in EUR (rates date: ${rates.fetchedAt.slice(0, 10)})`
               : 'Currency rates unavailable',
-            section1_yesterday:     { period: { from: fmt(yesterday), to: fmt(today) }, ...s1 },
-            section2_last_7_days:   { period: { from: fmt(last7dFrom), to: fmt(today) }, ...s2 },
-            section3_upcoming_tours: { period: { from: fmt(today), to: fmt(next7dTo) }, ...s3 },
-            section4_summer:        s4,
+            section1_yesterday: {
+              period: { from: fmt(yesterday), to: fmt(today) },
+              ...s1,
+            },
+            section2_last_7_days: {
+              period: { from: fmt(last7dFrom), to: fmt(today) },
+              ...s2,
+              vs_prev_7_days: {
+                period: { from: fmt(prev14dFrom), to: fmt(last7dFrom) },
+                prev_orders_confirmed: s2prev.orders.confirmed,
+                prev_revenue_eur:      s2prev.financials.revenue_eur,
+                prev_profit_eur:       s2prev.financials.profit_eur,
+                prev_tourists:         s2prev.tourists,
+                orders_confirmed_delta: s2.orders.confirmed - s2prev.orders.confirmed,
+                revenue_eur_delta:     r2(s2.financials.revenue_eur - s2prev.financials.revenue_eur),
+                revenue_eur_delta_pct: s2prev.financials.revenue_eur > 0
+                  ? Math.round((s2.financials.revenue_eur - s2prev.financials.revenue_eur) / s2prev.financials.revenue_eur * 100)
+                  : null,
+                profit_eur_delta:      r2(s2.financials.profit_eur - s2prev.financials.profit_eur),
+                profit_eur_delta_pct:  s2prev.financials.profit_eur > 0
+                  ? Math.round((s2.financials.profit_eur - s2prev.financials.profit_eur) / s2prev.financials.profit_eur * 100)
+                  : null,
+                tourists_delta:        s2.tourists - s2prev.tourists,
+              },
+            },
+            section3_upcoming_tours: {
+              period: { from: fmt(today), to: fmt(next7dTo) },
+              ...s3,
+              vs_prev_window: {
+                period:            { from: fmt(last7dFrom), to: fmt(today) },
+                prev_orders:       s3prev.confirmed_orders,
+                prev_tourists:     s3prev.tourists,
+                prev_revenue_eur:  s3prev.revenue_eur,
+                prev_profit_eur:   s3prev.profit_eur,
+                orders_delta:      s3.confirmed_orders - s3prev.confirmed_orders,
+                tourists_delta:    s3.tourists - s3prev.tourists,
+                revenue_eur_delta: r2(s3.revenue_eur - s3prev.revenue_eur),
+                profit_eur_delta:  r2(s3.profit_eur - s3prev.profit_eur),
+              },
+            },
+            section4_summer: s4,
           },
         },
         warnings,
@@ -254,10 +301,8 @@ export class GTOConnector implements SourceConnector {
     const profitPct = priceEur > 0 ? Math.round(profitEur / priceEur * 100) : 0;
 
     // Product classification
-    // Hotel: has hotel[] entries with status != CNX
     const activeHotels   = hotels.filter((h: any) => h.status !== 'CNX');
     const hasHotel       = activeHotels.length > 0;
-    // Flight: service[] with flight_details OR service_type_name containing avia/air
     const activeServices = services.filter((s: any) => s.status !== 'CNX');
     const hasFlight      = activeServices.some((s: any) =>
       (s.flight_details?.segment?.length > 0) ||
@@ -307,6 +352,18 @@ export class GTOConnector implements SourceConnector {
     };
   }
 
+  // ── Shared top-list helper ────────────────────────────────────────────────
+  private topList(
+    rec: Record<string, { orders: number; revenue: number }>,
+    key: 'orders' | 'revenue',
+    n = 5,
+  ) {
+    return Object.entries(rec)
+      .sort((a, b) => b[1][key] - a[1][key])
+      .slice(0, n)
+      .map(([name, d]) => ({ name, orders: d.orders, revenue_eur: r2(d.revenue) }));
+  }
+
   // ── Section 1 & 2: Sales stats ────────────────────────────────────────────
   private computeSalesSection(
     orders: any[],
@@ -327,11 +384,8 @@ export class GTOConnector implements SourceConnector {
     for (const o of confirmed) {
       const detail = detailMap.get(o.order_id);
       const m = this.extractOrder(o, detail, rates);
-      if (!m) {
-        // No detail available — use summary data only
-        revenueEur += 0; // can't compute without detail
-        continue;
-      }
+      if (!m) continue;
+
       totalTourists += m.tourists;
       revenueEur    += m.priceEur;
       costEur       += m.costEur;
@@ -355,16 +409,6 @@ export class GTOConnector implements SourceConnector {
       orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }
 
-    // Sort helpers
-    const topList = <T extends Record<string, number>>(
-      rec: Record<string, { orders: number; revenue: number }>,
-      key: 'orders' | 'revenue',
-      n = 5,
-    ) => Object.entries(rec)
-      .sort((a, b) => b[1][key] - a[1][key])
-      .slice(0, n)
-      .map(([name, d]) => ({ name, orders: d.orders, revenue_eur: r2(d.revenue) }));
-
     // Anomalies
     const anomalies: string[] = [];
     const avgPrice = orderValues.length > 0 ? revenueEur / orderValues.length : 0;
@@ -385,15 +429,15 @@ export class GTOConnector implements SourceConnector {
 
     return {
       orders: {
-        total:              orders.length,
-        confirmed:          confirmed.length,
-        cancelled:          cancelled.length,
-        pending:            pending.length,
+        total:                 orders.length,
+        confirmed:             confirmed.length,
+        cancelled:             cancelled.length,
+        pending:               pending.length,
         cancellation_rate_pct: orders.length > 0 ? Math.round(cancelled.length / orders.length * 100) : 0,
       },
       tourists: totalTourists,
       financials: {
-        note:          'Revenue, cost and profit are calculated for CONFIRMED (CNF) orders only. Cancelled orders are excluded.',
+        note:          'Revenue, cost and profit calculated for CONFIRMED (CNF) orders only',
         revenue_eur:   r2(revenueEur),
         cost_eur:      r2(costEur),
         profit_eur:    r2(profitEur),
@@ -404,13 +448,13 @@ export class GTOConnector implements SourceConnector {
         .sort((a, b) => b[1] - a[1]).slice(0, 8)
         .map(([country, count]) => ({ country, orders: count })),
       product_breakdown: products,
-      top_agents_by_orders:   topList(agents, 'orders', 5),
-      top_agents_by_revenue:  topList(agents, 'revenue', 5),
-      top_suppliers_by_orders:   topList(suppliers, 'orders', 5),
-      top_suppliers_by_revenue:  topList(suppliers, 'revenue', 5),
-      most_expensive_order:     byPrice[0]   ? { order_id: byPrice[0].orderId,   price_eur: r2(byPrice[0].priceEur) }     : null,
-      most_profitable_abs:      byProfit[0]  ? { order_id: byProfit[0].orderId,  profit_eur: r2(byProfit[0].profitEur) }   : null,
-      most_profitable_rel:      byProfPct[0] ? { order_id: byProfPct[0].orderId, profit_pct: byProfPct[0].profitPct }      : null,
+      top_agents_by_orders:      this.topList(agents, 'orders', 5),
+      top_agents_by_revenue:     this.topList(agents, 'revenue', 5),
+      top_suppliers_by_orders:   this.topList(suppliers, 'orders', 5),
+      top_suppliers_by_revenue:  this.topList(suppliers, 'revenue', 5),
+      most_expensive_order:  byPrice[0]   ? { order_id: byPrice[0].orderId,   price_eur:  r2(byPrice[0].priceEur) }    : null,
+      most_profitable_abs:   byProfit[0]  ? { order_id: byProfit[0].orderId,  profit_eur: r2(byProfit[0].profitEur) }  : null,
+      most_profitable_rel:   byProfPct[0] ? { order_id: byProfPct[0].orderId, profit_pct: byProfPct[0].profitPct }     : null,
       anomalies: anomalies.slice(0, 5),
       data_available: orders.length > 0,
     };
@@ -422,27 +466,40 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
-    let tourists = 0, revenueEur = 0;
+    let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number> = {};
-    const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0 };
+    const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
+    const agents: Record<string, { orders: number; revenue: number }> = {};
 
     for (const o of orders) {
       const m = this.extractOrder(o, detailMap.get(o.order_id), rates);
       if (!m) continue;
-      tourists    += m.tourists;
-      revenueEur  += m.priceEur;
+      tourists   += m.tourists;
+      revenueEur += m.priceEur;
+      costEur    += m.costEur;
+      profitEur  += m.profitEur;
       for (const c of m.countries) destinations[c] = (destinations[c] || 0) + 1;
       if (m.productType in products) (products as any)[m.productType]++;
+      if (m.hasInsurance) products.insurance++;
+      if (m.agentName) {
+        if (!agents[m.agentName]) agents[m.agentName] = { orders: 0, revenue: 0 };
+        agents[m.agentName].orders++;
+        agents[m.agentName].revenue += m.priceEur;
+      }
     }
 
     return {
       confirmed_orders: orders.length,
       tourists,
-      revenue_eur: r2(revenueEur),
+      revenue_eur:  r2(revenueEur),
+      cost_eur:     r2(costEur),
+      profit_eur:   r2(profitEur),
+      profit_pct:   revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
       top_destinations: Object.entries(destinations)
         .sort((a, b) => b[1] - a[1]).slice(0, 5)
         .map(([country, n]) => ({ country, orders: n })),
       product_breakdown: products,
+      top_agents: this.topList(agents, 'orders', 5),
       data_available: orders.length > 0,
     };
   }
@@ -454,7 +511,10 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
-    let tourists = 0, revenueEur = 0, costEur = 0;
+    let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
+    const destinations: Record<string, number> = {};
+    const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
+    const agents: Record<string, { orders: number; revenue: number }> = {};
 
     for (const o of orders) {
       const m = this.extractOrder(o, detailMap.get(o.order_id), rates);
@@ -462,18 +522,32 @@ export class GTOConnector implements SourceConnector {
       tourists   += m.tourists;
       revenueEur += m.priceEur;
       costEur    += m.costEur;
+      profitEur  += m.profitEur;
+      for (const c of m.countries) destinations[c] = (destinations[c] || 0) + 1;
+      if (m.productType in products) (products as any)[m.productType]++;
+      if (m.hasInsurance) products.insurance++;
+      if (m.agentName) {
+        if (!agents[m.agentName]) agents[m.agentName] = { orders: 0, revenue: 0 };
+        agents[m.agentName].orders++;
+        agents[m.agentName].revenue += m.priceEur;
+      }
     }
 
-    const profitEur = revenueEur - costEur;
+    const profitEurFinal = revenueEur - costEur;
 
     return {
       label,
       confirmed_orders: orders.length,
       tourists,
-      revenue_eur: r2(revenueEur),
-      cost_eur:    r2(costEur),
-      profit_eur:  r2(profitEur),
-      profit_pct:  revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
+      revenue_eur:  r2(revenueEur),
+      cost_eur:     r2(costEur),
+      profit_eur:   r2(profitEurFinal),
+      profit_pct:   revenueEur > 0 ? Math.round(profitEurFinal / revenueEur * 100) : 0,
+      top_destinations: Object.entries(destinations)
+        .sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([country, n]) => ({ country, orders: n })),
+      product_breakdown: products,
+      top_agents: this.topList(agents, 'orders', 5),
     };
   }
 
