@@ -266,35 +266,78 @@ export class GTOConnector implements SourceConnector {
       for (const c of detail.country) if (c.name) countries.push(c.name);
     }
 
-    // Currency of order
+    // Fallback order currency (used when service currency label is unreliable)
     const orderCurrency = detail.currency || orderSummary?.currency || 'UAH';
 
-    // Financials: sell = total_amount; cost = sum of price_buy across hotels + services
-    const priceEur = toEur(parseFloat(detail.total_amount) || 0, orderCurrency);
+    // ── Revenue ──────────────────────────────────────────────────────────
+    // Use balance_amount / balance_currency — GTO stores the total order amount
+    // in the agent's preferred currency (usually EUR), which is more reliable
+    // than converting total_amount from UAH ourselves.
+    const balanceCurrency = detail.balance_currency || orderCurrency;
+    const balanceAmount   = parseFloat(detail.balance_amount) || 0;
+    const priceEur = balanceAmount > 0
+      ? toEur(balanceAmount, balanceCurrency)
+      : toEur(parseFloat(detail.total_amount) || 0, orderCurrency);
 
+    // ── Cost ─────────────────────────────────────────────────────────────
     let costEur = 0;
     const hotels   = Array.isArray(detail.hotel)   ? detail.hotel   : [];
     const services = Array.isArray(detail.service) ? detail.service : [];
 
-    // Hotels: trust hotel.currency (hotels are reliably priced in EUR internationally)
+    // Hotels: price_buy in hotel.currency.
+    // Sanity: if price_buy > price_sell (same currency) → currency label is wrong → use orderCurrency.
     for (const h of hotels) {
-      const priceBuy = parseFloat(h.price_buy) || 0;
-      if (priceBuy > 0) costEur += toEur(priceBuy, h.currency || orderCurrency);
-    }
-
-    // Services: GTO sometimes labels service.currency='EUR' but price_buy is actually in UAH.
-    // Sanity check: if converting with service.currency gives a cost > entire order revenue,
-    // the currency label is wrong → fall back to order currency.
-    for (const s of services) {
-      const priceBuy = parseFloat(s.price_buy) || 0;
+      const priceBuy  = parseFloat(h.price_buy) || 0;
+      const priceSell = parseFloat(h.price)     || 0;
       if (priceBuy <= 0) continue;
-      const convertedWithServiceCurrency = toEur(priceBuy, s.currency || orderCurrency);
-      if (convertedWithServiceCurrency > priceEur && priceEur > 0) {
-        // Currency label is unreliable — use order currency instead
+      const hCurrency = h.currency || orderCurrency;
+      const costConverted = toEur(priceBuy,  hCurrency);
+      const sellConverted = toEur(priceSell, hCurrency);
+      if (sellConverted > 0 && costConverted > sellConverted) {
         costEur += toEur(priceBuy, orderCurrency);
       } else {
-        costEur += convertedWithServiceCurrency;
+        costEur += costConverted;
       }
+    }
+
+    // Services:
+    // • transfer  — price_buy is always in EUR in GTO (regardless of service.currency)
+    // • airticket — price_buy in service.currency (e.g. UAH)
+    // • insurance / other — price_buy in service.currency
+    // Universal sanity rule: if price_buy > price_sell (after converting both) → use orderCurrency.
+    for (const s of services) {
+      const priceBuy  = parseFloat(s.price_buy) || 0;
+      const priceSell = parseFloat(s.price)     || 0;
+      if (priceBuy <= 0) continue;
+
+      let serviceCostEur: number;
+
+      if (s.type === 'transfer') {
+        // Transfer price_buy is stored in EUR by GTO regardless of service.currency label
+        const costAsEur     = toEur(priceBuy,  'EUR');
+        const sellConverted = toEur(priceSell, s.currency || orderCurrency);
+        if (sellConverted > 0 && costAsEur > sellConverted) {
+          serviceCostEur = toEur(priceBuy, orderCurrency);
+        } else {
+          serviceCostEur = costAsEur;
+        }
+      } else {
+        // Airticket, insurance, other services — use service.currency
+        const sCurrency     = s.currency || orderCurrency;
+        const costConverted = toEur(priceBuy,  sCurrency);
+        const sellConverted = toEur(priceSell, sCurrency);
+        // Sanity 1: cost > sell for this service → currency label is wrong
+        if (sellConverted > 0 && costConverted > sellConverted) {
+          serviceCostEur = toEur(priceBuy, orderCurrency);
+        // Sanity 2: cost > entire order revenue → impossible
+        } else if (costConverted > priceEur && priceEur > 0) {
+          serviceCostEur = toEur(priceBuy, orderCurrency);
+        } else {
+          serviceCostEur = costConverted;
+        }
+      }
+
+      costEur += serviceCostEur;
     }
 
     const profitEur = priceEur - costEur;
