@@ -229,13 +229,25 @@ export class GTOConnector implements SourceConnector {
     const hotels   = Array.isArray(detail.hotel)   ? detail.hotel   : [];
     const services = Array.isArray(detail.service) ? detail.service : [];
 
+    // Hotels: trust hotel.currency (hotels are reliably priced in EUR internationally)
     for (const h of hotels) {
       const priceBuy = parseFloat(h.price_buy) || 0;
       if (priceBuy > 0) costEur += toEur(priceBuy, h.currency || orderCurrency);
     }
+
+    // Services: GTO sometimes labels service.currency='EUR' but price_buy is actually in UAH.
+    // Sanity check: if converting with service.currency gives a cost > entire order revenue,
+    // the currency label is wrong → fall back to order currency.
     for (const s of services) {
       const priceBuy = parseFloat(s.price_buy) || 0;
-      if (priceBuy > 0) costEur += toEur(priceBuy, s.currency || orderCurrency);
+      if (priceBuy <= 0) continue;
+      const convertedWithServiceCurrency = toEur(priceBuy, s.currency || orderCurrency);
+      if (convertedWithServiceCurrency > priceEur && priceEur > 0) {
+        // Currency label is unreliable — use order currency instead
+        costEur += toEur(priceBuy, orderCurrency);
+      } else {
+        costEur += convertedWithServiceCurrency;
+      }
     }
 
     const profitEur = priceEur - costEur;
