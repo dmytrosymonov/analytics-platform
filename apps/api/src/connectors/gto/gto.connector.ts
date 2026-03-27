@@ -409,7 +409,13 @@ export class GTOConnector implements SourceConnector {
         // Airticket: trust supplier name tag for the buy currency.
         // e.g. "DRCT [UAH]" means price_buy is in UAH even if order currency is KZT.
         const buyCurr = supplierTagCurrency(s.supplier_id) || s.currency || orderCurrency;
-        serviceCostEur = toEur(priceBuy, buyCurr);
+        const airkCostConverted = toEur(priceBuy, buyCurr);
+        const airkSellConverted = toEur(priceSell, buyCurr);
+        // Sanity: if cost > sell by >2x, currency label is wrong → fall back to UAH.
+        // This catches GTO quirk where price_buy is UAH but s.currency says EUR.
+        serviceCostEur = (airkSellConverted > 0 && airkCostConverted > airkSellConverted * 2)
+          ? toEur(priceBuy, 'UAH')
+          : airkCostConverted;
 
       } else {
         // Insurance and other services: price_buy in service.currency.
@@ -520,7 +526,7 @@ export class GTOConnector implements SourceConnector {
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents:    Record<string, { orders: number; revenue: number }> = {};
     const suppliers: Record<string, { orders: number; cost: number }> = {};
-    const orderValues: Array<{ orderId: any; priceEur: number; profitEur: number; profitPct: number }> = [];
+    const orderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
 
     for (const o of confirmed) {
       const detail = detailMap.get(o.order_id);
@@ -550,15 +556,22 @@ export class GTOConnector implements SourceConnector {
         suppliers[sup].orders++;
         suppliers[sup].cost += m.costEur / Math.max(m.suppliers.length, 1);
       }
-      orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, profitEur: m.profitEur, profitPct: m.profitPct });
+      orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, costEur: m.costEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }
 
-    // Anomalies
+    // Anomalies — detect suspicious orders (high revenue OR deeply negative margin)
     const anomalies: string[] = [];
     const avgPrice = orderValues.length > 0 ? revenueEur / orderValues.length : 0;
+    const negativeOrders = orderValues.filter(o => o.priceEur > 0 && o.profitPct < -30);
     for (const ov of orderValues) {
       if (ov.priceEur > avgPrice * 3 && ov.priceEur > 2000) {
         anomalies.push(`Заказ #${ov.orderId}: ${r2(ov.priceEur)} EUR (в ${Math.round(ov.priceEur / (avgPrice || 1))}x выше среднего)`);
+      }
+    }
+    if (negativeOrders.length > 0) {
+      const worstByMargin = [...negativeOrders].sort((a, b) => a.profitPct - b.profitPct).slice(0, 3);
+      for (const ov of worstByMargin) {
+        anomalies.push(`Заказ #${ov.orderId}: выручка ${r2(ov.priceEur)} EUR, себестоимость ${r2(ov.costEur)} EUR, маржа ${ov.profitPct}%`);
       }
     }
     if (orders.length > 0 && cancelled.length / orders.length > 0.3)
