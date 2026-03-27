@@ -269,10 +269,22 @@ export class GTOConnector implements SourceConnector {
     // Fallback order currency (used when service currency label is unreliable)
     const orderCurrency = detail.currency || orderSummary?.currency || 'UAH';
 
+    // ── Supplier name lookup (for currency detection) ─────────────────────
+    // Some suppliers encode their billing currency in the name: "DRCT [UAH]", "Hotelbeds [EUR]"
+    // This is the authoritative source for price_buy currency on airtickets.
+    const supplierNameMap = new Map<string, string>();
+    for (const s of (Array.isArray(detail.supplier) ? detail.supplier : [])) {
+      if (s.id) supplierNameMap.set(String(s.id), s.name || '');
+    }
+    const supplierTagCurrency = (supplierId: any): string | null => {
+      const name = supplierNameMap.get(String(supplierId)) || '';
+      const m = name.match(/\[(UAH|EUR|KZT|USD|PLN)\]/i);
+      return m ? m[1].toUpperCase() : null;
+    };
+
     // ── Revenue ──────────────────────────────────────────────────────────
-    // Use balance_amount / balance_currency — GTO stores the total order amount
-    // in the agent's preferred currency (usually EUR), which is more reliable
-    // than converting total_amount from UAH ourselves.
+    // balance_amount / balance_currency — GTO already converts to agent's preferred
+    // currency (usually EUR), more reliable than converting total_amount ourselves.
     const balanceCurrency = detail.balance_currency || orderCurrency;
     const balanceAmount   = parseFloat(detail.balance_amount) || 0;
     const priceEur = balanceAmount > 0
@@ -285,26 +297,25 @@ export class GTOConnector implements SourceConnector {
     const services = Array.isArray(detail.service) ? detail.service : [];
 
     // Hotels: price_buy in hotel.currency.
-    // Sanity: if price_buy > price_sell (same currency) → currency label is wrong → use orderCurrency.
+    // Sanity: if price_buy > price_sell → currency label wrong → use UAH.
     for (const h of hotels) {
       const priceBuy  = parseFloat(h.price_buy) || 0;
       const priceSell = parseFloat(h.price)     || 0;
       if (priceBuy <= 0) continue;
-      const hCurrency = h.currency || orderCurrency;
+      const hCurrency     = h.currency || orderCurrency;
       const costConverted = toEur(priceBuy,  hCurrency);
       const sellConverted = toEur(priceSell, hCurrency);
-      if (sellConverted > 0 && costConverted > sellConverted) {
-        costEur += toEur(priceBuy, orderCurrency);
-      } else {
-        costEur += costConverted;
-      }
+      costEur += (sellConverted > 0 && costConverted > sellConverted)
+        ? toEur(priceBuy, 'UAH')
+        : costConverted;
     }
 
     // Services:
-    // • transfer  — price_buy is always in EUR in GTO (regardless of service.currency)
-    // • airticket — price_buy in service.currency (e.g. UAH)
-    // • insurance / other — price_buy in service.currency
-    // Universal sanity rule: if price_buy > price_sell (after converting both) → use orderCurrency.
+    // • transfer  — price_buy ALWAYS in EUR; no sanity check (value is trusted)
+    // • airticket — price_buy currency determined by supplier name tag [UAH/EUR/KZT/…];
+    //               falls back to service.currency if no tag found
+    // • insurance / other — price_buy in service.currency;
+    //               if price_buy > price_sell → price_buy is actually in UAH
     for (const s of services) {
       const priceBuy  = parseFloat(s.price_buy) || 0;
       const priceSell = parseFloat(s.price)     || 0;
@@ -313,28 +324,25 @@ export class GTOConnector implements SourceConnector {
       let serviceCostEur: number;
 
       if (s.type === 'transfer') {
-        // Transfer price_buy is stored in EUR by GTO regardless of service.currency label
-        const costAsEur     = toEur(priceBuy,  'EUR');
-        const sellConverted = toEur(priceSell, s.currency || orderCurrency);
-        if (sellConverted > 0 && costAsEur > sellConverted) {
-          serviceCostEur = toEur(priceBuy, orderCurrency);
-        } else {
-          serviceCostEur = costAsEur;
-        }
+        // Transfer: price_buy is always stored in EUR regardless of service.currency.
+        // Do NOT apply sanity check — the value is correct even if cost > sell in local currency.
+        serviceCostEur = toEur(priceBuy, 'EUR');
+
+      } else if (s.type === 'airticket') {
+        // Airticket: trust supplier name tag for the buy currency.
+        // e.g. "DRCT [UAH]" means price_buy is in UAH even if order currency is KZT.
+        const buyCurr = supplierTagCurrency(s.supplier_id) || s.currency || orderCurrency;
+        serviceCostEur = toEur(priceBuy, buyCurr);
+
       } else {
-        // Airticket, insurance, other services — use service.currency
+        // Insurance and other services: price_buy in service.currency.
+        // Exception: if price_buy > price_sell → price_buy is in UAH (GTO quirk).
         const sCurrency     = s.currency || orderCurrency;
         const costConverted = toEur(priceBuy,  sCurrency);
         const sellConverted = toEur(priceSell, sCurrency);
-        // Sanity 1: cost > sell for this service → currency label is wrong
-        if (sellConverted > 0 && costConverted > sellConverted) {
-          serviceCostEur = toEur(priceBuy, orderCurrency);
-        // Sanity 2: cost > entire order revenue → impossible
-        } else if (costConverted > priceEur && priceEur > 0) {
-          serviceCostEur = toEur(priceBuy, orderCurrency);
-        } else {
-          serviceCostEur = costConverted;
-        }
+        serviceCostEur = (sellConverted > 0 && costConverted > sellConverted)
+          ? toEur(priceBuy, 'UAH')   // price_buy is always UAH when label is wrong
+          : costConverted;
       }
 
       costEur += serviceCostEur;
