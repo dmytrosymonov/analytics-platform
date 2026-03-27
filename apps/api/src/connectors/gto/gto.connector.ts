@@ -80,7 +80,8 @@ export class GTOConnector implements SourceConnector {
     const yesterday   = new Date(period.start);
     const last7dFrom  = new Date(today.getTime() - 7 * 86400000);
     const prev14dFrom = new Date(today.getTime() - 14 * 86400000);
-    const next7dTo    = new Date(today.getTime() + 7 * 86400000);
+    const next7dTo    = new Date(today.getTime() + 7  * 86400000);
+    const next30dTo   = new Date(today.getTime() + 30 * 86400000);
 
     // Summer months relative to today
     const year = today.getMonth() >= 9 ? today.getFullYear() + 1 : today.getFullYear();
@@ -122,6 +123,7 @@ export class GTOConnector implements SourceConnector {
       ordersPrev7d,
       ordersUpcoming,
       ordersPrevUpcoming,
+      ordersUpcoming30d,
       ordersJune,
       ordersJuly,
       ordersAugust,
@@ -132,10 +134,12 @@ export class GTOConnector implements SourceConnector {
       fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'created_at' }),
       // Section 2 comparison — previous 7 days (days 8-14 ago, by created_at)
       fetchList('/orders_list', { date_from: fmt(prev14dFrom), date_to: fmt(last7dFrom), sort_by: 'created_at' }),
-      // Section 3 — upcoming tours (start date = next 7 days, confirmed only)
+      // Section 3a — upcoming tours (start date = next 7 days, confirmed only)
       fetchList('/orders_list', { date_from: fmt(today), date_to: fmt(next7dTo), sort_by: 'date_start', status: 'CNF' }),
-      // Section 3 comparison — tours that started in past 7 days (confirmed only)
+      // Section 3a comparison — tours started in past 7 days (confirmed only)
       fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'date_start', status: 'CNF' }),
+      // Section 3b — upcoming 30 days (confirmed only)
+      fetchList('/orders_list', { date_from: fmt(today), date_to: fmt(next30dTo), sort_by: 'date_start', status: 'CNF' }),
       // Section 4 — summer months by date_start (confirmed only)
       fetchList('/orders_list', { date_from: `${year}-06-01`, date_to: `${year}-06-30`, sort_by: 'date_start', status: 'CNF' }),
       fetchList('/orders_list', { date_from: `${year}-07-01`, date_to: `${year}-07-31`, sort_by: 'date_start', status: 'CNF' }),
@@ -154,6 +158,7 @@ export class GTOConnector implements SourceConnector {
     addIds(ordersYesterday, 200);
     addIds(ordersUpcoming, 200);
     addIds(ordersPrevUpcoming, 200);
+    addIds(ordersUpcoming30d, MAX_DETAIL_ORDERS);
     addIds(ordersPrev7d, MAX_DETAIL_ORDERS);
     addIds(ordersLast7d, MAX_DETAIL_ORDERS);
     addIds(ordersJune, MAX_DETAIL_ORDERS);
@@ -176,11 +181,34 @@ export class GTOConnector implements SourceConnector {
     const s2prev = this.computeSalesSection(ordersPrev7d, detailMap, rates);
     const s3     = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
     const s3prev = this.computeUpcomingSection(ordersPrevUpcoming, detailMap, rates);
+    const s3b    = this.computeUpcomingSection(ordersUpcoming30d, detailMap, rates);
+    const s4june   = this.computeSummerMonth('Июнь',   ordersJune,   detailMap, rates);
+    const s4july   = this.computeSummerMonth('Июль',   ordersJuly,   detailMap, rates);
+    const s4august = this.computeSummerMonth('Август', ordersAugust, detailMap, rates);
+
+    // Combined summer destinations (tourists across all 3 months)
+    const summerTouristsByCountry: Record<string, number> = {};
+    let summerTotalTourists = 0;
+    for (const month of [s4june, s4july, s4august]) {
+      summerTotalTourists += month.tourists;
+      for (const d of month.top_destinations) {
+        summerTouristsByCountry[d.country] = (summerTouristsByCountry[d.country] || 0) + d.tourists;
+      }
+    }
+    const summerTopDestinations = Object.entries(summerTouristsByCountry)
+      .sort((a, b) => b[1] - a[1]).slice(0, 8)
+      .map(([country, tourists]) => ({
+        country,
+        tourists,
+        pct: summerTotalTourists > 0 ? Math.round(tourists / summerTotalTourists * 100) : 0,
+      }));
+
     const s4 = {
       year,
-      june:   this.computeSummerMonth('Июнь',   ordersJune,   detailMap, rates),
-      july:   this.computeSummerMonth('Июль',   ordersJuly,   detailMap, rates),
-      august: this.computeSummerMonth('Август', ordersAugust, detailMap, rates),
+      june:   s4june,
+      july:   s4july,
+      august: s4august,
+      top_destinations_combined: summerTopDestinations,
     };
 
     return {
@@ -223,20 +251,13 @@ export class GTOConnector implements SourceConnector {
                 tourists_delta:        s2.tourists - s2prev.tourists,
               },
             },
-            section3_upcoming_tours: {
+            section3_upcoming_7days: {
               period: { from: fmt(today), to: fmt(next7dTo) },
               ...s3,
-              vs_prev_window: {
-                period:            { from: fmt(last7dFrom), to: fmt(today) },
-                prev_orders:       s3prev.confirmed_orders,
-                prev_tourists:     s3prev.tourists,
-                prev_revenue_eur:  s3prev.revenue_eur,
-                prev_profit_eur:   s3prev.profit_eur,
-                orders_delta:      s3.confirmed_orders - s3prev.confirmed_orders,
-                tourists_delta:    s3.tourists - s3prev.tourists,
-                revenue_eur_delta: r2(s3.revenue_eur - s3prev.revenue_eur),
-                profit_eur_delta:  r2(s3.profit_eur - s3prev.profit_eur),
-              },
+            },
+            section3_upcoming_30days: {
+              period: { from: fmt(today), to: fmt(next30dTo) },
+              ...s3b,
             },
             section4_summer: s4,
           },
@@ -373,14 +394,15 @@ export class GTOConnector implements SourceConnector {
     else if (hasTransfer)          productType = 'transfer';
     else                           productType = 'other';
 
-    // Suppliers (unique)
+    // Suppliers (unique, clean currency tags from names: "Hotelbeds [EUR]" → "Hotelbeds")
+    const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
     const suppliers = new Set<string>();
     for (const h of activeHotels) {
-      const name = h.supplier_name || h.service_supplier_name;
+      const name = cleanSupName(h.supplier_name || h.service_supplier_name || '');
       if (name) suppliers.add(name);
     }
     for (const s of activeServices) {
-      const name = s.supplier_name || s.service_supplier_name;
+      const name = cleanSupName(s.supplier_name || s.service_supplier_name || '');
       if (name) suppliers.add(name);
     }
 
@@ -427,6 +449,7 @@ export class GTOConnector implements SourceConnector {
 
     let totalTourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number>  = {};
+    const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents:    Record<string, { orders: number; revenue: number }> = {};
     const suppliers: Record<string, { orders: number; revenue: number }> = {};
@@ -442,7 +465,10 @@ export class GTOConnector implements SourceConnector {
       costEur       += m.costEur;
       profitEur     += m.profitEur;
 
-      for (const c of m.countries) destinations[c] = (destinations[c] || 0) + 1;
+      for (const c of m.countries) {
+        destinations[c] = (destinations[c] || 0) + 1;
+        touristsPerCountry[c] = (touristsPerCountry[c] || 0) + m.tourists;
+      }
 
       products[m.productType]++;
       if (m.hasInsurance) products.insurance++;
@@ -497,7 +523,12 @@ export class GTOConnector implements SourceConnector {
       },
       top_destinations: Object.entries(destinations)
         .sort((a, b) => b[1] - a[1]).slice(0, 8)
-        .map(([country, count]) => ({ country, orders: count })),
+        .map(([country, orders]) => ({
+          country,
+          orders,
+          tourists: touristsPerCountry[country] || 0,
+          pct: totalTourists > 0 ? Math.round((touristsPerCountry[country] || 0) / totalTourists * 100) : 0,
+        })),
       product_breakdown: products,
       top_agents_by_orders:      this.topList(agents, 'orders', 5),
       top_agents_by_revenue:     this.topList(agents, 'revenue', 5),
@@ -519,6 +550,7 @@ export class GTOConnector implements SourceConnector {
   ) {
     let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number> = {};
+    const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents: Record<string, { orders: number; revenue: number }> = {};
 
@@ -529,7 +561,10 @@ export class GTOConnector implements SourceConnector {
       revenueEur += m.priceEur;
       costEur    += m.costEur;
       profitEur  += m.profitEur;
-      for (const c of m.countries) destinations[c] = (destinations[c] || 0) + 1;
+      for (const c of m.countries) {
+        destinations[c] = (destinations[c] || 0) + 1;
+        touristsPerCountry[c] = (touristsPerCountry[c] || 0) + m.tourists;
+      }
       if (m.productType in products) (products as any)[m.productType]++;
       if (m.hasInsurance) products.insurance++;
       if (m.agentName) {
@@ -548,7 +583,12 @@ export class GTOConnector implements SourceConnector {
       profit_pct:   revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
       top_destinations: Object.entries(destinations)
         .sort((a, b) => b[1] - a[1]).slice(0, 5)
-        .map(([country, n]) => ({ country, orders: n })),
+        .map(([country, orders]) => ({
+          country,
+          orders,
+          tourists: touristsPerCountry[country] || 0,
+          pct: tourists > 0 ? Math.round((touristsPerCountry[country] || 0) / tourists * 100) : 0,
+        })),
       product_breakdown: products,
       top_agents: this.topList(agents, 'orders', 5),
       data_available: orders.length > 0,
@@ -564,6 +604,7 @@ export class GTOConnector implements SourceConnector {
   ) {
     let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number> = {};
+    const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents: Record<string, { orders: number; revenue: number }> = {};
 
@@ -574,7 +615,10 @@ export class GTOConnector implements SourceConnector {
       revenueEur += m.priceEur;
       costEur    += m.costEur;
       profitEur  += m.profitEur;
-      for (const c of m.countries) destinations[c] = (destinations[c] || 0) + 1;
+      for (const c of m.countries) {
+        destinations[c] = (destinations[c] || 0) + 1;
+        touristsPerCountry[c] = (touristsPerCountry[c] || 0) + m.tourists;
+      }
       if (m.productType in products) (products as any)[m.productType]++;
       if (m.hasInsurance) products.insurance++;
       if (m.agentName) {
@@ -596,7 +640,12 @@ export class GTOConnector implements SourceConnector {
       profit_pct:   revenueEur > 0 ? Math.round(profitEurFinal / revenueEur * 100) : 0,
       top_destinations: Object.entries(destinations)
         .sort((a, b) => b[1] - a[1]).slice(0, 5)
-        .map(([country, n]) => ({ country, orders: n })),
+        .map(([country, orders]) => ({
+          country,
+          orders,
+          tourists: touristsPerCountry[country] || 0,
+          pct: tourists > 0 ? Math.round((touristsPerCountry[country] || 0) / tourists * 100) : 0,
+        })),
       product_breakdown: products,
       top_agents: this.topList(agents, 'orders', 5),
     };

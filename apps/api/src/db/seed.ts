@@ -88,124 +88,127 @@ async function main() {
     // Default prompt templates
     const prompts: Record<string, { system: string; user: string }> = {
       gto: {
-        system: `Ты — старший аналитик туристической компании. Анализируешь данные продаж из системы GTO.
-Все суммы в EUR. Выручка и прибыль считаются ТОЛЬКО по подтверждённым заказам (CNF). Отменённые (CNX) в финансах не учитываются.
-Продукты: package = тур (отель + перелёт вместе), hotel = только отель, flight = только перелёт, transfer = трансфер, insurance = страховка (доп. услуга).
-Статусы: CNF = подтверждён, CNX = отменён.
-Прибыль = выручка − себестоимость (price_buy суммарно по всем услугам и отелям заказа).
-Отвечай ТОЛЬКО валидным JSON без markdown-блоков и пояснений. Язык отчёта: РУССКИЙ.`,
-        user: `Анализируй данные продаж GTO за {{report_period_start}} — {{report_period_end}}.
-Источник: {{source_name}}
+        system: `Ты — аналитик туристической компании. Формируешь ежедневный отчёт по продажам из системы GTO.
+Все суммы в EUR. Выручка (GMV) и прибыль считаются ТОЛЬКО по подтверждённым заказам (CNF).
+Прибыль = выручка − себестоимость.
+ПРАВИЛА ФОРМАТИРОВАНИЯ ЧИСЕЛ (строго обязательны):
+  — Все числа округляй до ЦЕЛОГО (без дробей).
+  — Разделитель тысяч — ПРОБЕЛ: 40 773, не 40773 и не 40,773.
+  — Проценты без дробей: 13%, не 13.2%.
+Отвечай ТОЛЬКО валидным JSON без markdown-блоков. Язык: РУССКИЙ.`,
+
+        user: `Данные продаж GTO. Период отчёта: {{report_period_start}} — {{report_period_end}}.
 
 ДАННЫЕ (все суммы в EUR):
 {{normalized_metrics_json}}
 
-Данные содержат 4 секции:
+СЕКЦИИ:
+• section1_yesterday — заявки, созданные вчера
+• section2_last_7_days — заявки за последние 7 дней
+• section3_upcoming_7days — подтверждённые туры со стартом в ближайшие 7 дней
+• section3_upcoming_30days — подтверждённые туры со стартом в ближайшие 30 дней
+• section4_summer — подтверждённые туры июнь/июль/август (+ top_destinations_combined по всему лету)
 
-СЕКЦИЯ 1 — section1_yesterday: заявки, созданные вчера
-СЕКЦИЯ 2 — section2_last_7_days: заявки, созданные за последние 7 дней (с полем vs_prev_7_days для сравнения)
-СЕКЦИЯ 3 — section3_upcoming_tours: подтверждённые туры со стартом в ближайшие 7 дней (с полем vs_prev_window)
-СЕКЦИЯ 4 — section4_summer: подтверждённые туры со стартом в июне/июле/августе (по каждому месяцу отдельно)
+Поля секций 1 и 2:
+  orders: {total, confirmed, cancelled, pending}
+  financials: {revenue_eur, profit_eur, profit_pct, avg_order_eur}
+  top_destinations: [{country, orders, tourists, pct}] — pct = % от всех туристов секции
+  product_breakdown: {package, hotel, flight, transfer, other, insurance}
+  top_agents_by_orders: [{name, orders, revenue_eur}]
+  top_suppliers_by_orders / top_suppliers_by_revenue: [{name, orders, revenue_eur}]
+  most_expensive_order: {order_id, price_eur}
 
-Поля в секциях 1 и 2:
-- orders: {total, confirmed, cancelled, pending, cancellation_rate_pct}
-- tourists: количество туристов (только по подтверждённым)
-- financials: {revenue_eur, cost_eur, profit_eur, profit_pct, avg_order_eur} — только CNF
-- top_destinations: [{country, orders}] — топ-8 направлений
-- product_breakdown: {package, hotel, flight, transfer, other, insurance}
-- top_agents_by_orders / top_agents_by_revenue: [{name, orders, revenue_eur}]
-- top_suppliers_by_orders / top_suppliers_by_revenue: [{name, orders, revenue_eur}]
-- most_expensive_order: {order_id, price_eur}
-- most_profitable_abs: {order_id, profit_eur}
-- most_profitable_rel: {order_id, profit_pct}
-- anomalies: [строки с аномалиями]
-- vs_prev_7_days (только секция 2): {prev_orders_confirmed, prev_revenue_eur, prev_profit_eur, prev_tourists, orders_confirmed_delta, revenue_eur_delta, revenue_eur_delta_pct, profit_eur_delta, tourists_delta}
+Поля секций 3 (7d и 30d):
+  confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
+  top_destinations: [{country, tourists, pct}]
 
-Поля в секции 3 (upcoming):
-- confirmed_orders, tourists, revenue_eur, cost_eur, profit_eur, profit_pct
-- top_destinations, product_breakdown, top_agents
-- vs_prev_window: {prev_orders, prev_tourists, prev_revenue_eur, orders_delta, tourists_delta, revenue_eur_delta}
+Поля секции 4 (june/july/august):
+  confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
+  top_destinations_combined (только в корне section4): [{country, tourists, pct}]
 
-Поля в секции 4 (каждый месяц: june, july, august):
-- confirmed_orders, tourists, revenue_eur, cost_eur, profit_eur, profit_pct
-- top_destinations: [{country, orders}]
-- product_breakdown: {package, hotel, flight, transfer, other, insurance}
-- top_agents: [{name, orders, revenue_eur}]
-
-Верни ТОЛЬКО валидный JSON строго в этой структуре:
+Верни ТОЛЬКО валидный JSON:
 {
-  "yesterday": {
-    "summary": "1-2 предложения об итогах вчера",
-    "orders_total": 0, "orders_confirmed": 0, "orders_cancelled": 0, "cancellation_rate_pct": 0,
-    "tourists": 0,
-    "revenue_eur": 0, "cost_eur": 0, "profit_eur": 0, "profit_pct": 0, "avg_order_eur": 0,
-    "top_destinations": [{"country": "", "orders": 0}],
-    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
-    "top_agents": [{"name": "", "orders": 0, "revenue_eur": 0}],
-    "top_suppliers_by_orders": [{"name": "", "orders": 0}],
-    "top_suppliers_by_revenue": [{"name": "", "revenue_eur": 0}],
-    "most_expensive_order": {"order_id": "", "price_eur": 0},
-    "most_profitable_abs": {"order_id": "", "profit_eur": 0},
-    "most_profitable_rel": {"order_id": "", "profit_pct": 0},
-    "anomalies": []
-  },
-  "last_7_days": {
-    "summary": "1-2 предложения о тренде за 7 дней и сравнение с предыдущей неделей",
-    "orders_total": 0, "orders_confirmed": 0, "orders_cancelled": 0, "cancellation_rate_pct": 0,
-    "tourists": 0,
-    "revenue_eur": 0, "cost_eur": 0, "profit_eur": 0, "profit_pct": 0, "avg_order_eur": 0,
-    "vs_prev_week": {
-      "revenue_eur_delta": 0, "revenue_eur_delta_pct": 0,
-      "profit_eur_delta": 0, "orders_confirmed_delta": 0, "tourists_delta": 0,
-      "trend": "рост/снижение/без изменений"
-    },
-    "top_destinations": [{"country": "", "orders": 0}],
-    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
-    "top_agents": [{"name": "", "orders": 0, "revenue_eur": 0}],
-    "top_suppliers_by_orders": [{"name": "", "orders": 0}],
-    "top_suppliers_by_revenue": [{"name": "", "revenue_eur": 0}],
-    "most_expensive_order": {"order_id": "", "price_eur": 0},
-    "most_profitable_abs": {"order_id": "", "profit_eur": 0},
-    "most_profitable_rel": {"order_id": "", "profit_pct": 0},
-    "anomalies": []
-  },
-  "upcoming_7_days": {
-    "summary": "что предстоит в ближайшую неделю, сравнение с прошлым окном",
-    "confirmed_orders": 0, "tourists": 0,
-    "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0,
-    "vs_prev_window": {
-      "orders_delta": 0, "tourists_delta": 0, "revenue_eur_delta": 0, "trend": "рост/снижение"
-    },
-    "top_destinations": [{"country": "", "orders": 0}],
-    "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0}
-  },
-  "summer": {
-    "june": {
-      "orders": 0, "tourists": 0,
-      "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0,
-      "top_destinations": [{"country": "", "orders": 0}],
-      "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
-      "top_agents": [{"name": "", "orders": 0}]
-    },
-    "july": {
-      "orders": 0, "tourists": 0,
-      "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0,
-      "top_destinations": [{"country": "", "orders": 0}],
-      "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
-      "top_agents": [{"name": "", "orders": 0}]
-    },
-    "august": {
-      "orders": 0, "tourists": 0,
-      "revenue_eur": 0, "profit_eur": 0, "profit_pct": 0,
-      "top_destinations": [{"country": "", "orders": 0}],
-      "product_breakdown": {"package": 0, "hotel": 0, "flight": 0, "transfer": 0, "insurance": 0},
-      "top_agents": [{"name": "", "orders": 0}]
-    },
-    "summary": "1-2 предложения о летней загрузке и тенденциях"
-  },
-  "recommendations": ["конкретное действие 1", "конкретное действие 2", "конкретное действие 3"],
-  "telegram_message": "📊 *Ежедневный отчёт GTO* | ДД.ММ.ГГГГ\\n\\n━━━━━━━━━━━━━━━\\n📅 *ВЧЕРА*\\n━━━━━━━━━━━━━━━\\nЗаявок: X (✅ X подтв | ❌ X отмен | X% отмен)\\nТуристов: X\\n💶 Выручка: X EUR | Себест: X EUR\\n💰 Прибыль: X EUR (X%)\\nСредний чек: X EUR\\n\\n🌍 Направления: Страна1(N), Страна2(N)\\n📦 Пакет:X Отель:X Перелёт:X Страх:X\\n🏆 Топ агент: Агент (X зак, X EUR)\\n🏭 Топ поставщик: Поставщик (X зак)\\n💎 Дорогой: #XXXXX — X EUR\\n💰 Прибыльный: #XXXXX — X EUR (X%)\\n⚠️ Аномалии: текст или нет\\n\\n━━━━━━━━━━━━━━━\\n📅 *7 ДНЕЙ*\\n━━━━━━━━━━━━━━━\\nЗаявок: X (✅ X подтв | ❌ X отмен)\\nТуристов: X\\n💶 Выручка: X EUR (▲/▼X% vs пред. нед.)\\n💰 Прибыль: X EUR (X%) (▲/▼X%)\\n\\n🌍 Топ: Страна1(N), Страна2(N), Страна3(N)\\n📦 Пакет:X Отель:X Перелёт:X\\n🏆 Агенты: Агент1(X), Агент2(X)\\n🏭 Поставщики: Пост1(X), Пост2(X)\\n\\n━━━━━━━━━━━━━━━\\n🔮 *БЛИЖАЙШИЕ 7 ДНЕЙ*\\n━━━━━━━━━━━━━━━\\nТуров: X | Туристов: X\\n💶 X EUR | Прибыль: X EUR (X%)\\n🌍 Страна1(N), Страна2(N)\\nvs пред. окно: ▲/▼X туров, ▲/▼X EUR\\n\\n━━━━━━━━━━━━━━━\\n☀️ *ЛЕТО YYYY*\\n━━━━━━━━━━━━━━━\\nИюнь: X зак | X тур | X EUR | X EUR пр. (X%)\\nИюль: X зак | X тур | X EUR | X EUR пр. (X%)\\nАвгуст: X зак | X тур | X EUR | X EUR пр. (X%)\\n\\n✅ *Рекомендации:*\\n• действие 1\\n• действие 2"
-}`,
+  "telegram_message": "<сообщение строго по шаблону ниже>"
+}
+
+ШАБЛОН telegram_message (заполни реальными данными, соблюдай форматирование чисел):
+
+📊 Ежедн. отчёт по продажам GTO
+Период: ДД/ММ/ГГГГ - ДД/ММ/ГГГГ
+
+📦  Заявок: X (✅X подтв, ❌X отмен, ⚠️X pending)
+Туристов: X
+
+💶 Выручка: X EUR
+Прибыль: X EUR (X%)
+💼 Средний чек: X EUR
+
+🌍 Направления: Страна1 N, Страна2 N, Страна3 N
+📦 Продукты: Пакет X, Отель X, Перелёт X
+
+👥 Топ агент: Имя Агента — X зак
+
+💎 Самый дорогой заказ: #XXXXX — X EUR
+
+Самые популярные поставщики:
+Поставщик1 - X заказов, X EUR
+Поставщик2 - X заказов, X EUR
+Поставщик3 - X заказов, X EUR
+
+
+📊 За последние 7 дней (ДД/ММ/ГГГГ-ДД/ММ/ГГГГ)
+
+📦  Заявок: X (✅X подтв, ❌X отмен, ⚠️X pending)
+Туристов: X
+
+💶 Выручка: X EUR
+Прибыль: X EUR (X%)
+💼 Средний чек: X EUR
+
+🌍 Направления: Страна1 N, Страна2 N, Страна3 N
+📦 Продукты: Пакет X, Отель X, Перелёт X
+
+👥 Топ агент: Имя Агента — X зак
+
+💎 Самый дорогой заказ: #XXXXX — X EUR
+
+Самые популярные поставщики:
+Поставщик1 - X заказов, X EUR
+Поставщик2 - X заказов, X EUR
+Поставщик3 - X заказов, X EUR
+
+
+🔮 Старт Ближ. 7 дней: X заказов, X туристов, GMV: X EUR, Gross profit: X EUR (X%)
+Самые популярные направления:
+Страна1 - X туристов (X%)
+Страна2 - X туристов (X%)
+Страна3 - X туристов (X%)
+
+Старт ближ. 30 дней: X заказов, X туристов, GMV: X EUR, Gross profit: X EUR (X%)
+Страна1 - X туристов (X%)
+Страна2 - X туристов (X%)
+Страна3 - X туристов (X%)
+
+
+☀️ Лето:
+Июнь: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
+Июль: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
+Август: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
+
+Самые популярные направления:
+Страна1 - X туристов (X%)
+Страна2 - X туристов (X%)
+Страна3 - X туристов (X%)
+
+ВАЖНО:
+- Используй данные из соответствующих секций JSON, не придумывай числа.
+- Форматируй все числа с разделителем тысяч (пробел): 40 773, 1 207, 485 782.
+- Округляй все суммы EUR до целого числа.
+- Дату периода форматируй как ДД/ММ/ГГГГ из поля period.from / period.to.
+- Топ агент = первый в top_agents_by_orders.
+- Топ поставщики = top_suppliers_by_orders (топ-3, названия без тегов в скобках).
+- Направления в строке "🌍" — топ-3 через запятую, формат "Испания 14".
+- Направления в блоках "🔮" и "☀️" — с % туристов, каждое на новой строке.`,
       },
       ga4: {
         system: `You are a digital marketing analyst specializing in web analytics.
