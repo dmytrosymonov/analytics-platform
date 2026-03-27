@@ -31,6 +31,51 @@ class Semaphore {
 const fmt = (d: Date) => d.toISOString().slice(0, 10);
 const r2  = (n: number) => Math.round(n * 100) / 100;
 
+const COUNTRY_EMOJI: Record<string, string> = {
+  'Spain': '🇪🇸', 'Испания': '🇪🇸', 'Іспанія': '🇪🇸',
+  'Turkey': '🇹🇷', 'Турция': '🇹🇷', 'Туреччина': '🇹🇷',
+  'Egypt': '🇪🇬', 'Египет': '🇪🇬', 'Єгипет': '🇪🇬',
+  'Greece': '🇬🇷', 'Греция': '🇬🇷', 'Греція': '🇬🇷',
+  'Italy': '🇮🇹', 'Италия': '🇮🇹', 'Італія': '🇮🇹',
+  'UAE': '🇦🇪', 'ОАЭ': '🇦🇪', 'ОАЕ': '🇦🇪', 'United Arab Emirates': '🇦🇪',
+  'Thailand': '🇹🇭', 'Таиланд': '🇹🇭', 'Таїланд': '🇹🇭',
+  'Cyprus': '🇨🇾', 'Кипр': '🇨🇾', 'Кіпр': '🇨🇾',
+  'Montenegro': '🇲🇪', 'Черногория': '🇲🇪', 'Чорногорія': '🇲🇪',
+  'Croatia': '🇭🇷', 'Хорватия': '🇭🇷', 'Хорватія': '🇭🇷',
+  'France': '🇫🇷', 'Франция': '🇫🇷', 'Франція': '🇫🇷',
+  'Germany': '🇩🇪', 'Германия': '🇩🇪', 'Німеччина': '🇩🇪',
+  'Czech Republic': '🇨🇿', 'Чехия': '🇨🇿', 'Чехія': '🇨🇿', 'Czechia': '🇨🇿',
+  'Austria': '🇦🇹', 'Австрия': '🇦🇹', 'Австрія': '🇦🇹',
+  'Bulgaria': '🇧🇬', 'Болгария': '🇧🇬', 'Болгарія': '🇧🇬',
+  'Portugal': '🇵🇹', 'Португалия': '🇵🇹', 'Португалія': '🇵🇹',
+  'Georgia': '🇬🇪', 'Грузия': '🇬🇪', 'Грузія': '🇬🇪',
+  'Armenia': '🇦🇲', 'Армения': '🇦🇲', 'Вірменія': '🇦🇲',
+  'Israel': '🇮🇱', 'Израиль': '🇮🇱', 'Ізраїль': '🇮🇱',
+  'Morocco': '🇲🇦', 'Марокко': '🇲🇦',
+  'Maldives': '🇲🇻', 'Мальдивы': '🇲🇻', 'Мальдіви': '🇲🇻',
+  'Sri Lanka': '🇱🇰', 'Шри-Ланка': '🇱🇰',
+  'Vietnam': '🇻🇳', 'Вьетнам': '🇻🇳', 'В\'єтнам': '🇻🇳',
+  'India': '🇮🇳', 'Индия': '🇮🇳', 'Індія': '🇮🇳',
+  'Indonesia': '🇮🇩', 'Индонезия': '🇮🇩', 'Індонезія': '🇮🇩',
+  'Kazakhstan': '🇰🇿', 'Казахстан': '🇰🇿',
+  'Poland': '🇵🇱', 'Польша': '🇵🇱', 'Польща': '🇵🇱',
+  'Hungary': '🇭🇺', 'Венгрия': '🇭🇺', 'Угорщина': '🇭🇺',
+  'Netherlands': '🇳🇱', 'Нидерланды': '🇳🇱', 'Нідерланди': '🇳🇱',
+  'Belgium': '🇧🇪', 'Бельгия': '🇧🇪', 'Бельгія': '🇧🇪',
+  'Switzerland': '🇨🇭', 'Швейцария': '🇨🇭', 'Швейцарія': '🇨🇭',
+  'Sweden': '🇸🇪', 'Швеция': '🇸🇪', 'Швеція': '🇸🇪',
+  'Norway': '🇳🇴', 'Норвегия': '🇳🇴', 'Норвегія': '🇳🇴',
+  'Albania': '🇦🇱', 'Албания': '🇦🇱', 'Албанія': '🇦🇱',
+  'Malta': '🇲🇹', 'Мальта': '🇲🇹',
+  'Tunisia': '🇹🇳', 'Тунис': '🇹🇳', 'Туніс': '🇹🇳',
+  'Jordan': '🇯🇴', 'Иордания': '🇯🇴', 'Йорданія': '🇯🇴',
+  'Mexico': '🇲🇽', 'Мексика': '🇲🇽',
+  'Japan': '🇯🇵', 'Япония': '🇯🇵', 'Японія': '🇯🇵',
+  'China': '🇨🇳', 'Китай': '🇨🇳',
+  'USA': '🇺🇸', 'США': '🇺🇸',
+};
+const countryEmoji = (name: string) => COUNTRY_EMOJI[name] ?? '';
+
 // ─── Connector ────────────────────────────────────────────────────────────────
 export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
@@ -75,9 +120,10 @@ export class GTOConnector implements SourceConnector {
     if (!rates) warnings.push('Currency rates unavailable — amounts in original currencies');
 
     // ── Date ranges ────────────────────────────────────────────────────────
-    // period.end = start of today (UTC), period.start = start of yesterday
-    const today       = new Date(period.end);
-    const yesterday   = new Date(period.start);
+    // Always use real current date — period.start/end are scheduler metadata only.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday   = new Date(today.getTime() - 86400000);
     const last7dFrom  = new Date(today.getTime() - 7 * 86400000);
     const prev14dFrom = new Date(today.getTime() - 14 * 86400000);
     const next7dTo    = new Date(today.getTime() + 7  * 86400000);
@@ -91,19 +137,28 @@ export class GTOConnector implements SourceConnector {
       path: string,
       params: Record<string, unknown>,
     ): Promise<any[]> => {
-      for (let attempt = 0; attempt <= retryCount; attempt++) {
-        try {
-          const resp = await http.get(path, { params: { ...params, per_page: 1000 } });
-          const data = resp.data;
-          if (Array.isArray(data)) return data;
-          if (data?.data && Array.isArray(data.data)) return data.data;
-          return [];
-        } catch (err: any) {
-          if (attempt === retryCount) { logger.warn({ path, err: err.message }, 'fetchList failed'); return []; }
-          await sleep(retryBackoff * Math.pow(2, attempt) * 1000);
+      const PER_PAGE = 1000;
+      const allItems: any[] = [];
+      let page = 1;
+      for (;;) {
+        let pageData: any[] = [];
+        for (let attempt = 0; attempt <= retryCount; attempt++) {
+          try {
+            const resp = await http.get(path, { params: { ...params, per_page: PER_PAGE, page } });
+            const data = resp.data;
+            if (Array.isArray(data)) { pageData = data; break; }
+            if (data?.data && Array.isArray(data.data)) { pageData = data.data; break; }
+            break;
+          } catch (err: any) {
+            if (attempt === retryCount) { logger.warn({ path, err: err.message }, 'fetchList failed'); break; }
+            await sleep(retryBackoff * Math.pow(2, attempt) * 1000);
+          }
         }
+        allItems.push(...pageData);
+        if (pageData.length < PER_PAGE) break; // last page
+        page++;
       }
-      return [];
+      return allItems;
     };
 
     const fetchDetail = async (orderId: number): Promise<any | null> => {
@@ -199,6 +254,7 @@ export class GTOConnector implements SourceConnector {
       .sort((a, b) => b[1] - a[1]).slice(0, 8)
       .map(([country, tourists]) => ({
         country,
+        flag: countryEmoji(country),
         tourists,
         pct: summerTotalTourists > 0 ? Math.round(tourists / summerTotalTourists * 100) : 0,
       }));
@@ -406,8 +462,9 @@ export class GTOConnector implements SourceConnector {
       if (name) suppliers.add(name);
     }
 
-    // Agent
-    const agentName = detail.agent_name || orderSummary?.company_name || '';
+    // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
+    const rawAgent = detail.agent_name || orderSummary?.company_name || '';
+    const agentName = rawAgent.replace(/\s*\[.*?\]/g, '').trim();
 
     return {
       orderId:     detail.order_id || orderSummary?.order_id,
@@ -425,7 +482,7 @@ export class GTOConnector implements SourceConnector {
     };
   }
 
-  // ── Shared top-list helper ────────────────────────────────────────────────
+  // ── Shared top-list helpers ────────────────────────────────────────────────
   private topList(
     rec: Record<string, { orders: number; revenue: number }>,
     key: 'orders' | 'revenue',
@@ -435,6 +492,16 @@ export class GTOConnector implements SourceConnector {
       .sort((a, b) => b[1][key] - a[1][key])
       .slice(0, n)
       .map(([name, d]) => ({ name, orders: d.orders, revenue_eur: r2(d.revenue) }));
+  }
+
+  private topSupplierList(
+    rec: Record<string, { orders: number; cost: number }>,
+    n = 5,
+  ) {
+    return Object.entries(rec)
+      .sort((a, b) => b[1].orders - a[1].orders)
+      .slice(0, n)
+      .map(([name, d]) => ({ name, orders: d.orders, cost_eur: r2(d.cost) }));
   }
 
   // ── Section 1 & 2: Sales stats ────────────────────────────────────────────
@@ -452,7 +519,7 @@ export class GTOConnector implements SourceConnector {
     const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents:    Record<string, { orders: number; revenue: number }> = {};
-    const suppliers: Record<string, { orders: number; revenue: number }> = {};
+    const suppliers: Record<string, { orders: number; cost: number }> = {};
     const orderValues: Array<{ orderId: any; priceEur: number; profitEur: number; profitPct: number }> = [];
 
     for (const o of confirmed) {
@@ -479,9 +546,9 @@ export class GTOConnector implements SourceConnector {
         agents[m.agentName].revenue += m.priceEur;
       }
       for (const sup of m.suppliers) {
-        if (!suppliers[sup]) suppliers[sup] = { orders: 0, revenue: 0 };
+        if (!suppliers[sup]) suppliers[sup] = { orders: 0, cost: 0 };
         suppliers[sup].orders++;
-        suppliers[sup].revenue += m.priceEur;
+        suppliers[sup].cost += m.costEur / Math.max(m.suppliers.length, 1);
       }
       orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }
@@ -525,6 +592,7 @@ export class GTOConnector implements SourceConnector {
         .sort((a, b) => b[1] - a[1]).slice(0, 8)
         .map(([country, orders]) => ({
           country,
+          flag: countryEmoji(country),
           orders,
           tourists: touristsPerCountry[country] || 0,
           pct: totalTourists > 0 ? Math.round((touristsPerCountry[country] || 0) / totalTourists * 100) : 0,
@@ -532,8 +600,7 @@ export class GTOConnector implements SourceConnector {
       product_breakdown: products,
       top_agents_by_orders:      this.topList(agents, 'orders', 5),
       top_agents_by_revenue:     this.topList(agents, 'revenue', 5),
-      top_suppliers_by_orders:   this.topList(suppliers, 'orders', 5),
-      top_suppliers_by_revenue:  this.topList(suppliers, 'revenue', 5),
+      top_suppliers_by_orders:   this.topSupplierList(suppliers, 5),
       most_expensive_order:  byPrice[0]   ? { order_id: byPrice[0].orderId,   price_eur:  r2(byPrice[0].priceEur) }    : null,
       most_profitable_abs:   byProfit[0]  ? { order_id: byProfit[0].orderId,  profit_eur: r2(byProfit[0].profitEur) }  : null,
       most_profitable_rel:   byProfPct[0] ? { order_id: byProfPct[0].orderId, profit_pct: byProfPct[0].profitPct }     : null,
@@ -585,6 +652,7 @@ export class GTOConnector implements SourceConnector {
         .sort((a, b) => b[1] - a[1]).slice(0, 5)
         .map(([country, orders]) => ({
           country,
+          flag: countryEmoji(country),
           orders,
           tourists: touristsPerCountry[country] || 0,
           pct: tourists > 0 ? Math.round((touristsPerCountry[country] || 0) / tourists * 100) : 0,
@@ -642,6 +710,7 @@ export class GTOConnector implements SourceConnector {
         .sort((a, b) => b[1] - a[1]).slice(0, 5)
         .map(([country, orders]) => ({
           country,
+          flag: countryEmoji(country),
           orders,
           tourists: touristsPerCountry[country] || 0,
           pct: tourists > 0 ? Math.round((touristsPerCountry[country] || 0) / tourists * 100) : 0,

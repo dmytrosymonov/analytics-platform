@@ -112,19 +112,19 @@ async function main() {
 Поля секций 1 и 2:
   orders: {total, confirmed, cancelled, pending}
   financials: {revenue_eur, profit_eur, profit_pct, avg_order_eur}
-  top_destinations: [{country, orders, tourists, pct}] — pct = % от всех туристов секции
+  top_destinations: [{country, flag, orders, tourists, pct}] — pct = % от всех туристов; flag = emoji флага
   product_breakdown: {package, hotel, flight, transfer, other, insurance}
   top_agents_by_orders: [{name, orders, revenue_eur}]
-  top_suppliers_by_orders / top_suppliers_by_revenue: [{name, orders, revenue_eur}]
+  top_suppliers_by_orders: [{name, orders, cost_eur}] — cost_eur = себестоимость (price_buy)
   most_expensive_order: {order_id, price_eur}
 
 Поля секций 3 (7d и 30d):
   confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
-  top_destinations: [{country, tourists, pct}]
+  top_destinations: [{country, flag, tourists, pct}]
 
 Поля секции 4 (june/july/august):
   confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
-  top_destinations_combined (только в корне section4): [{country, tourists, pct}]
+  top_destinations_combined (только в корне section4): [{country, flag, tourists, pct}]
 
 Верни ТОЛЬКО валидный JSON:
 {
@@ -143,14 +143,14 @@ async function main() {
 Прибыль: X EUR (X%)
 💼 Средний чек: X EUR
 
-🌍 Направления: Страна1 N, Страна2 N, Страна3 N
+🌍 Направления: 🇪🇸Испания N, 🇪🇬Египет N, 🇬🇷Греция N
 📦 Продукты: Пакет X, Отель X, Перелёт X
 
 👥 Топ агент: Имя Агента — X зак
 
 💎 Самый дорогой заказ: #XXXXX — X EUR
 
-Самые популярные поставщики:
+Самые популярные поставщики (себестоимость):
 Поставщик1 - X заказов, X EUR
 Поставщик2 - X заказов, X EUR
 Поставщик3 - X заказов, X EUR
@@ -165,14 +165,14 @@ async function main() {
 Прибыль: X EUR (X%)
 💼 Средний чек: X EUR
 
-🌍 Направления: Страна1 N, Страна2 N, Страна3 N
+🌍 Направления: 🇪🇸Испания N, 🇹🇷Турция N, 🇪🇬Египет N
 📦 Продукты: Пакет X, Отель X, Перелёт X
 
 👥 Топ агент: Имя Агента — X зак
 
 💎 Самый дорогой заказ: #XXXXX — X EUR
 
-Самые популярные поставщики:
+Самые популярные поставщики (себестоимость):
 Поставщик1 - X заказов, X EUR
 Поставщик2 - X заказов, X EUR
 Поставщик3 - X заказов, X EUR
@@ -180,14 +180,14 @@ async function main() {
 
 🔮 Старт Ближ. 7 дней: X заказов, X туристов, GMV: X EUR, Gross profit: X EUR (X%)
 Самые популярные направления:
-Страна1 - X туристов (X%)
-Страна2 - X туристов (X%)
-Страна3 - X туристов (X%)
+🇪🇬Египет - X туристов (X%)
+🇪🇸Испания - X туристов (X%)
+🇮🇹Италия - X туристов (X%)
 
 Старт ближ. 30 дней: X заказов, X туристов, GMV: X EUR, Gross profit: X EUR (X%)
-Страна1 - X туристов (X%)
-Страна2 - X туристов (X%)
-Страна3 - X туристов (X%)
+🇪🇬Египет - X туристов (X%)
+🇪🇸Испания - X туристов (X%)
+🇮🇹Италия - X туристов (X%)
 
 
 ☀️ Лето:
@@ -196,19 +196,21 @@ async function main() {
 Август: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
 
 Самые популярные направления:
-Страна1 - X туристов (X%)
-Страна2 - X туристов (X%)
-Страна3 - X туристов (X%)
+🇪🇸Испания - X туристов (X%)
+🇬🇷Греция - X туристов (X%)
+🇹🇷Турция - X туристов (X%)
 
 ВАЖНО:
 - Используй данные из соответствующих секций JSON, не придумывай числа.
 - Форматируй все числа с разделителем тысяч (пробел): 40 773, 1 207, 485 782.
 - Округляй все суммы EUR до целого числа.
 - Дату периода форматируй как ДД/ММ/ГГГГ из поля period.from / period.to.
+- Период отчёта (верхняя строка) = period из section1_yesterday.
 - Топ агент = первый в top_agents_by_orders.
-- Топ поставщики = top_suppliers_by_orders (топ-3, названия без тегов в скобках).
-- Направления в строке "🌍" — топ-3 через запятую, формат "Испания 14".
-- Направления в блоках "🔮" и "☀️" — с % туристов, каждое на новой строке.`,
+- Топ поставщики = top_suppliers_by_orders (топ-3); сумма = cost_eur (себестоимость).
+- Направления в строке "🌍" — топ-3 через запятую, формат "🇪🇸Испания 14" (emoji из поля flag).
+- Направления в блоках "🔮" и "☀️" — с % туристов, каждое на новой строке, с emoji флага.
+- Если profit_pct отрицательный, выведи как есть (например -15%).`,
       },
       ga4: {
         system: `You are a digital marketing analyst specializing in web analytics.
