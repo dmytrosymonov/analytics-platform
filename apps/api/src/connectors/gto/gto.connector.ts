@@ -358,6 +358,7 @@ export class GTOConnector implements SourceConnector {
       const m = name.match(/\[(UAH|EUR|KZT|USD|PLN)\]/i);
       return m ? m[1].toUpperCase() : null;
     };
+    const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
 
     // ── Revenue ──────────────────────────────────────────────────────────
     // balance_amount / balance_currency — GTO already converts to agent's preferred
@@ -375,6 +376,9 @@ export class GTOConnector implements SourceConnector {
 
     // Hotels: price_buy in hotel.currency.
     // Sanity: if price_buy > price_sell → currency label wrong → use UAH.
+    // supplierCosts: tracks cost per supplier name for accurate reporting
+    const supplierCosts: Record<string, number> = {};
+
     for (const h of hotels) {
       const priceBuy  = parseFloat(h.price_buy) || 0;
       const priceSell = parseFloat(h.price)     || 0;
@@ -382,15 +386,18 @@ export class GTOConnector implements SourceConnector {
       const hCurrency     = h.currency || orderCurrency;
       const costConverted = toEur(priceBuy,  hCurrency);
       const sellConverted = toEur(priceSell, hCurrency);
-      costEur += (sellConverted > 0 && costConverted > sellConverted)
+      const hCost = (sellConverted > 0 && costConverted > sellConverted)
         ? toEur(priceBuy, 'UAH')
         : costConverted;
+      costEur += hCost;
+      const supName = cleanSupName(h.supplier_name || h.service_supplier_name || '');
+      if (supName) supplierCosts[supName] = (supplierCosts[supName] || 0) + hCost;
     }
 
     // Services:
     // • transfer  — price_buy ALWAYS in EUR; no sanity check (value is trusted)
     // • airticket — price_buy currency determined by supplier name tag [UAH/EUR/KZT/…];
-    //               falls back to service.currency if no tag found
+    //               if cost > sell * 2 → mislabeled, fallback to UAH
     // • insurance / other — price_buy in service.currency;
     //               if price_buy > price_sell → price_buy is actually in UAH
     for (const s of services) {
@@ -401,34 +408,28 @@ export class GTOConnector implements SourceConnector {
       let serviceCostEur: number;
 
       if (s.type === 'transfer') {
-        // Transfer: price_buy is always stored in EUR regardless of service.currency.
-        // Do NOT apply sanity check — the value is correct even if cost > sell in local currency.
         serviceCostEur = toEur(priceBuy, 'EUR');
 
       } else if (s.type === 'airticket') {
-        // Airticket: trust supplier name tag for the buy currency.
-        // e.g. "DRCT [UAH]" means price_buy is in UAH even if order currency is KZT.
         const buyCurr = supplierTagCurrency(s.supplier_id) || s.currency || orderCurrency;
         const airkCostConverted = toEur(priceBuy, buyCurr);
         const airkSellConverted = toEur(priceSell, buyCurr);
-        // Sanity: if cost > sell by >2x, currency label is wrong → fall back to UAH.
-        // This catches GTO quirk where price_buy is UAH but s.currency says EUR.
         serviceCostEur = (airkSellConverted > 0 && airkCostConverted > airkSellConverted * 2)
           ? toEur(priceBuy, 'UAH')
           : airkCostConverted;
 
       } else {
-        // Insurance and other services: price_buy in service.currency.
-        // Exception: if price_buy > price_sell → price_buy is in UAH (GTO quirk).
         const sCurrency     = s.currency || orderCurrency;
         const costConverted = toEur(priceBuy,  sCurrency);
         const sellConverted = toEur(priceSell, sCurrency);
         serviceCostEur = (sellConverted > 0 && costConverted > sellConverted)
-          ? toEur(priceBuy, 'UAH')   // price_buy is always UAH when label is wrong
+          ? toEur(priceBuy, 'UAH')
           : costConverted;
       }
 
       costEur += serviceCostEur;
+      const supName = cleanSupName(s.supplier_name || s.service_supplier_name || '');
+      if (supName) supplierCosts[supName] = (supplierCosts[supName] || 0) + serviceCostEur;
     }
 
     const profitEur = priceEur - costEur;
@@ -456,25 +457,13 @@ export class GTOConnector implements SourceConnector {
     else if (hasTransfer)          productType = 'transfer';
     else                           productType = 'other';
 
-    // Suppliers (unique, clean currency tags from names: "Hotelbeds [EUR]" → "Hotelbeds")
-    const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
-    const suppliers = new Set<string>();
-    for (const h of activeHotels) {
-      const name = cleanSupName(h.supplier_name || h.service_supplier_name || '');
-      if (name) suppliers.add(name);
-    }
-    for (const s of activeServices) {
-      const name = cleanSupName(s.supplier_name || s.service_supplier_name || '');
-      if (name) suppliers.add(name);
-    }
-
     // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
     const agentName = rawAgent.replace(/\s*\[.*?\]/g, '').trim();
 
     return {
-      orderId:     detail.order_id || orderSummary?.order_id,
-      status:      orderSummary?.status || detail.status,
+      orderId:        detail.order_id || orderSummary?.order_id,
+      status:         orderSummary?.status || detail.status,
       tourists,
       countries,
       priceEur,
@@ -484,20 +473,20 @@ export class GTOConnector implements SourceConnector {
       productType,
       hasInsurance,
       agentName,
-      suppliers: [...suppliers],
+      supplierCosts,  // map: supplier_name → their specific service cost in this order
     };
   }
 
   // ── Shared top-list helpers ────────────────────────────────────────────────
   private topList(
-    rec: Record<string, { orders: number; revenue: number }>,
+    rec: Record<string, { orders: number; revenue: number; tourists?: number }>,
     key: 'orders' | 'revenue',
     n = 5,
   ) {
     return Object.entries(rec)
       .sort((a, b) => b[1][key] - a[1][key])
       .slice(0, n)
-      .map(([name, d]) => ({ name, orders: d.orders, revenue_eur: r2(d.revenue) }));
+      .map(([name, d]) => ({ name, orders: d.orders, tourists: d.tourists ?? 0, revenue_eur: r2(d.revenue) }));
   }
 
   private topSupplierList(
@@ -523,8 +512,12 @@ export class GTOConnector implements SourceConnector {
     let totalTourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number>  = {};
     const touristsPerCountry: Record<string, number> = {};
-    const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
-    const agents:    Record<string, { orders: number; revenue: number }> = {};
+    const products: Record<string, { orders: number; tourists: number }> = {
+      package: { orders: 0, tourists: 0 }, hotel: { orders: 0, tourists: 0 },
+      flight: { orders: 0, tourists: 0 }, transfer: { orders: 0, tourists: 0 },
+      other: { orders: 0, tourists: 0 }, insurance: { orders: 0, tourists: 0 },
+    };
+    const agents:    Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const suppliers: Record<string, { orders: number; cost: number }> = {};
     const orderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
 
@@ -543,18 +536,20 @@ export class GTOConnector implements SourceConnector {
         touristsPerCountry[c] = (touristsPerCountry[c] || 0) + m.tourists;
       }
 
-      products[m.productType]++;
-      if (m.hasInsurance) products.insurance++;
+      products[m.productType].orders++;
+      products[m.productType].tourists += m.tourists;
+      if (m.hasInsurance) { products.insurance.orders++; products.insurance.tourists += m.tourists; }
 
       if (m.agentName) {
-        if (!agents[m.agentName]) agents[m.agentName] = { orders: 0, revenue: 0 };
+        if (!agents[m.agentName]) agents[m.agentName] = { orders: 0, revenue: 0, tourists: 0 };
         agents[m.agentName].orders++;
         agents[m.agentName].revenue += m.priceEur;
+        agents[m.agentName].tourists += m.tourists;
       }
-      for (const sup of m.suppliers) {
+      for (const [sup, cost] of Object.entries(m.supplierCosts)) {
         if (!suppliers[sup]) suppliers[sup] = { orders: 0, cost: 0 };
         suppliers[sup].orders++;
-        suppliers[sup].cost += m.costEur / Math.max(m.suppliers.length, 1);
+        suppliers[sup].cost += cost;
       }
       orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, costEur: m.costEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }

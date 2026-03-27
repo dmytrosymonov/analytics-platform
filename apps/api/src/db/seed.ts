@@ -112,11 +112,12 @@ async function main() {
 Поля секций 1 и 2:
   orders: {total, confirmed, cancelled, pending}
   financials: {revenue_eur, profit_eur, profit_pct, avg_order_eur}
-  top_destinations: [{country, flag, orders, tourists, pct}] — pct = % от всех туристов; flag = emoji флага
-  product_breakdown: {package, hotel, flight, transfer, other, insurance}
-  top_agents_by_orders: [{name, orders, revenue_eur}]
-  top_suppliers_by_orders: [{name, orders, cost_eur}] — cost_eur = себестоимость (price_buy)
+  top_destinations: [{country, flag, orders, tourists, pct}] — pct = % туристов; flag = emoji
+  product_breakdown: {package: {orders, tourists}, hotel: {orders, tourists}, flight: {orders, tourists}, transfer: ..., insurance: ...}
+  top_agents_by_orders: [{name, orders, tourists, revenue_eur}]
+  top_suppliers_by_orders: [{name, orders, cost_eur}] — cost_eur = фактическая себестоимость услуг поставщика
   most_expensive_order: {order_id, price_eur}
+  anomalies: [] — заказы с аномальной маржой или ценой
 
 Поля секций 3 (7d и 30d):
   confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
@@ -143,10 +144,10 @@ async function main() {
 Прибыль: X EUR (X%)
 💼 Средний чек: X EUR
 
-🌍 Направления: 🇪🇸Испания N, 🇪🇬Египет N, 🇬🇷Греция N
-📦 Продукты: Пакет X, Отель X, Перелёт X
+🌍 Направления: 🇪🇸Испания X зак / X тур, 🇪🇬Египет X зак / X тур, 🇬🇷Греция X зак / X тур
+📦 Продукты: 🏨Пакет X зак / X тур, 🏩Отель X зак / X тур, ✈️Перелёт X зак / X тур
 
-👥 Топ агент: Имя Агента — X зак
+👥 Топ агент: Имя Агента — X зак, X тур
 
 💎 Самый дорогой заказ: #XXXXX — X EUR
 
@@ -165,10 +166,10 @@ async function main() {
 Прибыль: X EUR (X%)
 💼 Средний чек: X EUR
 
-🌍 Направления: 🇪🇸Испания N, 🇹🇷Турция N, 🇪🇬Египет N
-📦 Продукты: Пакет X, Отель X, Перелёт X
+🌍 Направления: 🇪🇸Испания X зак / X тур, 🇹🇷Турция X зак / X тур, 🇪🇬Египет X зак / X тур
+📦 Продукты: 🏨Пакет X зак / X тур, 🏩Отель X зак / X тур, ✈️Перелёт X зак / X тур
 
-👥 Топ агент: Имя Агента — X зак
+👥 Топ агент: Имя Агента — X зак, X тур
 
 💎 Самый дорогой заказ: #XXXXX — X EUR
 
@@ -208,9 +209,14 @@ async function main() {
 - Период отчёта (верхняя строка) = ТОЛЬКО дата section1_yesterday.period.from (один день: ДД/ММ/ГГГГ).
 - Топ агент = первый в top_agents_by_orders.
 - Топ поставщики = top_suppliers_by_orders (топ-3); сумма = cost_eur (себестоимость).
-- Направления в строке "🌍" — топ-3 через запятую, формат "🇪🇸Испания 14" (emoji из поля flag).
+- Период отчёта (верхняя строка) = section1_yesterday.period.from (это вчера, ДД/ММ/ГГГГ).
+- Направления в строке "🌍" — топ-3, формат "🇪🇸Испания X зак / X тур" (orders и tourists из top_destinations).
+- Продукты: emoji 🏨 для Пакета, 🏩 для Отеля (только отель), ✈️ для Перелёта; показывай orders и tourists.
+- Топ агент = первый в top_agents_by_orders (name, orders, tourists).
+- Топ поставщики = top_suppliers_by_orders (топ-3); сумма = cost_eur.
 - Направления в блоках "🔮" и "☀️" — с % туристов, каждое на новой строке, с emoji флага.
-- Если profit_pct отрицательный, выведи как есть (например -15%).`,
+- Если profit_pct отрицательный, выведи как есть (например -15%).
+- Если в anomalies есть заказы с отрицательной маржой — добавь в конец раздела строку "⚠️ Аномалии: ...".`,
       },
       ga4: {
         system: `You are a digital marketing analyst specializing in web analytics.
