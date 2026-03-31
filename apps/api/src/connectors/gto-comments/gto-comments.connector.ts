@@ -127,54 +127,71 @@ export class GTOCommentsConnector implements SourceConnector {
 
       const details = await Promise.all(limited.map(o => fetchDetail(Number(o.order_id))));
 
-      const cnfComments: string[] = [];
-      const cnxComments: string[] = [];
-      const urgentComments: Array<{ orderId: string | number; text: string }> = [];
-      let cnfTotal = 0, cnxTotal = 0, cnfWithComments = 0, cnxWithComments = 0;
+      const commentsByStatus: Record<string, string[]> = {
+        cnf: [], cnx: [], orq: [], pen: [], other: []
+      };
+      const urgentComments: Array<{ orderId: string | number; status: string; text: string }> = [];
+      const statsCounts: Record<string, number> = {
+        cnf_total: 0, cnf_with_comments: 0,
+        cnx_total: 0, cnx_with_comments: 0,
+        orq_total: 0, orq_with_comments: 0,
+        pen_total: 0, pen_with_comments: 0,
+        other_total: 0, other_with_comments: 0,
+      };
 
       for (let i = 0; i < limited.length; i++) {
         const order  = limited[i];
         const detail = details[i];
         if (!detail) continue;
 
-        const status = order.status || detail.status || '';
-        if (status === 'CNF') cnfTotal++;
-        else if (status === 'CNX') cnxTotal++;
+        const status = (order.status || detail.status || 'other').toUpperCase();
+        const statusKey = ['CNF', 'CNX', 'ORQ', 'PEN'].includes(status) ? status.toLowerCase() : 'other';
+
+        statsCounts[`${statusKey}_total`]++;
 
         const rawComments: Array<{ type: string; comment: string; created_at: string }> =
           Array.isArray(detail.comment) ? detail.comment : [];
 
+        let hasUsefulComment = false;
         for (const c of rawComments) {
           const text = stripHtml(c.comment || '').slice(0, MAX_TEXT_LEN);
           if (!isUsefulComment(text)) continue;
 
-          if (status === 'CNF') {
-            if (cnfComments.length < MAX_COMMENTS_PER_STATUS) cnfComments.push(text);
-            if (c.type === 'urgent' && urgentComments.length < MAX_URGENT) {
-              urgentComments.push({ orderId: order.order_id, text });
-            }
-            cnfWithComments++;
-          } else if (status === 'CNX') {
-            if (cnxComments.length < MAX_COMMENTS_PER_STATUS) cnxComments.push(text);
-            if (c.type === 'urgent' && urgentComments.length < MAX_URGENT) {
-              urgentComments.push({ orderId: order.order_id, text });
-            }
-            cnxWithComments++;
+          hasUsefulComment = true;
+          if (commentsByStatus[statusKey].length < MAX_COMMENTS_PER_STATUS) {
+            commentsByStatus[statusKey].push(text);
           }
+
+          if (c.type === 'urgent' && urgentComments.length < MAX_URGENT) {
+            urgentComments.push({ orderId: order.order_id, status: status, text });
+          }
+        }
+
+        if (hasUsefulComment) {
+          statsCounts[`${statusKey}_with_comments`]++;
         }
       }
 
       return {
         stats: {
-          total_orders:        orders.length,
-          cnf_orders:          cnfTotal,
-          cnx_orders:          cnxTotal,
-          cnf_with_comments:   cnfWithComments,
-          cnx_with_comments:   cnxWithComments,
+          total_orders:          orders.length,
+          cnf_orders:            statsCounts.cnf_total,
+          cnf_with_comments:     statsCounts.cnf_with_comments,
+          cnx_orders:            statsCounts.cnx_total,
+          cnx_with_comments:     statsCounts.cnx_with_comments,
+          orq_orders:            statsCounts.orq_total,
+          orq_with_comments:     statsCounts.orq_with_comments,
+          pen_orders:            statsCounts.pen_total,
+          pen_with_comments:     statsCounts.pen_with_comments,
+          other_orders:          statsCounts.other_total,
+          other_with_comments:   statsCounts.other_with_comments,
         },
-        confirmed_comments: cnfComments,   // flat array of comment texts for LLM
-        cancelled_comments: cnxComments,
-        urgent_comments:    urgentComments,
+        cnf_comments:   commentsByStatus.cnf,
+        cnx_comments:   commentsByStatus.cnx,
+        orq_comments:   commentsByStatus.orq,
+        pen_comments:   commentsByStatus.pen,
+        other_comments: commentsByStatus.other,
+        urgent_comments: urgentComments,
       };
     };
 
