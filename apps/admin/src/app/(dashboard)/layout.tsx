@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { LayoutDashboard, Users, Database, MessageSquare, FileText, Shield, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, Users, Database, MessageSquare, FileText, Shield, Settings, LogOut, Activity } from 'lucide-react';
 import clsx from 'clsx';
 
 const nav = [
@@ -12,6 +12,7 @@ const nav = [
   { href: '/prompts', icon: MessageSquare, label: 'Prompts' },
   { href: '/reports', icon: FileText, label: 'Reports' },
   { href: '/audit', icon: Shield, label: 'Audit Log' },
+  { href: '/connector-logs', icon: Activity, label: 'API Logs' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];
 

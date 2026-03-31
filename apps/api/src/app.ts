@@ -13,6 +13,7 @@ import { auditRoutes } from './modules/audit/audit.routes';
 import { settingRoutes } from './modules/settings/setting.routes';
 import { scheduleRoutes } from './modules/schedules/schedule.routes';
 import { telegramWebhookRoute } from './bot/webhook.controller';
+import { connectorLogsRoutes } from './modules/connector-logs/connector-logs.routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -70,6 +71,7 @@ export async function buildApp() {
   await app.register(settingRoutes, { prefix: '/api/v1/settings' });
   await app.register(scheduleRoutes, { prefix: '/api/v1/schedules' });
   await app.register(telegramWebhookRoute, { prefix: '/webhook' });
+  await app.register(connectorLogsRoutes, { prefix: '/api/v1/connector-logs' });
 
   // Error handler
   app.setErrorHandler((error, request, reply) => {
