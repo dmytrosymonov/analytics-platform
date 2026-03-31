@@ -31,7 +31,7 @@ interface Session {
   totalMs: number;
 }
 
-const CONNECTORS = ['gto', 'gto-currency', 'redmine', 'youtrack', 'fireflies'];
+const CONNECTORS = ['gto', 'gto-currency', 'redmine', 'youtrack', 'fireflies', 'openai'];
 
 function groupBySessions(entries: LogEntry[]): Session[] {
   const map = new Map<string, Session>();
