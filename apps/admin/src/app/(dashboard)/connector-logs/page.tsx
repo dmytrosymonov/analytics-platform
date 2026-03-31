@@ -7,48 +7,213 @@ import toast from 'react-hot-toast';
 
 interface LogEntry {
   id: string;
+  sessionId: string;
   ts: string;
   connector: string;
-  type: 'req' | 'res' | 'err';
+  type: 'res' | 'err';
   method?: string;
   url?: string;
   params?: Record<string, any>;
   status?: number;
   ms?: number;
   items?: number;
+  responseSample?: unknown;
   error?: string;
-  responseData?: string;
+  errorBody?: string;
 }
 
-const TYPE_LABELS: Record<string, string> = { req: 'REQUEST', res: 'RESPONSE', err: 'ERROR' };
-const TYPE_COLORS: Record<string, string> = {
-  req: 'badge-gray',
-  res: 'badge-green',
-  err: 'badge-red',
-};
-const STATUS_COLOR = (s?: number) => {
-  if (!s) return 'text-gray-400';
-  if (s < 300) return 'text-green-600';
-  if (s < 400) return 'text-yellow-600';
-  return 'text-red-600';
-};
+interface Session {
+  sessionId: string;
+  connector: string;
+  startTs: string;
+  entries: LogEntry[];
+  errCount: number;
+  totalMs: number;
+}
 
 const CONNECTORS = ['gto', 'gto-currency', 'redmine', 'youtrack', 'fireflies'];
+
+function groupBySessions(entries: LogEntry[]): Session[] {
+  const map = new Map<string, Session>();
+  for (const e of entries) {
+    if (!map.has(e.sessionId)) {
+      map.set(e.sessionId, {
+        sessionId: e.sessionId,
+        connector: e.connector,
+        startTs: e.ts,
+        entries: [],
+        errCount: 0,
+        totalMs: 0,
+      });
+    }
+    const s = map.get(e.sessionId)!;
+    s.entries.push(e);
+    if (e.type === 'err') s.errCount++;
+    s.totalMs += e.ms ?? 0;
+    // earliest ts = session start
+    if (e.ts < s.startTs) s.startTs = e.ts;
+  }
+  // sort sessions newest first
+  return [...map.values()].sort((a, b) => b.startTs.localeCompare(a.startTs));
+}
+
+function StatusBadge({ status }: { status?: number }) {
+  if (!status) return <span className="text-gray-400">—</span>;
+  const color = status < 300 ? 'text-green-600' : status < 400 ? 'text-yellow-600' : 'text-red-600';
+  return <span className={`font-mono font-semibold ${color}`}>{status}</span>;
+}
+
+function ResponseSample({ data }: { data: unknown }) {
+  if (data === undefined || data === null) return null;
+  let str: string;
+  try { str = JSON.stringify(data, null, 2); } catch { str = String(data); }
+  return (
+    <pre className="text-xs bg-white border border-gray-200 rounded p-2 overflow-auto max-h-64 whitespace-pre-wrap break-words">
+      {str}
+    </pre>
+  );
+}
+
+function EntryRow({ e }: { e: LogEntry }) {
+  const [open, setOpen] = useState(false);
+  const hasDetails = e.params || e.responseSample !== undefined || e.error || e.errorBody;
+
+  return (
+    <>
+      <tr
+        className={`text-sm ${e.type === 'err' ? 'bg-red-50' : 'hover:bg-gray-50'} cursor-pointer`}
+        onClick={() => hasDetails && setOpen(v => !v)}
+      >
+        <td className="pl-8 pr-2 py-1.5 text-gray-400 font-mono text-xs w-6">
+          {hasDetails ? (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+        </td>
+        <td className="px-3 py-1.5 font-mono text-xs text-gray-500 whitespace-nowrap">
+          {new Date(e.ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </td>
+        <td className="px-3 py-1.5 font-mono text-xs font-bold text-gray-700 w-14">{e.method || '—'}</td>
+        <td className="px-3 py-1.5 font-mono text-xs text-gray-600 max-w-sm truncate" title={e.url}>{e.url || '—'}</td>
+        <td className="px-3 py-1.5"><StatusBadge status={e.status} /></td>
+        <td className="px-3 py-1.5 text-xs text-gray-500">{e.ms != null ? `${e.ms}ms` : '—'}</td>
+        <td className="px-3 py-1.5 text-xs text-gray-500">
+          {e.items != null
+            ? <span className="badge badge-gray">{e.items} items</span>
+            : e.type === 'err'
+              ? <span className="text-red-600 text-xs truncate max-w-xs block" title={e.error}>{e.error}</span>
+              : '—'}
+        </td>
+      </tr>
+      {open && (
+        <tr className={e.type === 'err' ? 'bg-red-50' : 'bg-gray-50'}>
+          <td colSpan={7} className="px-8 pb-3 pt-1">
+            <div className="space-y-2">
+              {e.params && Object.keys(e.params).length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Params</p>
+                  <ResponseSample data={e.params} />
+                </div>
+              )}
+              {e.responseSample !== undefined && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase mb-1">
+                    Response{e.items != null ? ` (sample of ${Math.min(5, e.items)} / ${e.items} total)` : ''}
+                  </p>
+                  <ResponseSample data={e.responseSample} />
+                </div>
+              )}
+              {e.error && (
+                <div>
+                  <p className="text-xs font-semibold text-red-500 uppercase mb-1">Error</p>
+                  <pre className="text-xs bg-white border border-red-200 rounded p-2 text-red-700 overflow-auto max-h-32">
+                    {e.error}
+                  </pre>
+                </div>
+              )}
+              {e.errorBody && (
+                <div>
+                  <p className="text-xs font-semibold text-red-400 uppercase mb-1">Error body</p>
+                  <pre className="text-xs bg-white border border-red-100 rounded p-2 text-red-600 overflow-auto max-h-32">
+                    {e.errorBody}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function SessionGroup({ session }: { session: Session }) {
+  const [open, setOpen] = useState(false);
+
+  const CONNECTOR_COLOR: Record<string, string> = {
+    gto: 'badge-blue', 'gto-currency': 'badge-gray',
+    redmine: 'badge-red', youtrack: 'badge-yellow', fireflies: 'badge-green',
+  };
+
+  const time = new Date(session.startTs).toLocaleString('uk-UA', {
+    day: '2-digit', month: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden mb-2">
+      {/* Session header */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-3 px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
+      >
+        {open ? <ChevronDown size={16} className="text-gray-500 shrink-0" /> : <ChevronRight size={16} className="text-gray-500 shrink-0" />}
+
+        <span className={`badge ${CONNECTOR_COLOR[session.connector] || 'badge-gray'}`}>
+          {session.connector}
+        </span>
+
+        <span className="text-sm font-medium text-gray-700">{time}</span>
+
+        <span className="text-xs text-gray-500">
+          {session.entries.length} запросов · {Math.round(session.totalMs / 1000)}s
+        </span>
+
+        {session.errCount > 0 && (
+          <span className="badge badge-red">{session.errCount} ошибок</span>
+        )}
+      </button>
+
+      {/* Session entries */}
+      {open && (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-white border-b border-gray-100">
+              <tr>
+                <th className="w-8" />
+                {['Время', 'Метод', 'URL', 'Статус', 'ms', 'Ответ'].map(h => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-semibold text-gray-400 uppercase">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {session.entries.map(e => <EntryRow key={e.id} e={e} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ConnectorLogsPage() {
   const qc = useQueryClient();
   const [connector, setConnector] = useState('');
-  const [type, setType]           = useState('');
-  const [urlFilter, setUrlFilter] = useState('');
+  const [onlyErrors, setOnlyErrors] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
-  const [expanded, setExpanded]   = useState<Set<string>>(new Set());
 
   const { data, isLoading, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ['connector-logs', connector, type],
+    queryKey: ['connector-logs', connector],
     queryFn: () => {
-      const params = new URLSearchParams({ limit: '500' });
+      const params = new URLSearchParams({ limit: '1000' });
       if (connector) params.set('connector', connector);
-      if (type)      params.set('type', type);
       return authFetch(`/api/v1/connector-logs?${params}`);
     },
     refetchInterval: autoRefresh ? 5000 : false,
@@ -56,26 +221,12 @@ export default function ConnectorLogsPage() {
 
   const clearMutation = useMutation({
     mutationFn: () => authPost('/api/v1/connector-logs', undefined, 'DELETE'),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['connector-logs'] });
-      toast.success('Logs cleared');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['connector-logs'] }); toast.success('Логи очищены'); },
   });
 
   const allEntries: LogEntry[] = data?.data?.data || [];
-  const entries = urlFilter
-    ? allEntries.filter(e => e.url?.toLowerCase().includes(urlFilter.toLowerCase()))
-    : allEntries;
-
-  const toggleExpand = (id: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const hasDetails = (e: LogEntry) => e.params || e.error || e.responseData;
+  const filtered = onlyErrors ? allEntries.filter(e => e.type === 'err') : allEntries;
+  const sessions = groupBySessions(filtered);
 
   return (
     <div>
@@ -84,11 +235,9 @@ export default function ConnectorLogsPage() {
         <div>
           <h2 className="text-xl font-bold text-gray-900">API Logs</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            HTTP-запросы ко всем провайдерам · последние 1000 записей
+            Запросы ко всем провайдерам · сгруппированы по сессиям
             {dataUpdatedAt > 0 && (
-              <span className="ml-2 text-gray-400">
-                обновлено {new Date(dataUpdatedAt).toLocaleTimeString()}
-              </span>
+              <span className="ml-2 text-gray-400">· {new Date(dataUpdatedAt).toLocaleTimeString()}</span>
             )}
           </p>
         </div>
@@ -100,157 +249,49 @@ export default function ConnectorLogsPage() {
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
             {autoRefresh ? 'Auto 5s' : 'Auto OFF'}
           </button>
-          <button
-            onClick={() => qc.invalidateQueries({ queryKey: ['connector-logs'] })}
-            className="btn-secondary btn btn-sm"
-          >
-            <RefreshCw size={14} />
-            Refresh
+          <button onClick={() => qc.invalidateQueries({ queryKey: ['connector-logs'] })} className="btn btn-sm btn-secondary">
+            <RefreshCw size={14} /> Refresh
           </button>
-          <button
-            onClick={() => clearMutation.mutate()}
-            disabled={clearMutation.isPending}
-            className="btn btn-sm btn-danger"
-          >
-            <Trash2 size={14} />
-            Clear
+          <button onClick={() => clearMutation.mutate()} disabled={clearMutation.isPending} className="btn btn-sm btn-danger">
+            <Trash2 size={14} /> Clear
           </button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 mb-4">
-        <select
-          className="input w-40"
-          value={connector}
-          onChange={e => setConnector(e.target.value)}
-        >
-          <option value="">All connectors</option>
+      <div className="flex gap-3 mb-4 items-center">
+        <select className="input w-44" value={connector} onChange={e => setConnector(e.target.value)}>
+          <option value="">Все коннекторы</option>
           {CONNECTORS.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select
-          className="input w-36"
-          value={type}
-          onChange={e => setType(e.target.value)}
-        >
-          <option value="">All types</option>
-          <option value="req">REQUEST</option>
-          <option value="res">RESPONSE</option>
-          <option value="err">ERROR</option>
-        </select>
-        <input
-          className="input flex-1"
-          placeholder="Filter by URL..."
-          value={urlFilter}
-          onChange={e => setUrlFilter(e.target.value)}
-        />
-        <span className="flex items-center text-sm text-gray-500 whitespace-nowrap">
-          {entries.length} записей
+
+        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={onlyErrors}
+            onChange={e => setOnlyErrors(e.target.checked)}
+            className="rounded"
+          />
+          Только ошибки
+        </label>
+
+        <span className="text-sm text-gray-400 ml-auto">
+          {sessions.length} сессий · {filtered.length} запросов
         </span>
       </div>
 
-      {/* Table */}
-      <div className="card overflow-hidden">
-        {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Loading...</div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="w-6 px-2 py-3" />
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Time</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Connector</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Method</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">URL</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">ms</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Items</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {entries.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
-                    No logs yet — trigger a report run to see API requests here
-                  </td>
-                </tr>
-              )}
-              {entries.map(e => {
-                const isExp = expanded.has(e.id);
-                const canExp = hasDetails(e);
-                return [
-                  <tr
-                    key={e.id}
-                    className={`hover:bg-gray-50 ${e.type === 'err' ? 'bg-red-50 hover:bg-red-100' : ''}`}
-                  >
-                    <td className="px-2 py-2 text-center">
-                      {canExp && (
-                        <button onClick={() => toggleExpand(e.id)} className="text-gray-400 hover:text-gray-700">
-                          {isExp ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-gray-500 whitespace-nowrap font-mono text-xs">
-                      {new Date(e.ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })}
-                    </td>
-                    <td className="px-4 py-2">
-                      <span className="badge badge-blue">{e.connector}</span>
-                    </td>
-                    <td className="px-4 py-2">
-                      <span className={`badge ${TYPE_COLORS[e.type]}`}>{TYPE_LABELS[e.type]}</span>
-                    </td>
-                    <td className="px-4 py-2 font-mono text-xs font-semibold text-gray-700">{e.method || '—'}</td>
-                    <td className="px-4 py-2 font-mono text-xs text-gray-600 max-w-xs truncate" title={e.url}>
-                      {e.url || '—'}
-                    </td>
-                    <td className={`px-4 py-2 font-mono text-xs font-semibold ${STATUS_COLOR(e.status)}`}>
-                      {e.status ?? '—'}
-                    </td>
-                    <td className="px-4 py-2 text-gray-600 text-xs">
-                      {e.ms != null ? `${e.ms}ms` : '—'}
-                    </td>
-                    <td className="px-4 py-2 text-gray-600 text-xs">
-                      {e.items != null ? e.items : e.error ? <span className="text-red-600 truncate max-w-48 block" title={e.error}>{e.error}</span> : '—'}
-                    </td>
-                  </tr>,
-                  isExp && (
-                    <tr key={`${e.id}-detail`} className={e.type === 'err' ? 'bg-red-50' : 'bg-gray-50'}>
-                      <td />
-                      <td colSpan={8} className="px-4 py-3">
-                        {e.params && Object.keys(e.params).length > 0 && (
-                          <div className="mb-2">
-                            <span className="text-xs font-semibold text-gray-500 uppercase">Params</span>
-                            <pre className="mt-1 text-xs bg-white border border-gray-200 rounded p-2 overflow-x-auto">
-                              {JSON.stringify(e.params, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-                        {e.error && (
-                          <div className="mb-2">
-                            <span className="text-xs font-semibold text-red-500 uppercase">Error</span>
-                            <pre className="mt-1 text-xs bg-white border border-red-200 rounded p-2 text-red-700 overflow-x-auto">
-                              {e.error}
-                            </pre>
-                          </div>
-                        )}
-                        {e.responseData && (
-                          <div>
-                            <span className="text-xs font-semibold text-gray-500 uppercase">Response body (truncated)</span>
-                            <pre className="mt-1 text-xs bg-white border border-gray-200 rounded p-2 overflow-x-auto max-h-40">
-                              {e.responseData}
-                            </pre>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ),
-                ].filter(Boolean);
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* Sessions */}
+      {isLoading ? (
+        <div className="card p-8 text-center text-gray-500">Загрузка...</div>
+      ) : sessions.length === 0 ? (
+        <div className="card p-8 text-center text-gray-500">
+          Нет логов — запустите отчёт и обновите страницу
+        </div>
+      ) : (
+        <div>
+          {sessions.map(s => <SessionGroup key={s.sessionId} session={s} />)}
+        </div>
+      )}
     </div>
   );
 }
