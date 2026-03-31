@@ -358,7 +358,6 @@ export class GTOConnector implements SourceConnector {
       return m ? m[1].toUpperCase() : null;
     };
     const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
-    const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
 
     // ── Revenue ──────────────────────────────────────────────────────────
     // balance_amount / balance_currency — GTO already converts to agent's preferred
