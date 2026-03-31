@@ -101,6 +101,20 @@ class LLMService {
     throw new Error('LLM call failed after retries');
   }
 
+  /** Plain-text chat (not JSON format) — used for free-form bot queries. */
+  async chat(systemPrompt: string, userPrompt: string): Promise<string> {
+    const openai = await this.getOpenAI();
+    const modelSetting = await prisma.systemSetting.findUnique({ where: { key: 'llm.default_model' } });
+    const model = modelSetting?.value || 'gpt-4o-mini';
+    const response = await openai.chat.completions.create({
+      model,
+      max_tokens: 2000,
+      temperature: 0.3,
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+    });
+    return response.choices[0]?.message?.content || 'Нет ответа';
+  }
+
   private computeCost(model: string, promptTokens: number, completionTokens: number): number {
     const pricing: Record<string, { prompt: number; completion: number }> = {
       'gpt-4o': { prompt: 0.000005, completion: 0.000015 },
