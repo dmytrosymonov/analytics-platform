@@ -115,7 +115,7 @@ function EntryRow({ e }: { e: LogEntry }) {
               {e.responseSample !== undefined && (
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase mb-1">
-                    Response{e.items != null ? ` (sample of ${Math.min(5, e.items)} / ${e.items} total)` : ''}
+                    Response{e.items != null ? ` (${e.items} items)` : ''}
                   </p>
                   <ResponseSample data={e.responseSample} />
                 </div>

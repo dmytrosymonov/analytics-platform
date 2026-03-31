@@ -3,9 +3,8 @@ import { logger } from './logger';
 import { redis } from './redis';
 
 const REDIS_KEY   = 'http:logs';
-const MAX_ENTRIES = 1000;
-const MAX_SAMPLE_ITEMS = 5;    // how many array items to store as response sample
-const MAX_BODY_BYTES  = 4000;  // max JSON length for non-array responses
+const MAX_ENTRIES    = 1000;
+const MAX_BODY_BYTES = 100_000; // max JSON size to store per response (~100KB)
 
 export interface HttpLogEntry {
   id: string;
@@ -48,17 +47,22 @@ function redactParams(params?: Record<string, any>): Record<string, any> | undef
 }
 
 function extractResponseSample(data: unknown): { items?: number; sample?: unknown } {
+  // Helper: serialize and check size; truncate if over limit
+  const fitInLimit = (obj: unknown): unknown => {
+    const str = JSON.stringify(obj);
+    return str.length <= MAX_BODY_BYTES ? obj : str.slice(0, MAX_BODY_BYTES) + '…[truncated]';
+  };
+
   if (Array.isArray(data)) {
-    return { items: data.length, sample: data.slice(0, MAX_SAMPLE_ITEMS) };
+    return { items: data.length, sample: fitInLimit(data) };
   }
   // Some APIs wrap array in { data: [...] }
   if (data && typeof data === 'object' && Array.isArray((data as any).data)) {
     const arr = (data as any).data as unknown[];
-    return { items: arr.length, sample: arr.slice(0, MAX_SAMPLE_ITEMS) };
+    return { items: arr.length, sample: fitInLimit(arr) };
   }
   if (data && typeof data === 'object') {
-    const str = JSON.stringify(data);
-    return { sample: str.length <= MAX_BODY_BYTES ? data : str.slice(0, MAX_BODY_BYTES) + '…[truncated]' };
+    return { sample: fitInLimit(data) };
   }
   return {};
 }
