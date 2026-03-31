@@ -149,8 +149,12 @@ async function runAnalysis(scheduleId: string): Promise<string> {
   if (!promptVersion) throw new Error('Промпт не настроен для этого источника');
 
   const rendered = await promptRegistry.renderPrompt(promptVersion, {
-    data: JSON.stringify(result.data.metrics),
-    period: periodStart.toISOString().slice(0, 10),
+    normalized_metrics_json: JSON.stringify(result.data.metrics),
+    report_period_start:     periodStart.toISOString(),
+    report_period_end:       periodEnd.toISOString(),
+    source_name:             schedule.source.name,
+    output_language:         'Russian',
+    audience_type:           'business',
   });
 
   const analysis = await llmService.analyze({
