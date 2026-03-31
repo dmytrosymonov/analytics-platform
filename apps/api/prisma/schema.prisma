@@ -20,6 +20,7 @@ enum SourceType {
   redmine
   youtrack
   fireflies
+  gto_comments
 }
 
 enum JobType {

@@ -17,12 +17,14 @@ async function main() {
   console.log('Admin user:', admin.email);
 
   // Data sources
-  const sources = [
-    { name: 'GTO Sales API', type: 'gto' as const, description: 'GTO sales, orders, payments analytics' },
-    { name: 'Google Analytics 4', type: 'ga4' as const, description: 'Web traffic and user behavior analytics' },
-    { name: 'Redmine', type: 'redmine' as const, description: 'Project management and issue tracking analytics' },
-    { name: 'YouTrack', type: 'youtrack' as const, description: 'YouTrack issue tracker and project analytics' },
-    { name: 'Fireflies.ai', type: 'fireflies' as const, description: 'Meeting transcripts, action items, and conversation analytics' },
+  // Note: 'gto_comments' is added by migration; cast to any so local tsc doesn't complain before prisma generate.
+  const sources: Array<{ name: string; type: any; description: string }> = [
+    { name: 'GTO Sales API',          type: 'gto',          description: 'GTO sales, orders, payments analytics' },
+    { name: 'GTO Comments Analysis',  type: 'gto_comments', description: 'AI analysis of order comments: main topics, complaints, cancellation reasons' },
+    { name: 'Google Analytics 4',     type: 'ga4',          description: 'Web traffic and user behavior analytics' },
+    { name: 'Redmine',                type: 'redmine',       description: 'Project management and issue tracking analytics' },
+    { name: 'YouTrack',               type: 'youtrack',      description: 'YouTrack issue tracker and project analytics' },
+    { name: 'Fireflies.ai',           type: 'fireflies',     description: 'Meeting transcripts, action items, and conversation analytics' },
   ];
 
   for (const src of sources) {
@@ -38,6 +40,11 @@ async function main() {
         { name: 'Daily Sales Report',   description: 'Sales metrics for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
         { name: 'Weekly Sales Summary', description: 'Aggregated sales for the past week',  cron: '0 9 * * 1',   periodType: 'weekly'  },
         { name: 'Monthly Sales Report', description: 'Full month sales analysis',            cron: '0 9 1 * *',   periodType: 'monthly' },
+      ],
+      gto_comments: [
+        { name: 'Daily Comments Report',   description: 'AI analysis of order comments for today and yesterday', cron: '0 9 * * *', periodType: 'daily'   },
+        { name: 'Weekly Comments Report',  description: 'AI analysis of order comments for the past 7 days',    cron: '0 9 * * 1', periodType: 'weekly'  },
+        { name: 'Monthly Comments Report', description: 'AI analysis of order comments for the past 30 days',   cron: '0 9 1 * *', periodType: 'monthly' },
       ],
       ga4:      [
         { name: 'Daily Traffic Report',  description: 'Web traffic metrics for yesterday',  cron: '0 8 * * *',   periodType: 'daily'   },
@@ -71,6 +78,7 @@ async function main() {
     // Default settings
     const defaultSettings: Record<string, Record<string, string>> = {
       gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'Europe/Kiev' },
+      gto_comments: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', timezone: 'Europe/Kiev' },
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
       youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },
@@ -218,6 +226,85 @@ async function main() {
 - Если profit_pct отрицательный, выведи как есть (например -15%).
 - Если в anomalies есть заказы с отрицательной маржой — добавь в конец раздела строку "⚠️ Аномалии: ...".`,
       },
+      gto_comments: {
+        system: `Ты — аналитик туристической компании. Твоя задача — анализировать комментарии менеджеров и агентов к заявкам в системе GTO и выявлять основные темы, проблемы и причины отмен.
+
+Комментарии написаны на украинском и русском языке. Анализируй и резюмируй на РУССКОМ языке.
+
+ПРАВИЛА:
+- Игнорируй автоматически сгенерированные сообщения об оплате ("Повна оплата... має бути здійснена...").
+- Сосредоточься на содержательных комментариях: запросы клиентов, проблемы, жалобы, причины отмен.
+- Группируй похожие комментарии в темы.
+- Для urgent-комментариев уделяй особое внимание.
+- Отвечай ТОЛЬКО валидным JSON без markdown-блоков.`,
+
+        user: `Данные комментариев к заявкам GTO. Период сбора данных: {{report_period_start}} — {{report_period_end}}.
+
+ДАННЫЕ:
+{{normalized_metrics_json}}
+
+Структура данных:
+- today: комментарии к заявкам, созданным сегодня
+- yesterday: комментарии к заявкам, созданным вчера
+- last_7_days: комментарии за последние 7 дней
+- last_30_days: комментарии за последние 30 дней
+
+Каждый период содержит:
+- confirmed_comments: массив {orderId, agentName, comments: [{type, text, createdAt}]} для подтверждённых (CNF) заявок
+- cancelled_comments: аналогично для отменённых (CNX) заявок
+
+Проанализируй комментарии и верни ТОЛЬКО валидный JSON:
+{
+  "telegram_message": "<сообщение строго по шаблону ниже>"
+}
+
+ШАБЛОН telegram_message:
+
+💬 Анализ комментариев к заявкам GTO
+
+📅 Сегодня (ДД/ММ/ГГГГ)
+✅ Подтверждённые (X заявок с комментариями):
+• Тема 1: краткое описание (X заявок)
+• Тема 2: краткое описание (X заявок)
+❌ Отменённые (X заявок с комментариями):
+• Причина 1: краткое описание (X заявок)
+• Причина 2: краткое описание (X заявок)
+
+📅 Вчера (ДД/ММ/ГГГГ)
+✅ Подтверждённые (X заявок с комментариями):
+• Тема 1: краткое описание (X заявок)
+❌ Отменённые (X заявок с комментариями):
+• Причина 1: краткое описание (X заявок)
+
+📊 За 7 дней (ДД/ММ/ГГГГ — ДД/ММ/ГГГГ)
+✅ Подтверждённые (X заявок с комментариями):
+• Тема 1: краткое описание (X заявок)
+• Тема 2: краткое описание (X заявок)
+• Тема 3: краткое описание (X заявок)
+❌ Отменённые (X заявок с комментариями):
+• Причина 1: краткое описание (X заявок)
+• Причина 2: краткое описание (X заявок)
+
+📊 За 30 дней (ДД/ММ/ГГГГ — ДД/ММ/ГГГГ)
+✅ Подтверждённые (X заявок с комментариями):
+• Тема 1: краткое описание (X заявок)
+• Тема 2: краткое описание (X заявок)
+• Тема 3: краткое описание (X заявок)
+❌ Отменённые (X заявок с комментариями):
+• Причина 1: краткое описание (X заявок)
+• Причина 2: краткое описание (X заявок)
+
+⚠️ Срочные комментарии требующие внимания:
+• #XXXXX (агент: Имя): текст комментария
+
+ВАЖНО:
+- Если в периоде нет заявок с комментариями, напиши "нет данных".
+- Темы для подтверждённых: запросы документов/ваучеров, запросы условий, проблемы с оплатой, изменения дат, запросы на переоформление, информационные сообщения.
+- Причины отмен: клиент передумал, высокая цена, нет мест, другой агент/оператор, технические проблемы, форс-мажор.
+- Срочные (urgent) комментарии — показывай до 5 самых важных из периода "yesterday".
+- Даты форматируй как ДД/ММ/ГГГГ.`,
+      },
+
       ga4: {
         system: `You are a digital marketing analyst specializing in web analytics.
 Analyze the provided Google Analytics data and generate a structured JSON report.
