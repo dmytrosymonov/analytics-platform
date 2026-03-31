@@ -1,10 +1,7 @@
 import axios, { AxiosInstance, CreateAxiosDefaults, InternalAxiosRequestConfig } from 'axios';
 import { logger } from './logger';
 import { redis } from './redis';
-
-const REDIS_KEY   = 'http:logs';
-const MAX_ENTRIES    = 1000;
-const MAX_BODY_BYTES = 100_000; // max JSON size to store per response (~100KB)
+import { HTTP_LOG_REDIS_KEY } from './log-drain';
 
 export interface HttpLogEntry {
   id: string;
@@ -18,8 +15,8 @@ export interface HttpLogEntry {
   status?: number;
   ms?: number;
   // Response data
-  items?: number;          // total array length
-  responseSample?: unknown; // first MAX_SAMPLE_ITEMS items (array) or full/truncated object
+  items?: number;
+  responseSample?: unknown; // full response (array) or object, no size limit
   // Error data
   error?: string;
   errorBody?: string;
@@ -27,8 +24,8 @@ export interface HttpLogEntry {
 
 async function pushLog(entry: HttpLogEntry): Promise<void> {
   try {
-    await redis.lpush(REDIS_KEY, JSON.stringify(entry));
-    await redis.ltrim(REDIS_KEY, 0, MAX_ENTRIES - 1);
+    await redis.lpush(HTTP_LOG_REDIS_KEY, JSON.stringify(entry));
+    // No LTRIM — disk drain handles persistence and cleanup
   } catch {
     // never block the request pipeline on log errors
   }
@@ -47,22 +44,15 @@ function redactParams(params?: Record<string, any>): Record<string, any> | undef
 }
 
 function extractResponseSample(data: unknown): { items?: number; sample?: unknown } {
-  // Helper: serialize and check size; truncate if over limit
-  const fitInLimit = (obj: unknown): unknown => {
-    const str = JSON.stringify(obj);
-    return str.length <= MAX_BODY_BYTES ? obj : str.slice(0, MAX_BODY_BYTES) + '…[truncated]';
-  };
-
   if (Array.isArray(data)) {
-    return { items: data.length, sample: fitInLimit(data) };
+    return { items: data.length, sample: data };
   }
-  // Some APIs wrap array in { data: [...] }
   if (data && typeof data === 'object' && Array.isArray((data as any).data)) {
     const arr = (data as any).data as unknown[];
-    return { items: arr.length, sample: fitInLimit(arr) };
+    return { items: arr.length, sample: arr };
   }
   if (data && typeof data === 'object') {
-    return { sample: fitInLimit(data) };
+    return { sample: data };
   }
   return {};
 }
@@ -72,9 +62,8 @@ function extractResponseSample(data: unknown): { items?: number; sample?: unknow
  *
  * - One log entry per HTTP call (request + response merged).
  * - All requests from the same client share a sessionId.
- * - Response body sample is stored (first 5 items for arrays, or up to 4KB for objects).
+ * - Full response body stored (no size limit — disk drain manages storage).
  * - Sensitive params/headers are redacted.
- * - Logs at debug level (success) or warn level (HTTP errors).
  */
 export function createHttpClient(
   config: CreateAxiosDefaults,
@@ -97,15 +86,15 @@ export function createHttpClient(
       const ms = Date.now() - ((res.config as any)._startMs ?? Date.now());
       const { items, sample } = extractResponseSample(res.data);
       const entry: HttpLogEntry = {
-        id:            (res.config as any)._logId,
+        id:             (res.config as any)._logId,
         sessionId,
-        ts:            new Date().toISOString(),
-        connector:     connectorName,
-        type:          'res',
-        method:        res.config.method?.toUpperCase(),
-        url:           res.config.url,
-        params:        (res.config as any)._params,
-        status:        res.status,
+        ts:             new Date().toISOString(),
+        connector:      connectorName,
+        type:           'res',
+        method:         res.config.method?.toUpperCase(),
+        url:            res.config.url,
+        params:         (res.config as any)._params,
+        status:         res.status,
         ms,
         items,
         responseSample: sample,
@@ -128,9 +117,7 @@ export function createHttpClient(
         status:    err.response?.status,
         ms,
         error:     err.message,
-        errorBody: err.response?.data
-          ? JSON.stringify(err.response.data).slice(0, 500)
-          : undefined,
+        errorBody: err.response?.data ? JSON.stringify(err.response.data) : undefined,
       };
       log.warn(entry, 'http error');
       void pushLog(entry);
