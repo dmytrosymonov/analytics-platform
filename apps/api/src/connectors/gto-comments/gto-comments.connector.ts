@@ -79,9 +79,7 @@ export class GTOCommentsConnector implements SourceConnector {
     // ── Date ranges ────────────────────────────────────────────────────────
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const yesterday   = new Date(today.getTime() - 86400000);
-    const last7dFrom  = new Date(today.getTime() - 7  * 86400000);
-    const last30dFrom = new Date(today.getTime() - 30 * 86400000);
+    const yesterday = new Date(today.getTime() - 86400000);
 
     // ── fetchList (one page, sorted desc by created_at) ────────────────────
     const fetchList = async (dateFrom: Date, dateTo: Date): Promise<any[]> => {
@@ -195,20 +193,16 @@ export class GTOCommentsConnector implements SourceConnector {
       };
     };
 
-    // ── Fetch all 4 periods in parallel ────────────────────────────────────
+    // ── Fetch today and yesterday in parallel ──────────────────────────────
     logger.info('GTO Comments: fetching order lists...');
-    const [todayOrders, yesterdayOrders, last7dOrders, last30dOrders] = await Promise.all([
-      fetchList(today,       new Date(today.getTime() + 86400000)),
-      fetchList(yesterday,   today),
-      fetchList(last7dFrom,  today),
-      fetchList(last30dFrom, today),
+    const [todayOrders, yesterdayOrders] = await Promise.all([
+      fetchList(today,     new Date(today.getTime() + 86400000)),
+      fetchList(yesterday, today),
     ]);
 
-    const [todayData, yesterdayData, last7dData, last30dData] = await Promise.all([
+    const [todayData, yesterdayData] = await Promise.all([
       buildPeriodData(todayOrders,    'today'),
       buildPeriodData(yesterdayOrders,'yesterday'),
-      buildPeriodData(last7dOrders,   'last_7d'),
-      buildPeriodData(last30dOrders,  'last_30d'),
     ]);
 
     return {
@@ -217,7 +211,7 @@ export class GTOCommentsConnector implements SourceConnector {
         sourceId:    'gto_comments',
         sourceName:  'GTO Comments Analysis',
         fetchedAt:   new Date().toISOString(),
-        periodStart: fmt(last30dFrom),
+        periodStart: fmt(yesterday),
         periodEnd:   fmt(today),
         timezone:    settings['timezone'] || 'Europe/Kiev',
         metrics: {
@@ -228,14 +222,6 @@ export class GTOCommentsConnector implements SourceConnector {
           yesterday: {
             period: { from: fmt(yesterday), to: fmt(today) },
             ...yesterdayData,
-          },
-          last_7_days: {
-            period: { from: fmt(last7dFrom), to: fmt(today) },
-            ...last7dData,
-          },
-          last_30_days: {
-            period: { from: fmt(last30dFrom), to: fmt(today) },
-            ...last30dData,
           },
         },
       },
