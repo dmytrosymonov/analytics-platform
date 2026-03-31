@@ -1,11 +1,12 @@
-import axios, { AxiosInstance } from 'axios';
+import { AxiosInstance } from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
+import { createHttpClient } from '../../lib/http';
 
 export class YouTrackConnector implements SourceConnector {
   readonly sourceType = 'youtrack';
 
   private makeClient(baseUrl: string, token: string, timeout: number): AxiosInstance {
-    return axios.create({
+    return createHttpClient({
       baseURL: baseUrl.replace(/\/$/, ''),
       headers: {
         Authorization: `Bearer ${token}`,
@@ -13,7 +14,7 @@ export class YouTrackConnector implements SourceConnector {
         'Content-Type': 'application/json',
       },
       timeout,
-    });
+    }, 'youtrack');
   }
 
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {

@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
+import { createHttpClient } from '../../lib/http';
 
 const FIREFLIES_API = 'https://api.fireflies.ai/graphql';
 
@@ -22,17 +22,14 @@ export class FirefliesConnector implements SourceConnector {
   readonly sourceType = 'fireflies';
 
   private async gql(apiKey: string, query: string, variables?: Record<string, unknown>) {
-    const resp = await axios.post(
-      FIREFLIES_API,
-      { query, variables },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000,
+    const client = createHttpClient({
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
-    );
+      timeout: 30000,
+    }, 'fireflies');
+    const resp = await client.post(FIREFLIES_API, { query, variables });
     if (resp.data.errors) {
       throw new Error(resp.data.errors[0]?.message || 'GraphQL error');
     }

@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
+import { createHttpClient } from '../../lib/http';
 
 export class RedmineConnector implements SourceConnector {
   readonly sourceType = 'redmine';
@@ -8,10 +8,11 @@ export class RedmineConnector implements SourceConnector {
     const { redmine_base_url, redmine_api_key } = credentials as any;
     if (!redmine_base_url || !redmine_api_key) return false;
     try {
-      const resp = await axios.get(`${redmine_base_url}/issues.json?limit=1`, {
-        headers: { 'X-Redmine-API-Key': redmine_api_key },
-        timeout: 10000,
-      });
+      const client = createHttpClient(
+        { baseURL: redmine_base_url, headers: { 'X-Redmine-API-Key': redmine_api_key }, timeout: 10000 },
+        'redmine',
+      );
+      const resp = await client.get('/issues.json', { params: { limit: 1 } });
       return resp.status === 200;
     } catch {
       return false;
@@ -22,11 +23,10 @@ export class RedmineConnector implements SourceConnector {
     const { redmine_base_url, redmine_api_key, default_project_id } = credentials as any;
     const timeout = parseInt(settings['timeout'] || '30') * 1000;
 
-    const client = axios.create({
-      baseURL: redmine_base_url,
-      headers: { 'X-Redmine-API-Key': redmine_api_key },
-      timeout,
-    });
+    const client = createHttpClient(
+      { baseURL: redmine_base_url, headers: { 'X-Redmine-API-Key': redmine_api_key }, timeout },
+      'redmine',
+    );
 
     const dateFrom = period.start.toISOString().slice(0, 10);
     const dateTo = period.end.toISOString().slice(0, 10);

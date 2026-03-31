@@ -1,6 +1,6 @@
-import axios from 'axios';
 import { redis } from './redis';
 import { logger } from './logger';
+import { createHttpClient } from './http';
 
 export interface CurrencyRates {
   base: 'EUR';
@@ -30,10 +30,8 @@ export class CurrencyService {
     logger.info({ v3BaseUrl }, 'Fetching fresh currency rates from GTO v3');
 
     try {
-      const resp = await axios.get(`${v3BaseUrl}/currency_rates`, {
-        params: { apikey: apiKey },
-        timeout: 10000,
-      });
+      const client = createHttpClient({ baseURL: v3BaseUrl, params: { apikey: apiKey }, timeout: 10000 }, 'gto-currency');
+      const resp = await client.get('/currency_rates');
 
       const rates = this.parseResponse(resp.data);
       logger.info({ ratesCount: Object.keys(rates.rates).length }, 'Currency rates fetched successfully');

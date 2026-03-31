@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
 import { logger } from '../../lib/logger';
+import { createHttpClient } from '../../lib/http';
 import { CurrencyService, CurrencyRates } from '../../lib/currency.service';
 import { prisma } from '../../lib/prisma';
 
@@ -81,7 +82,7 @@ export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
 
   private httpClient(baseUrl: string, apiKey: string, timeout: number) {
-    return axios.create({ baseURL: baseUrl, params: { apikey: apiKey }, timeout });
+    return createHttpClient({ baseURL: baseUrl, params: { apikey: apiKey }, timeout }, 'gto');
   }
 
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {
@@ -89,10 +90,8 @@ export class GTOConnector implements SourceConnector {
     if (!api_key) return false;
     const url = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
     try {
-      const resp = await axios.get(`${url}/orders_list`, {
-        params: { apikey: api_key, per_page: 1 },
-        timeout: 10000,
-      });
+      const client = createHttpClient({ baseURL: url, params: { apikey: api_key }, timeout: 10000 }, 'gto');
+      const resp = await client.get('/orders_list', { params: { per_page: 1 } });
       return resp.status < 400;
     } catch { return false; }
   }
@@ -358,6 +357,7 @@ export class GTOConnector implements SourceConnector {
       const m = name.match(/\[(UAH|EUR|KZT|USD|PLN)\]/i);
       return m ? m[1].toUpperCase() : null;
     };
+    const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
     const cleanSupName = (n: string) => (n || '').replace(/\s*\[.*?\]/g, '').trim();
 
     // ── Revenue ──────────────────────────────────────────────────────────
