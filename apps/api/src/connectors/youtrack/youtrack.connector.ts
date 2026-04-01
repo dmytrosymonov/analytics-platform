@@ -1,42 +1,12 @@
-import { AxiosInstance } from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
-import { createHttpClient } from '../../lib/http';
+import { makeYouTrackClient, validateYouTrackCredentials } from './youtrack.shared';
 
 export class YouTrackConnector implements SourceConnector {
   readonly sourceType = 'youtrack';
 
-  private makeClient(baseUrl: string, token: string, timeout: number): AxiosInstance {
-    return createHttpClient({
-      baseURL: baseUrl.replace(/\/$/, ''),
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      timeout,
-    }, 'youtrack');
-  }
-
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {
-    const { youtrack_base_url, youtrack_token } = credentials as any;
-    if (!youtrack_base_url || !youtrack_token) return false;
     try {
-      const client = this.makeClient(youtrack_base_url, youtrack_token, 10000);
-      const endpoints = [
-        '/api/users/me?fields=id,login,fullName',
-        '/api/admin/users/me?fields=id,login,fullName',
-      ];
-
-      for (const endpoint of endpoints) {
-        try {
-          const resp = await client.get(endpoint);
-          if (resp.status === 200 && !!resp.data?.id) return true;
-        } catch (err: any) {
-          if (err?.response?.status !== 404) throw err;
-        }
-      }
-
-      return false;
+      return await validateYouTrackCredentials(credentials);
     } catch {
       return false;
     }
@@ -49,7 +19,7 @@ export class YouTrackConnector implements SourceConnector {
   ): Promise<ConnectorResult> {
     const { youtrack_base_url, youtrack_token, youtrack_project } = credentials as any;
     const timeout = parseInt(settings['timeout'] || '30') * 1000;
-    const client = this.makeClient(youtrack_base_url, youtrack_token, timeout);
+    const client = makeYouTrackClient(youtrack_base_url, youtrack_token, timeout);
 
     const startMs = period.start.getTime();
     const endMs = period.end.getTime();

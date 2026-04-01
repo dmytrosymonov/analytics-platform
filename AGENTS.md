@@ -52,6 +52,7 @@ apps/
 | Google Analytics 4 | `ga4` | Web traffic |
 | Redmine | `redmine` | Issue tracking |
 | YouTrack | `youtrack` | Issue tracking |
+| YouTrack Daily Progress | `youtrack_progress` | Daily progress digest based on issue status changes and comments |
 
 **All monetary values are converted to EUR before AI analysis.**
 Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Redis for 24 hours (refreshed daily on first use).
@@ -132,6 +133,15 @@ Key models:
 | `gto.v3_base_url` | GTO v3 API base URL for currency rates |
 | `currency.base` | Base currency for analytics (default: EUR) |
 | `scheduler.gto_cron` | Cron for GTO daily report |
+
+---
+
+## Scheduling and Time Zones
+
+- Cron jobs are registered with the source-specific `timezone` from `source_settings` when present; otherwise they fall back to `UTC`
+- Report period boundaries (`daily` / `weekly` / `monthly`) are also calculated in the source timezone
+- `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
+- Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
 
 ---
 

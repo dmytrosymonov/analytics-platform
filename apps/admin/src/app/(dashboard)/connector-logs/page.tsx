@@ -31,7 +31,7 @@ interface Session {
   totalMs: number;
 }
 
-const CONNECTORS = ['gto', 'gto-currency', 'redmine', 'youtrack', 'openai'];
+const CONNECTORS = ['gto', 'gto-currency', 'redmine', 'youtrack', 'youtrack_progress', 'openai'];
 
 function groupBySessions(entries: LogEntry[]): Session[] {
   const map = new Map<string, Session>();
@@ -149,7 +149,7 @@ function SessionGroup({ session }: { session: Session }) {
 
   const CONNECTOR_COLOR: Record<string, string> = {
     gto: 'badge-blue', 'gto-currency': 'badge-gray',
-    redmine: 'badge-red', youtrack: 'badge-yellow',
+    redmine: 'badge-red', youtrack: 'badge-yellow', youtrack_progress: 'badge-yellow',
   };
 
   const time = new Date(session.startTs).toLocaleString('uk-UA', {

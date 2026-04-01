@@ -24,6 +24,7 @@ async function main() {
     { name: 'Google Analytics 4',     type: 'ga4',          description: 'Web traffic and user behavior analytics' },
     { name: 'Redmine',                type: 'redmine',       description: 'Project management and issue tracking analytics' },
     { name: 'YouTrack',               type: 'youtrack',      description: 'YouTrack issue tracker and project analytics' },
+    { name: 'YouTrack Daily Progress',type: 'youtrack_progress', description: 'Daily progress digest based on status changes and issue comments' },
   ];
 
   for (const src of sources) {
@@ -57,6 +58,9 @@ async function main() {
         { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
         { name: 'Weekly Sprint Summary', description: 'Sprint progress for the past week',   cron: '0 9 * * 1',   periodType: 'weekly'  },
       ],
+      youtrack_progress: [
+        { name: 'Daily Progress Report', description: 'Yesterday progress after the daily standup', cron: '15 12 * * *', periodType: 'daily' },
+      ],
     };
 
     for (const sch of defaultSchedules[src.type] || []) {
@@ -77,6 +81,7 @@ async function main() {
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
       youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },
+      youtrack_progress: { timeout: '30', retry: '3', timezone: 'Europe/Kyiv', max_issues: '60' },
     };
 
     for (const [key, value] of Object.entries(defaultSettings[src.type] || {})) {
@@ -428,6 +433,45 @@ Return ONLY valid JSON:
   "priority_analysis": "Analysis of priority distribution and critical issues",
   "recommendations": ["rec 1", "rec 2"],
   "telegram_message": "Formatted Telegram message with markdown, max 3500 chars"
+}`,
+      },
+      youtrack_progress: {
+        system: `Ты — delivery/project analyst. На основе детерминированно собранных событий YouTrack формируешь ежедневный отчёт о прогрессе команды за вчера.
+Используй ТОЛЬКО факты из JSON. Не придумывай события, статусы, комментарии или имена задач.
+Сосредоточься на завершениях, движении задач, блокерах и важных сигналах из комментариев.
+Отвечай ТОЛЬКО валидным JSON. Язык: РУССКИЙ.`,
+        user: `Проанализируй прогресс команды в YouTrack за период {{report_period_start}} — {{report_period_end}}.
+
+Источник: {{source_name}}
+Нормализованные данные:
+{{normalized_metrics_json}}
+
+Правила:
+- completed_yesterday: только задачи, где есть явный переход в финальный статус.
+- progressed_yesterday: задачи, где были переходы статусов без завершения.
+- blocked_or_stalled: задачи с признаками блокировки из статуса или комментариев.
+- notable_comments: краткие, но важные комментарии без длинных цитат.
+- Не дублируй одну и ту же задачу в нескольких списках без необходимости.
+- telegram_message должен быть коротким, управленческим и пригодным для отправки в Telegram.
+
+Верни ТОЛЬКО валидный JSON:
+{
+  "executive_summary": "2-3 предложения о прогрессе команды за вчера",
+  "key_metrics": {
+    "issues_touched": 0,
+    "status_changes_count": 0,
+    "comments_count": 0,
+    "completed_count": 0,
+    "reopened_count": 0,
+    "blocked_count": 0
+  },
+  "completed_yesterday": ["KEY-1 — что завершили"],
+  "progressed_yesterday": ["KEY-2 — какое движение произошло"],
+  "blocked_or_stalled": ["KEY-3 — что мешает"],
+  "notable_comments": ["KEY-4 — краткий смысл комментария"],
+  "team_signals": ["сигнал 1", "сигнал 2"],
+  "recommendations": ["рекомендация 1", "рекомендация 2"],
+  "telegram_message": "Короткий markdown-отчёт для Telegram, максимум 3500 символов"
 }`,
       },
     };

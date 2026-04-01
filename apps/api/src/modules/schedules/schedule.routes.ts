@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { writeAuditLog } from '../../lib/audit';
-import { registerSchedule, unregisterSchedule, triggerScheduledRun } from '../../scheduler/scheduler.service';
+import { computePeriod, getSourceTimezone, registerSchedule, unregisterSchedule } from '../../scheduler/scheduler.service';
 import { fetchQueue } from '../../queue/queues';
 
 export async function scheduleRoutes(app: FastifyInstance) {
@@ -37,7 +37,7 @@ export async function scheduleRoutes(app: FastifyInstance) {
     const schedule = await prisma.reportSchedule.create({ data: body });
 
     if (schedule.isEnabled) {
-      registerSchedule({ ...schedule, source: { id: source.id, type: source.type } });
+      await registerSchedule({ ...schedule, source: { id: source.id, type: source.type } });
     }
 
     await writeAuditLog({ actorType: 'admin', actorId: actor.sub, action: 'schedule.created', entityType: 'schedule', entityId: schedule.id, afterState: body });
@@ -63,7 +63,7 @@ export async function scheduleRoutes(app: FastifyInstance) {
 
     // Update cron task
     if (updated.isEnabled) {
-      registerSchedule({ ...updated, source: { id: updated.source.id, type: updated.source.type } });
+      await registerSchedule({ ...updated, source: { id: updated.source.id, type: updated.source.type } });
     } else {
       unregisterSchedule(id);
     }
@@ -95,8 +95,8 @@ export async function scheduleRoutes(app: FastifyInstance) {
     const schedule = await prisma.reportSchedule.findUnique({ where: { id }, include: { source: true } });
     if (!schedule) return reply.status(404).send({ success: false, error: { message: 'Schedule not found' } });
 
-    const { computePeriod } = await import('../../scheduler/scheduler.service');
-    const { periodStart, periodEnd } = computePeriod(schedule.periodType as any);
+    const timezone = await getSourceTimezone(schedule.source.id);
+    const { periodStart, periodEnd } = computePeriod(schedule.periodType as any, timezone);
 
     const run = await prisma.reportRun.create({
       data: { scheduleId: id, periodStart, periodEnd, status: 'pending', triggerType: 'manual', triggeredBy: actor.sub },

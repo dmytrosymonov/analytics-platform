@@ -6,7 +6,7 @@ import { decrypt } from '../lib/encryption';
 import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
-import { computePeriod } from '../scheduler/scheduler.service';
+import { computePeriod, getSourceTimezone } from '../scheduler/scheduler.service';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -75,7 +75,7 @@ async function buildReportsKeyboard(userId: string) {
   const buttons = schedules.map(s => {
     const enabled = prefs.get(s.id) ?? true;
     return Markup.button.callback(
-      `${enabled ? '✅' : '❌'} ${s.source.name} (${periodLabel(s.periodType)})`,
+      `${enabled ? '✅' : '❌'} ${s.name} · ${s.source.name} (${periodLabel(s.periodType)})`,
       `sub:${s.id}`,
     );
   });
@@ -97,7 +97,7 @@ async function buildGenerateKeyboard() {
 
   const buttons = schedules.map(s =>
     Markup.button.callback(
-      `${s.source.name} (${periodLabel(s.periodType)})`,
+      `${s.name} · ${s.source.name} (${periodLabel(s.periodType)})`,
       `gen:${s.id}`,
     ),
   );
@@ -114,7 +114,7 @@ async function buildAskKeyboard() {
   if (sources.length === 0) return null;
 
   const SOURCE_ICON: Record<string, string> = {
-    gto: '🛒', ga4: '📊', redmine: '🐞', youtrack: '🎯',
+    gto: '🛒', ga4: '📊', redmine: '🐞', youtrack: '🎯', youtrack_progress: '🚦',
   };
 
   const buttons = sources.map(s =>
@@ -140,7 +140,8 @@ async function runAnalysis(scheduleId: string): Promise<string> {
   const settings: Record<string, string> = {};
   settingRows.forEach(s => { settings[s.key] = s.value; });
 
-  const { periodStart, periodEnd } = computePeriod(schedule.periodType as any);
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const { periodStart, periodEnd } = computePeriod(schedule.periodType as any, timezone);
   const connector = connectorRegistry.get(schedule.source.type);
   const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
   if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');

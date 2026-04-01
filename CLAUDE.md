@@ -52,6 +52,7 @@ apps/
 | Google Analytics 4 | `ga4` | Web traffic |
 | Redmine | `redmine` | Issue tracking |
 | YouTrack | `youtrack` | Issue tracking |
+| YouTrack Daily Progress | `youtrack_progress` | Daily progress digest based on issue status changes and comments |
 
 **All monetary values are converted to EUR before AI analysis.**
 Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Redis for 24 hours (refreshed daily on first use).
@@ -135,6 +136,15 @@ Key models:
 
 ---
 
+## Scheduling and Time Zones
+
+- Cron jobs are registered with the source-specific `timezone` from `source_settings` when present; otherwise they fall back to `UTC`
+- Report period boundaries (`daily` / `weekly` / `monthly`) are also calculated in the source timezone
+- `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
+- Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
+
+---
+
 ## Deploy Process
 
 ```bash
@@ -202,11 +212,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-01T18:16:36Z
+- Generated at (UTC): 2026-04-01T18:37:50Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: bbc2c6f (bbc2c6f3ad64a16da3da205aca30fe5352591730)
-- Commit date: 2026-04-01T20:15:16+02:00
+- Commit: f04bb6a (f04bb6ad23548113cfc582cd4b9019b04bafb711)
+- Commit date: 2026-04-01T20:16:46+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
