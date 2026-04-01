@@ -201,11 +201,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-01T17:57:39Z
+- Generated at (UTC): 2026-04-01T18:02:18Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 1b30264 (1b30264da1bb9d53299d27dfcccb2b5a56cc578d)
-- Commit date: 2026-04-01T19:50:35+02:00
+- Commit: 8ca6d18 (8ca6d189ca6e62dda2ace6a757400f607000dd07)
+- Commit date: 2026-04-01T20:02:18+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
