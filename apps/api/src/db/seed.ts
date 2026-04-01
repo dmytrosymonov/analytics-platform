@@ -491,14 +491,13 @@ Return ONLY valid JSON:
           userPrompt: promptData.user,
         },
       });
-      // Set v1 as active only if no other version is currently active
-      const currentTemplate = await prisma.promptTemplate.findUnique({ where: { id: template.id } });
-      if (!currentTemplate?.activeVersionId) {
-        await prisma.promptTemplate.update({
-          where: { id: template.id },
-          data: { activeVersionId: version.id },
-        });
-      }
+      // Always keep active version pointing to v1 (seed version).
+      // Seed prompt is the canonical source of truth — deploy updates always take effect.
+      // Custom versions created in admin panel remain available but v1 is always active.
+      await prisma.promptTemplate.update({
+        where: { id: template.id },
+        data: { activeVersionId: version.id },
+      });
     }
   }
 
