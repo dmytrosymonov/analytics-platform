@@ -512,6 +512,21 @@ Return ONLY valid JSON:
     }
   }
 
+  const [users, allSources] = await Promise.all([
+    prisma.user.findMany({ select: { id: true } }),
+    prisma.dataSource.findMany({ select: { id: true } }),
+  ]);
+
+  for (const user of users) {
+    for (const source of allSources) {
+      await prisma.userReportPreference.upsert({
+        where: { userId_sourceId: { userId: user.id, sourceId: source.id } },
+        create: { userId: user.id, sourceId: source.id, reportsEnabled: true },
+        update: {},
+      });
+    }
+  }
+
   // System settings
   const settings = [
     { key: 'llm.api_key', value: '', description: 'OpenAI API Key (from platform.openai.com)' },
