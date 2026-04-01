@@ -5,6 +5,15 @@
 **Production:** https://dsym.goodwin-soft.com/analytics-platform
 **Server:** `46.225.220.88` (root)
 **Repo:** https://github.com/dmytrosymonov/analytics-platform
+**Claude handoff doc:** `/opt/analytics-platform/CLAUDE.md` is refreshed after each deploy from `AGENTS.md` plus current deploy metadata.
+
+## GitHub Access
+
+- Verified on 2026-04-01: GitHub CLI auth is valid for account `dmytrosymonov`
+- Current remote: `https://github.com/dmytrosymonov/analytics-platform.git`
+- HTTPS push works; dry-run branch push succeeds
+- SSH auth to GitHub is not configured for the local `id_ed25519` key yet
+- Recommended release flow for local agents: commit locally -> push to GitHub over HTTPS -> let GitHub Actions deploy to server
 
 ---
 
@@ -176,6 +185,7 @@ Seed использует `update: {}` везде — **никакие поль�
 1. GitHub Actions запускает `deploy.yml`
 2. SSH подключение к серверу
 3. Запуск `/opt/analytics-platform/deploy.sh`
+4. Обновление `/opt/analytics-platform/CLAUDE.md` через `bash scripts/refresh-claude-docs.sh`
 
 **`deploy.sh` делает:**
 ```bash
@@ -187,6 +197,19 @@ npx tsx src/db/seed.ts   # безопасен, не перезаписывает
 npm run build            # Next.js admin
 pm2 restart all
 ```
+
+**После этого GitHub Actions выполняет:**
+```bash
+cd /opt/analytics-platform
+bash scripts/refresh-claude-docs.sh
+```
+
+**Для ручного деплоя тоже обновляй Claude-документацию:**
+```bash
+ssh root@46.225.220.88 'cd /opt/analytics-platform && bash /opt/analytics-platform/scripts/refresh-claude-docs.sh'
+```
+
+**Правило для AI-агентов:** после изменений, влияющих на архитектуру, доступы, deploy или runtime workflow, сначала обновить `AGENTS.md`, затем сразу выполнить `bash scripts/refresh-claude-docs.sh`.
 
 **GitHub Secrets:** `DEPLOY_SSH_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`
 

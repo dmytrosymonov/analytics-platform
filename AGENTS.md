@@ -189,22 +189,3 @@ node /opt/analytics-platform/node_modules/.bin/prisma migrate deploy
 # Invalidate currency cache (force refresh tomorrow's first run)
 redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 ```
-
----
-
-## Claude Deployment Snapshot
-
-- Generated at (UTC): 2026-04-01T17:42:33Z
-- Source doc: AGENTS.md
-- Branch: main
-- Commit: edafd81 (edafd81b1e7ca3348579218ff32cd53eada87e95)
-- Commit date: 2026-04-01T15:46:25+02:00
-- Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
-- Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
-- Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
-
-## Claude Handoff Notes
-
-- Treat this file as the Claude-ready operational context for the deployed checkout.
-- Use it together with the codebase as the primary source of truth.
-- If runtime behavior differs from this document, prefer the current code and PM2/process state, then update AGENTS.md so the next deploy refreshes this file.
