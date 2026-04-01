@@ -16,6 +16,7 @@
 - SSH auth to GitHub is not configured for the local `id_ed25519` key yet
 - Recommended release flow for local agents: commit locally -> push to GitHub over HTTPS -> let GitHub Actions deploy to server
 - On 2026-04-01 the server had dirty local files; they were preserved in stash `pre-deploy-safety-2026-04-01`
+- `deploy.sh` now auto-stashes dirty server-local changes before `git pull`, which prevents generated `CLAUDE.md` or other runtime edits from blocking the next deploy
 
 ---
 
@@ -191,6 +192,8 @@ Seed использует `update: {}` везде — **никакие поль�
 
 **`deploy.sh` делает:**
 ```bash
+if repo is dirty:
+  git stash push -u -m "auto-pre-deploy-<UTC timestamp>"
 git pull
 npm install --legacy-peer-deps --include=dev
 cd apps/admin && npm install --legacy-peer-deps --include=dev && cd ../..

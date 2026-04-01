@@ -39,6 +39,7 @@ apps/
 - GitHub Actions deploy failed because server checkout had a dirty worktree and an untracked `deploy.sh`
 - Dirty server changes were preserved in `git stash` as `pre-deploy-safety-2026-04-01`
 - `deploy.sh` was restored from that stash and is now tracked in the repo to prevent future missing-script failures
+- `deploy.sh` now auto-stashes dirty server-local changes before `git pull`, so generated `CLAUDE.md` and other runtime edits do not block future deploys
 
 ---
 
@@ -143,13 +144,14 @@ ssh root@46.225.220.88 'bash /opt/analytics-platform/deploy.sh'
 ```
 
 Tracked `deploy.sh` does:
-1. `git pull`
-2. `npm install --include=dev`
-3. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma)
-4. `npx tsx src/db/seed.ts` (upsert — never overwrites existing data)
-5. `next build`
-6. PM2 restart
-7. GitHub Actions then runs `cd /opt/analytics-platform && bash scripts/refresh-claude-docs.sh`
+1. if the server checkout is dirty, creates an automatic stash `auto-pre-deploy-<UTC timestamp>`
+2. `git pull`
+3. `npm install --include=dev`
+4. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma)
+5. `npx tsx src/db/seed.ts` (upsert — never overwrites existing data)
+6. `next build`
+7. PM2 restart cycle
+8. GitHub Actions then runs `cd /opt/analytics-platform && bash scripts/refresh-claude-docs.sh`
 
 **Important:** seed uses `update: {}` for all upserts — existing settings/credentials are NEVER overwritten by deploy.
 

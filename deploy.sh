@@ -2,6 +2,12 @@
 set -e
 cd /opt/analytics-platform
 
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  STASH_NAME="auto-pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)"
+  echo "-> Stashing local server changes: ${STASH_NAME}"
+  git stash push -u -m "${STASH_NAME}"
+fi
+
 echo "-> Pulling latest code..."
 git pull
 
