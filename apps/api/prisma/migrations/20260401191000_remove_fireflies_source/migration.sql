@@ -1,63 +1,87 @@
-WITH fireflies_source AS (
+DELETE FROM "delivery_attempts"
+WHERE "sent_message_id" IN (
+    SELECT sm.id
+    FROM "sent_messages" sm
+    JOIN "report_results" rr ON rr.id = sm."result_id"
+    JOIN "data_sources" ds ON ds.id = rr."source_id"
+    WHERE ds."type" = 'fireflies'
+);
+
+DELETE FROM "sent_messages"
+WHERE "result_id" IN (
+    SELECT rr.id
+    FROM "report_results" rr
+    JOIN "data_sources" ds ON ds.id = rr."source_id"
+    WHERE ds."type" = 'fireflies'
+);
+
+DELETE FROM "report_results"
+WHERE "source_id" IN (
     SELECT id
     FROM "data_sources"
     WHERE "type" = 'fireflies'
-),
-fireflies_results AS (
-    SELECT rr.id
-    FROM "report_results" rr
-    JOIN fireflies_source fs ON fs.id = rr."source_id"
-),
-fireflies_messages AS (
-    SELECT sm.id
-    FROM "sent_messages" sm
-    JOIN fireflies_results fr ON fr.id = sm."result_id"
-),
-fireflies_schedules AS (
-    SELECT rs.id
-    FROM "report_schedules" rs
-    JOIN fireflies_source fs ON fs.id = rs."source_id"
-),
-fireflies_templates AS (
-    SELECT pt.id
-    FROM "prompt_templates" pt
-    JOIN fireflies_source fs ON fs.id = pt."source_id"
-)
-DELETE FROM "delivery_attempts"
-WHERE "sent_message_id" IN (SELECT id FROM fireflies_messages);
-
-DELETE FROM "sent_messages"
-WHERE "id" IN (SELECT id FROM fireflies_messages);
-
-DELETE FROM "report_results"
-WHERE "id" IN (SELECT id FROM fireflies_results);
+);
 
 DELETE FROM "report_jobs"
-WHERE "source_id" IN (SELECT id FROM fireflies_source);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "user_schedule_preferences"
-WHERE "schedule_id" IN (SELECT id FROM fireflies_schedules);
+WHERE "schedule_id" IN (
+    SELECT rs.id
+    FROM "report_schedules" rs
+    JOIN "data_sources" ds ON ds.id = rs."source_id"
+    WHERE ds."type" = 'fireflies'
+);
 
 DELETE FROM "report_schedules"
-WHERE "id" IN (SELECT id FROM fireflies_schedules);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "user_report_preferences"
-WHERE "source_id" IN (SELECT id FROM fireflies_source);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "prompt_versions"
-WHERE "template_id" IN (SELECT id FROM fireflies_templates);
+WHERE "template_id" IN (
+    SELECT pt.id
+    FROM "prompt_templates" pt
+    JOIN "data_sources" ds ON ds.id = pt."source_id"
+    WHERE ds."type" = 'fireflies'
+);
 
 DELETE FROM "prompt_templates"
-WHERE "id" IN (SELECT id FROM fireflies_templates);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "source_credentials"
-WHERE "source_id" IN (SELECT id FROM fireflies_source);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "source_settings"
-WHERE "source_id" IN (SELECT id FROM fireflies_source);
+WHERE "source_id" IN (
+    SELECT id
+    FROM "data_sources"
+    WHERE "type" = 'fireflies'
+);
 
 DELETE FROM "data_sources"
-WHERE "id" IN (SELECT id FROM fireflies_source);
+WHERE "type" = 'fireflies';
 
 DELETE FROM "system_settings"
 WHERE "key" = 'scheduler.fireflies_cron';
