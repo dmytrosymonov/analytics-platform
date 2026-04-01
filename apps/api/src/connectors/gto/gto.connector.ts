@@ -596,7 +596,7 @@ export class GTOConnector implements SourceConnector {
         avg_order_eur: confirmed.length > 0 ? r2(revenueEur / confirmed.length) : 0,
       },
       top_destinations: Object.entries(destinations)
-        .sort((a, b) => b[1] - a[1]).slice(0, 8)
+        .sort((a, b) => (touristsPerCountry[b[0]] || 0) - (touristsPerCountry[a[0]] || 0)).slice(0, 8)
         .map(([country, orders]) => ({
           country,
           flag: countryEmoji(country),
@@ -656,7 +656,7 @@ export class GTOConnector implements SourceConnector {
       profit_eur:   r2(profitEur),
       profit_pct:   revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
       top_destinations: Object.entries(destinations)
-        .sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .sort((a, b) => (touristsPerCountry[b[0]] || 0) - (touristsPerCountry[a[0]] || 0)).slice(0, 5)
         .map(([country, orders]) => ({
           country,
           flag: countryEmoji(country),
@@ -714,7 +714,7 @@ export class GTOConnector implements SourceConnector {
       profit_eur:   r2(profitEurFinal),
       profit_pct:   revenueEur > 0 ? Math.round(profitEurFinal / revenueEur * 100) : 0,
       top_destinations: Object.entries(destinations)
-        .sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .sort((a, b) => (touristsPerCountry[b[0]] || 0) - (touristsPerCountry[a[0]] || 0)).slice(0, 5)
         .map(([country, orders]) => ({
           country,
           flag: countryEmoji(country),
