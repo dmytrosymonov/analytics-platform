@@ -8,7 +8,7 @@
 
 ## What This Is
 
-An internal analytics back-office for a travel/tourism company. It collects data from multiple sources (GTO, GA4, Redmine, YouTrack, Fireflies.ai), runs AI analysis via ChatGPT, and delivers reports via Telegram.
+An internal analytics back-office for a travel/tourism company. It collects data from multiple sources (GTO, GA4, Redmine, YouTrack), runs AI analysis via ChatGPT, and delivers reports via Telegram.
 
 ---
 
@@ -51,7 +51,6 @@ apps/
 | Google Analytics 4 | `ga4` | Web traffic |
 | Redmine | `redmine` | Issue tracking |
 | YouTrack | `youtrack` | Issue tracking |
-| Fireflies.ai | `fireflies` | Meeting transcripts |
 
 **All monetary values are converted to EUR before AI analysis.**
 Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Redis for 24 hours (refreshed daily on first use).

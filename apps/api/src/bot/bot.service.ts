@@ -114,7 +114,7 @@ async function buildAskKeyboard() {
   if (sources.length === 0) return null;
 
   const SOURCE_ICON: Record<string, string> = {
-    gto: '🛒', ga4: '📊', redmine: '🐞', youtrack: '🎯', fireflies: '🔥',
+    gto: '🛒', ga4: '📊', redmine: '🐞', youtrack: '🎯',
   };
 
   const buttons = sources.map(s =>

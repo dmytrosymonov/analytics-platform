@@ -8,7 +8,7 @@
 
 ## What This Is
 
-An internal analytics back-office for a travel/tourism company. It collects data from multiple sources (GTO, GA4, Redmine, YouTrack, Fireflies.ai), runs AI analysis via ChatGPT, and delivers reports via Telegram.
+An internal analytics back-office for a travel/tourism company. It collects data from multiple sources (GTO, GA4, Redmine, YouTrack), runs AI analysis via ChatGPT, and delivers reports via Telegram.
 
 ---
 
@@ -51,7 +51,6 @@ apps/
 | Google Analytics 4 | `ga4` | Web traffic |
 | Redmine | `redmine` | Issue tracking |
 | YouTrack | `youtrack` | Issue tracking |
-| Fireflies.ai | `fireflies` | Meeting transcripts |
 
 **All monetary values are converted to EUR before AI analysis.**
 Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Redis for 24 hours (refreshed daily on first use).
@@ -202,11 +201,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-01T17:47:59Z
+- Generated at (UTC): 2026-04-01T17:57:39Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 9daa034 (9e0ab8ee095c7a8ae18203a271d3f091f3c8f9a4)
-- Commit date: 2026-04-01T19:47:59+02:00
+- Commit: 1b30264 (1b30264da1bb9d53299d27dfcccb2b5a56cc578d)
+- Commit date: 2026-04-01T19:50:35+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
