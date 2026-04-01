@@ -22,8 +22,21 @@ export class YouTrackConnector implements SourceConnector {
     if (!youtrack_base_url || !youtrack_token) return false;
     try {
       const client = this.makeClient(youtrack_base_url, youtrack_token, 10000);
-      const resp = await client.get('/api/admin/users/me?fields=id,login,fullName');
-      return resp.status === 200 && !!resp.data?.id;
+      const endpoints = [
+        '/api/users/me?fields=id,login,fullName',
+        '/api/admin/users/me?fields=id,login,fullName',
+      ];
+
+      for (const endpoint of endpoints) {
+        try {
+          const resp = await client.get(endpoint);
+          if (resp.status === 200 && !!resp.data?.id) return true;
+        } catch (err: any) {
+          if (err?.response?.status !== 404) throw err;
+        }
+      }
+
+      return false;
     } catch {
       return false;
     }
