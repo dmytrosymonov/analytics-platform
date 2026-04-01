@@ -417,8 +417,13 @@ export class GTOConnector implements SourceConnector {
       const hCurrency     = h.currency || orderCurrency;
       const costConverted = toEur(priceBuy,  hCurrency);
       const sellConverted = toEur(priceSell, hCurrency);
-      const hCost = (sellConverted > 0 && costConverted > sellConverted)
-        ? toEur(priceBuy, 'UAH')
+      const costUah       = toEur(priceBuy, 'UAH');
+      // Sanity check 1: if cost > sell → currency mislabeled → try UAH
+      // Sanity check 2: if a SINGLE hotel item exceeds total order revenue → currency mislabeled
+      //   (both values wrong but same ratio, so check 1 alone doesn't catch it)
+      const hCost = (sellConverted > 0 && costConverted > sellConverted) ||
+                    (priceEur > 0 && costConverted > priceEur)
+        ? costUah
         : costConverted;
       costEur += hCost;
       const supName = cleanSupName(h.supplier_name || h.service_supplier_name || '');
@@ -445,16 +450,22 @@ export class GTOConnector implements SourceConnector {
         const buyCurr = supplierTagCurrency(s.supplier_id) || s.currency || orderCurrency;
         const airkCostConverted = toEur(priceBuy, buyCurr);
         const airkSellConverted = toEur(priceSell, buyCurr);
-        serviceCostEur = (airkSellConverted > 0 && airkCostConverted > airkSellConverted * 2)
-          ? toEur(priceBuy, 'UAH')
+        const airkCostUah       = toEur(priceBuy, 'UAH');
+        // Sanity 1: cost > 2x sell (existing). Sanity 2: single ticket > total order revenue
+        serviceCostEur = (airkSellConverted > 0 && airkCostConverted > airkSellConverted * 2) ||
+                         (priceEur > 0 && airkCostConverted > priceEur)
+          ? airkCostUah
           : airkCostConverted;
 
       } else {
         const sCurrency     = s.currency || orderCurrency;
         const costConverted = toEur(priceBuy,  sCurrency);
         const sellConverted = toEur(priceSell, sCurrency);
-        serviceCostEur = (sellConverted > 0 && costConverted > sellConverted)
-          ? toEur(priceBuy, 'UAH')
+        const costUah       = toEur(priceBuy, 'UAH');
+        // Sanity 1: cost > sell. Sanity 2: single service > total order revenue
+        serviceCostEur = (sellConverted > 0 && costConverted > sellConverted) ||
+                         (priceEur > 0 && costConverted > priceEur)
+          ? costUah
           : costConverted;
       }
 
@@ -465,6 +476,35 @@ export class GTOConnector implements SourceConnector {
 
     const profitEur = priceEur - costEur;
     const profitPct = priceEur > 0 ? Math.round(profitEur / priceEur * 100) : 0;
+
+    // Diagnostics: log breakdown when cost exceeds revenue (helps find currency bugs)
+    if (costEur > priceEur && priceEur > 0) {
+      logger.warn({
+        orderId: orderSummary?.order_id,
+        priceEur: r2(priceEur),
+        costEur:  r2(costEur),
+        profitPct,
+        balanceAmount:   detail.balance_amount,
+        balanceCurrency: detail.balance_currency,
+        hotels: hotels.map((h: any) => ({
+          supplier: cleanSupName(h.supplier_name || ''),
+          currency: h.currency || orderCurrency,
+          price_buy:  h.price_buy,
+          price_sell: h.price,
+          costEur: r2(toEur(parseFloat(h.price_buy) || 0, h.currency || orderCurrency)),
+          costUah: r2(toEur(parseFloat(h.price_buy) || 0, 'UAH')),
+        })),
+        services: services.map((s: any) => ({
+          type:     s.type,
+          supplier: cleanSupName(s.supplier_name || ''),
+          currency: s.currency || orderCurrency,
+          price_buy:  s.price_buy,
+          price_sell: s.price,
+          costEur: r2(toEur(parseFloat(s.price_buy) || 0, s.currency || orderCurrency)),
+          costUah: r2(toEur(parseFloat(s.price_buy) || 0, 'UAH')),
+        })),
+      }, 'GTO cost > revenue: possible currency mislabel');
+    }
 
     // Product classification
     const activeHotels   = hotels.filter((h: any) => h.status !== 'CNX');
