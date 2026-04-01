@@ -588,23 +588,30 @@ export class GTOConnector implements SourceConnector {
       orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, costEur: m.costEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }
 
-    // Anomalies — detect suspicious orders (high revenue OR deeply negative margin)
-    const anomalies: string[] = [];
+    // Anomalies — split into two categories for clear reporting
     const avgPrice = orderValues.length > 0 ? revenueEur / orderValues.length : 0;
-    const negativeOrders = orderValues.filter(o => o.priceEur > 0 && o.profitPct < -30);
+
+    // 1. Suspicious high-price orders (>3x average AND >2000 EUR)
+    const anomalies: string[] = [];
     for (const ov of orderValues) {
       if (ov.priceEur > avgPrice * 3 && ov.priceEur > 2000) {
-        anomalies.push(`Заказ #${ov.orderId}: ${r2(ov.priceEur)} EUR (в ${Math.round(ov.priceEur / (avgPrice || 1))}x выше среднего)`);
-      }
-    }
-    if (negativeOrders.length > 0) {
-      const worstByMargin = [...negativeOrders].sort((a, b) => a.profitPct - b.profitPct).slice(0, 3);
-      for (const ov of worstByMargin) {
-        anomalies.push(`Заказ #${ov.orderId}: выручка ${r2(ov.priceEur)} EUR, себестоимость ${r2(ov.costEur)} EUR, маржа ${ov.profitPct}%`);
+        anomalies.push(`#${ov.orderId}: ${r2(ov.priceEur)} EUR (в ${Math.round(ov.priceEur / (avgPrice || 1))}x выше среднего)`);
       }
     }
     if (orders.length > 0 && cancelled.length / orders.length > 0.3)
       anomalies.push(`Высокий % отмен: ${Math.round(cancelled.length / orders.length * 100)}%`);
+
+    // 2. Negative-margin orders (all of them, sorted worst-first)
+    const allNegativeMargin = orderValues
+      .filter(o => o.profitPct < 0)
+      .sort((a, b) => a.profitPct - b.profitPct); // worst margin first
+    const negative_margin_orders = allNegativeMargin.map(ov => ({
+      order_id:   ov.orderId,
+      revenue_eur: r2(ov.priceEur),
+      cost_eur:    r2(ov.costEur),
+      profit_eur:  r2(ov.profitEur),
+      profit_pct:  ov.profitPct,
+    }));
 
     // Most expensive / profitable
     const byPrice   = [...orderValues].sort((a, b) => b.priceEur - a.priceEur);
@@ -654,7 +661,9 @@ export class GTOConnector implements SourceConnector {
       most_expensive_order:  byPrice[0]   ? { order_id: byPrice[0].orderId,   price_eur:  r2(byPrice[0].priceEur) }    : null,
       most_profitable_abs:   byProfit[0]  ? { order_id: byProfit[0].orderId,  profit_eur: r2(byProfit[0].profitEur) }  : null,
       most_profitable_rel:   byProfPct[0] ? { order_id: byProfPct[0].orderId, profit_pct: byProfPct[0].profitPct }     : null,
-      anomalies: anomalies.slice(0, 5),
+      anomalies,
+      negative_margin_orders,          // ALL orders with profit_pct < 0, sorted worst-first
+      negative_margin_count: negative_margin_orders.length,
       data_available: orders.length > 0,
     };
   }

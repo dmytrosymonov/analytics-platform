@@ -171,6 +171,12 @@ async function main() {
 Поставщик2 - X заказов, X EUR
 Поставщик3 - X заказов, X EUR
 
+🔴 Отрицательная маржа (X заказов):
+#XXXXX — GMV X EUR, себест. X EUR, маржа -X%
+#XXXXX — GMV X EUR, себест. X EUR, маржа -X%
+⚠️ Прочие аномалии:
+#XXXXX: X EUR (в Nx выше среднего)
+
 
 📊 За последние 7 дней (ДД/ММ/ГГГГ-ДД/ММ/ГГГГ)
 
@@ -192,6 +198,12 @@ async function main() {
 Поставщик1 - X заказов, X EUR
 Поставщик2 - X заказов, X EUR
 Поставщик3 - X заказов, X EUR
+
+🔴 Отрицательная маржа (X заказов):
+#XXXXX — GMV X EUR, себест. X EUR, маржа -X%
+#XXXXX — GMV X EUR, себест. X EUR, маржа -X%
+⚠️ Прочие аномалии:
+#XXXXX: X EUR (в Nx выше среднего)
 
 
 🔮 Старт Ближ. 7 дней: X заказов, X туристов, GMV: X EUR, Gross profit: X EUR (X%)
@@ -233,6 +245,8 @@ async function main() {
 - Топ агент: section1_yesterday.top_agents_by_orders[0]
 - Самый дорогой: section1_yesterday.most_expensive_order → order_id и price_eur
 - Топ поставщики: section1_yesterday.top_suppliers_by_orders[0..2]
+- Аномалии (отрицательная маржа): section1_yesterday.negative_margin_orders (все записи) + .negative_margin_count
+- Прочие аномалии: section1_yesterday.anomalies (все записи)
 - Аналогично для section2 (7 дней) — ТОЛЬКО из этой секции, ничего не пересчитывай.
 
 ФОРМАТИРОВАНИЕ:
@@ -243,7 +257,12 @@ async function main() {
 - Продукты 📦: emoji 🏨 Пакет, 🏩 Отель, ✈️ Перелёт; показывай orders и tourists.
 - Направления в "🔮" и "☀️": каждое на новой строке, с % туристов и emoji флага.
 - profit_pct отрицательный — выводить как есть (-15%).
-- Если в anomalies заказы — добавь "⚠️ Аномалии: ..." в конец блока.
+- АНОМАЛИИ — выводить ПОСЛЕ блока поставщиков в каждом дневном разделе:
+  • Если negative_margin_count > 0: блок "🔴 Отрицательная маржа (N заказов):" — каждый заказ на отдельной строке:
+    "#XXXXXX — GMV X EUR, себест. X EUR, маржа X%"
+    Выводить ВСЕ заказы из negative_margin_orders (не обрезать), отсортированы от худшей маржи к лучшей.
+  • Если в anomalies есть записи: блок "⚠️ Прочие аномалии:" — каждая запись на отдельной строке.
+  • Если negative_margin_count = 0 И anomalies пуст — блоки аномалий не выводить.
 - data_coverage: если detail_coverage_pct < 100, добавь в конец отчёта строку "⚠️ Неполные данные: {note}".`,
       },
       gto_comments: {
