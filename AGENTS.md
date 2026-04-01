@@ -40,6 +40,7 @@ apps/
 - Dirty server changes were preserved in `git stash` as `pre-deploy-safety-2026-04-01`
 - `deploy.sh` was restored from that stash and is now tracked in the repo to prevent future missing-script failures
 - `deploy.sh` now auto-stashes dirty server-local changes before `git pull`, so generated `CLAUDE.md` and other runtime edits do not block future deploys
+- `deploy.sh` now retries `npm install` once after removing the target `node_modules` directory if npm fails with a broken install state (for example ENOENT inside `@esbuild/*`)
 
 ---
 
@@ -145,7 +146,7 @@ ssh root@46.225.220.88 'bash /opt/analytics-platform/deploy.sh'
 Tracked `deploy.sh` does:
 1. if the server checkout is dirty, creates an automatic stash `auto-pre-deploy-<UTC timestamp>`
 2. `git pull`
-3. `npm install --include=dev`
+3. `npm install --include=dev` with one clean-reinstall retry if `node_modules` is corrupted
 4. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma)
 5. `npx tsx src/db/seed.ts` (upsert — never overwrites existing data)
 6. `next build`

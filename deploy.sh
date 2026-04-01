@@ -2,6 +2,19 @@
 set -e
 cd /opt/analytics-platform
 
+install_deps_with_retry() {
+  local target_dir="$1"
+
+  echo "-> Installing dependencies in ${target_dir}..."
+  if (cd "$target_dir" && npm install --legacy-peer-deps --include=dev); then
+    return 0
+  fi
+
+  echo "-> npm install failed in ${target_dir}; cleaning node_modules and retrying once..."
+  rm -rf "${target_dir}/node_modules"
+  (cd "$target_dir" && npm install --legacy-peer-deps --include=dev)
+}
+
 if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   STASH_NAME="auto-pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "-> Stashing local server changes: ${STASH_NAME}"
@@ -15,11 +28,11 @@ echo "-> Loading environment..."
 set -a && source /opt/analytics-platform/.env && set +a
 
 echo "-> Installing ALL dependencies (including dev)..."
-npm install --legacy-peer-deps --include=dev
+install_deps_with_retry /opt/analytics-platform
 
 # Ensure app-local dependencies exist before build and prisma commands.
-cd apps/admin && npm install --legacy-peer-deps --include=dev && cd ../..
-cd apps/api && npm install --legacy-peer-deps --include=dev && cd ../..
+install_deps_with_retry /opt/analytics-platform/apps/admin
+install_deps_with_retry /opt/analytics-platform/apps/api
 
 echo "-> Running migrations..."
 cd apps/api && node /opt/analytics-platform/node_modules/.bin/prisma migrate deploy && node /opt/analytics-platform/node_modules/.bin/prisma generate && cd ../..
