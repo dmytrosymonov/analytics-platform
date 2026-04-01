@@ -27,6 +27,14 @@ type ProgressIssue = {
   };
 };
 
+type ContributorActivity = {
+  name: string;
+  status_changes: number;
+  comments: number;
+  issues_touched: number;
+  examples: string[];
+};
+
 type ActivityItem = {
   timestamp?: number;
   author?: { login?: string; fullName?: string; name?: string };
@@ -193,6 +201,8 @@ export class YouTrackProgressConnector implements SourceConnector {
     const maxIssues = Math.max(1, parseInt(settings['max_issues'] || '60', 10));
     const issuesForPrompt = touchedIssues.slice(0, maxIssues);
 
+    const contributorActivity = this.buildContributorActivity(touchedIssues);
+
     const metrics = {
       issues_touched: touchedIssues.length,
       issues_with_status_changes: touchedIssues.filter(issue => issue.transitions.length > 0).length,
@@ -210,6 +220,7 @@ export class YouTrackProgressConnector implements SourceConnector {
       top_comment_authors: this.topCounts(
         touchedIssues.flatMap(issue => issue.comments.map(comment => comment.author)),
       ),
+      contributor_activity: contributorActivity,
     };
 
     return {
@@ -311,5 +322,51 @@ export class YouTrackProgressConnector implements SourceConnector {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([name, count]) => ({ name, count }));
+  }
+
+  private buildContributorActivity(issues: ProgressIssue[]): ContributorActivity[] {
+    const people = new Map<string, { statusChanges: number; comments: number; issues: Set<string>; examples: string[] }>();
+
+    const ensure = (name: string) => {
+      if (!people.has(name)) {
+        people.set(name, { statusChanges: 0, comments: 0, issues: new Set<string>(), examples: [] });
+      }
+      return people.get(name)!;
+    };
+
+    for (const issue of issues) {
+      for (const transition of issue.transitions) {
+        const person = ensure(transition.author);
+        person.statusChanges += 1;
+        person.issues.add(issue.key);
+        if (person.examples.length < 4) {
+          person.examples.push(`${issue.key} — State: ${transition.from || 'unknown'} -> ${transition.to || 'unknown'}`);
+        }
+      }
+
+      for (const comment of issue.comments) {
+        const person = ensure(comment.author);
+        person.comments += 1;
+        person.issues.add(issue.key);
+        if (person.examples.length < 4) {
+          person.examples.push(`${issue.key} — comment: ${comment.text}`);
+        }
+      }
+    }
+
+    return [...people.entries()]
+      .map(([name, stats]) => ({
+        name,
+        status_changes: stats.statusChanges,
+        comments: stats.comments,
+        issues_touched: stats.issues.size,
+        examples: stats.examples,
+      }))
+      .sort((a, b) => {
+        const aScore = a.status_changes * 3 + a.comments;
+        const bScore = b.status_changes * 3 + b.comments;
+        return bScore - aScore;
+      })
+      .slice(0, 8);
   }
 }
