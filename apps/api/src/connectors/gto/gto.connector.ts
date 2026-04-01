@@ -29,7 +29,6 @@ class Semaphore {
   }
 }
 
-const fmt = (d: Date) => d.toISOString().slice(0, 10);
 const r2  = (n: number) => Math.round(n * 100) / 100;
 
 const COUNTRY_EMOJI: Record<string, string> = {
@@ -118,18 +117,26 @@ export class GTOConnector implements SourceConnector {
     const warnings: string[] = [];
     if (!rates) warnings.push('Currency rates unavailable — amounts in original currencies');
 
-    // ── Date ranges ────────────────────────────────────────────────────────
-    // Always use real current date — period.start/end are scheduler metadata only.
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const yesterday   = new Date(today.getTime() - 86400000);
-    const last7dFrom  = new Date(today.getTime() - 7 * 86400000);
-    const prev14dFrom = new Date(today.getTime() - 14 * 86400000);
-    const next7dTo    = new Date(today.getTime() + 7  * 86400000);
-    const next30dTo   = new Date(today.getTime() + 30 * 86400000);
+    // ── Date ranges (timezone-aware) ──────────────────────────────────────
+    // Use configured timezone so "today/yesterday" matches business timezone, not server UTC.
+    const tz = settings['timezone'] || 'Europe/Kiev';
+    const dateTz = (offsetDays: number = 0): string => {
+      const d = new Date();
+      d.setDate(d.getDate() + offsetDays);
+      return d.toLocaleDateString('sv-SE', { timeZone: tz }); // always 'YYYY-MM-DD'
+    };
 
-    // Summer months relative to today
-    const year = today.getMonth() >= 9 ? today.getFullYear() + 1 : today.getFullYear();
+    const todayStr    = dateTz(0);
+    const yesterStr   = dateTz(-1);
+    const last7dStr   = dateTz(-7);
+    const prev14dStr  = dateTz(-14);
+    const next7dStr   = dateTz(7);
+    const next30dStr  = dateTz(30);
+
+    // Summer months (next upcoming June/July/August relative to today in TZ)
+    const todayYear  = parseInt(todayStr.slice(0, 4), 10);
+    const todayMonth = parseInt(todayStr.slice(5, 7), 10);
+    const year = todayMonth >= 10 ? todayYear + 1 : todayYear;
 
     // ── Helpers ────────────────────────────────────────────────────────────
     const fetchList = async (
@@ -182,18 +189,18 @@ export class GTOConnector implements SourceConnector {
       ordersJuly,
       ordersAugust,
     ] = await Promise.all([
-      // Section 1 — yesterday (by created_at)
-      fetchList('/orders_list', { date_from: fmt(yesterday), date_to: fmt(today), sort_by: 'created_at' }),
+      // Section 1 — yesterday (by created_at, in business timezone)
+      fetchList('/orders_list', { date_from: yesterStr, date_to: todayStr, sort_by: 'created_at' }),
       // Section 2 — last 7 days (by created_at)
-      fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'created_at' }),
+      fetchList('/orders_list', { date_from: last7dStr, date_to: todayStr, sort_by: 'created_at' }),
       // Section 2 comparison — previous 7 days (days 8-14 ago, by created_at)
-      fetchList('/orders_list', { date_from: fmt(prev14dFrom), date_to: fmt(last7dFrom), sort_by: 'created_at' }),
+      fetchList('/orders_list', { date_from: prev14dStr, date_to: last7dStr, sort_by: 'created_at' }),
       // Section 3a — upcoming tours (start date = next 7 days, confirmed only)
-      fetchList('/orders_list', { date_from: fmt(today), date_to: fmt(next7dTo), sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: todayStr, date_to: next7dStr, sort_by: 'date_start', status: 'CNF' }),
       // Section 3a comparison — tours started in past 7 days (confirmed only)
-      fetchList('/orders_list', { date_from: fmt(last7dFrom), date_to: fmt(today), sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: last7dStr, date_to: todayStr, sort_by: 'date_start', status: 'CNF' }),
       // Section 3b — upcoming 30 days (confirmed only)
-      fetchList('/orders_list', { date_from: fmt(today), date_to: fmt(next30dTo), sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: todayStr, date_to: next30dStr, sort_by: 'date_start', status: 'CNF' }),
       // Section 4 — summer months by date_start (confirmed only)
       fetchList('/orders_list', { date_from: `${year}-06-01`, date_to: `${year}-06-30`, sort_by: 'date_start', status: 'CNF' }),
       fetchList('/orders_list', { date_from: `${year}-07-01`, date_to: `${year}-07-31`, sort_by: 'date_start', status: 'CNF' }),
@@ -209,9 +216,11 @@ export class GTOConnector implements SourceConnector {
         if (o.order_id && !detailIds.has(o.order_id)) { detailIds.add(o.order_id); n++; }
       }
     };
-    addIds(ordersYesterday, 200);
-    addIds(ordersUpcoming, 200);
-    addIds(ordersPrevUpcoming, 200);
+    // Yesterday: fetch ALL details without limit — accuracy of section 1 is critical.
+    // Other sections: cap to avoid overloading the API.
+    addIds(ordersYesterday, Infinity);
+    addIds(ordersUpcoming, MAX_DETAIL_ORDERS);
+    addIds(ordersPrevUpcoming, MAX_DETAIL_ORDERS);
     addIds(ordersUpcoming30d, MAX_DETAIL_ORDERS);
     addIds(ordersPrev7d, MAX_DETAIL_ORDERS);
     addIds(ordersLast7d, MAX_DETAIL_ORDERS);
@@ -282,14 +291,14 @@ export class GTOConnector implements SourceConnector {
               ? `All amounts in EUR (rates date: ${rates.fetchedAt.slice(0, 10)})`
               : 'Currency rates unavailable',
             section1_yesterday: {
-              period: { from: fmt(yesterday), to: fmt(today) },
+              period: { from: yesterStr, to: todayStr },
               ...s1,
             },
             section2_last_7_days: {
-              period: { from: fmt(last7dFrom), to: fmt(today) },
+              period: { from: last7dStr, to: todayStr },
               ...s2,
               vs_prev_7_days: {
-                period: { from: fmt(prev14dFrom), to: fmt(last7dFrom) },
+                period: { from: prev14dStr, to: last7dStr },
                 prev_orders_confirmed: s2prev.orders.confirmed,
                 prev_revenue_eur:      s2prev.financials.revenue_eur,
                 prev_profit_eur:       s2prev.financials.profit_eur,
@@ -307,11 +316,11 @@ export class GTOConnector implements SourceConnector {
               },
             },
             section3_upcoming_7days: {
-              period: { from: fmt(today), to: fmt(next7dTo) },
+              period: { from: todayStr, to: next7dStr },
               ...s3,
             },
             section3_upcoming_30days: {
-              period: { from: fmt(today), to: fmt(next30dTo) },
+              period: { from: todayStr, to: next30dStr },
               ...s3b,
             },
             section4_summer: s4,
@@ -508,6 +517,8 @@ export class GTOConnector implements SourceConnector {
     const cancelled = orders.filter(o => o.status === 'CNX');
     const pending   = orders.filter(o => !['CNF', 'CNX'].includes(o.status));
 
+    // Track how many confirmed orders have details loaded (data coverage)
+    let confirmedWithDetails = 0;
     let totalTourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number>  = {};
     const touristsPerCountry: Record<string, number> = {};
@@ -525,6 +536,7 @@ export class GTOConnector implements SourceConnector {
       const m = this.extractOrder(o, detail, rates);
       if (!m) continue;
 
+      confirmedWithDetails++;
       totalTourists += m.tourists;
       revenueEur    += m.priceEur;
       costEur       += m.costEur;
@@ -585,6 +597,14 @@ export class GTOConnector implements SourceConnector {
         cancelled:             cancelled.length,
         pending:               pending.length,
         cancellation_rate_pct: orders.length > 0 ? Math.round(cancelled.length / orders.length * 100) : 0,
+      },
+      data_coverage: {
+        confirmed_total:       confirmed.length,
+        confirmed_with_detail: confirmedWithDetails,
+        detail_coverage_pct:   confirmed.length > 0 ? Math.round(confirmedWithDetails / confirmed.length * 100) : 100,
+        note: confirmedWithDetails < confirmed.length
+          ? `⚠️ Детали загружены только для ${confirmedWithDetails} из ${confirmed.length} подтверждённых заказов`
+          : `✅ Все ${confirmed.length} подтверждённых заказов с деталями`,
       },
       tourists: totalTourists,
       financials: {

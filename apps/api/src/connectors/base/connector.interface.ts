@@ -5,6 +5,7 @@ export interface NormalizedSourceData {
   periodStart: string;
   periodEnd: string;
   timezone: string;
+  currency?: { base: string; ratesDate: string | null };
   metrics: Record<string, unknown>;
   rawSampleSize?: number;
   warnings?: string[];
