@@ -144,16 +144,24 @@ export class GTOConnector implements SourceConnector {
       params: Record<string, unknown>,
     ): Promise<any[]> => {
       const PER_PAGE = 1000;
+      const MAX_PAGES = 20; // safety: never fetch more than 20 000 orders per query
       const allItems: any[] = [];
       let page = 1;
       for (;;) {
         let pageData: any[] = [];
+        let rawTotal: number | null = null; // total count from API if provided
         for (let attempt = 0; attempt <= retryCount; attempt++) {
           try {
             const resp = await http.get(path, { params: { ...params, per_page: PER_PAGE, page } });
             const data = resp.data;
             if (Array.isArray(data)) { pageData = data; break; }
-            if (data?.data && Array.isArray(data.data)) { pageData = data.data; break; }
+            if (data?.data && Array.isArray(data.data)) {
+              pageData = data.data;
+              // GTO may return total count in meta fields — capture it for logging
+              rawTotal = data.total ?? data.meta?.total ?? data.count ?? null;
+              break;
+            }
+            logger.warn({ path, page, dataKeys: data ? Object.keys(data) : null }, 'fetchList: unexpected response format');
             break;
           } catch (err: any) {
             if (attempt === retryCount) { logger.warn({ path, err: err.message }, 'fetchList failed'); break; }
@@ -161,8 +169,23 @@ export class GTOConnector implements SourceConnector {
           }
         }
         allItems.push(...pageData);
-        if (pageData.length < PER_PAGE) break; // last page
+        logger.debug({
+          path,
+          page,
+          pageItems:  pageData.length,
+          totalSoFar: allItems.length,
+          apiTotal:   rawTotal,
+          full:       pageData.length === PER_PAGE,
+        }, 'GTO fetchList page');
+        if (pageData.length < PER_PAGE) break; // last page reached
+        if (page >= MAX_PAGES) {
+          logger.warn({ path, pages: page, total: allItems.length }, 'GTO fetchList: MAX_PAGES limit reached, truncating');
+          break;
+        }
         page++;
+      }
+      if (page > 1) {
+        logger.info({ path, pages: page, total: allItems.length }, 'GTO fetchList: multi-page fetch complete');
       }
       return allItems;
     };
