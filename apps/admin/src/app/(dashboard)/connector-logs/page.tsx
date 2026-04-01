@@ -212,7 +212,7 @@ export default function ConnectorLogsPage() {
   const { data, isLoading, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ['connector-logs', connector],
     queryFn: () => {
-      const params = new URLSearchParams({ limit: '1000' });
+      const params = new URLSearchParams({ limit: '5000' });
       if (connector) params.set('connector', connector);
       return authFetch(`/api/v1/connector-logs?${params}`);
     },
