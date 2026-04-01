@@ -6,6 +6,7 @@
 **Server:** `46.225.220.88` (root)
 **Repo:** https://github.com/dmytrosymonov/analytics-platform
 **Claude handoff doc:** `/opt/analytics-platform/CLAUDE.md` is refreshed after each deploy from `AGENTS.md` plus current deploy metadata.
+**Deploy script:** tracked in repo as [deploy.sh](/Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform/deploy.sh) and executed on server at `/opt/analytics-platform/deploy.sh`
 
 ## GitHub Access
 
@@ -14,6 +15,7 @@
 - HTTPS push works; dry-run branch push succeeds
 - SSH auth to GitHub is not configured for the local `id_ed25519` key yet
 - Recommended release flow for local agents: commit locally -> push to GitHub over HTTPS -> let GitHub Actions deploy to server
+- On 2026-04-01 the server had dirty local files; they were preserved in stash `pre-deploy-safety-2026-04-01`
 
 ---
 
@@ -191,11 +193,16 @@ Seed использует `update: {}` везде — **никакие поль�
 ```bash
 git pull
 npm install --legacy-peer-deps --include=dev
+cd apps/admin && npm install --legacy-peer-deps --include=dev && cd ../..
+cd apps/api && npm install --legacy-peer-deps --include=dev && cd ../..
 node /opt/analytics-platform/node_modules/.bin/prisma migrate deploy
 node /opt/analytics-platform/node_modules/.bin/prisma generate
 npx tsx src/db/seed.ts   # безопасен, не перезаписывает данные
 npm run build            # Next.js admin
-pm2 restart all
+pm2 delete analytics-api || true
+pm2 delete analytics-admin || true
+pm2 start ...
+pm2 save
 ```
 
 **После этого GitHub Actions выполняет:**

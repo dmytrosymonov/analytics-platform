@@ -24,6 +24,7 @@ apps/
 **Process manager:** PM2 (`analytics-api` + `analytics-admin`)
 **Server:** `46.225.220.88` → ssh root@46.225.220.88
 **Deploy:** git push to `main` → GitHub Actions → SSH → `/opt/analytics-platform/deploy.sh`
+**Deploy script source of truth:** tracked in repo as `deploy.sh` and expected to exist on the server at `/opt/analytics-platform/deploy.sh`
 
 **Claude docs on server:** after each deploy GitHub Actions runs `bash scripts/refresh-claude-docs.sh`, which rebuilds `/opt/analytics-platform/CLAUDE.md` from this file and appends the latest deployed commit metadata for Claude handoff.
 
@@ -33,6 +34,11 @@ apps/
 - `git push --dry-run origin HEAD:refs/heads/codex/github-access-check` succeeds
 - SSH auth to GitHub is NOT configured yet for `~/.ssh/id_ed25519` (`Permission denied (publickey)`)
 - Practical release path for agents: commit locally → push via HTTPS remote → GitHub Actions deploys to server
+
+**Server deploy incident (2026-04-01):**
+- GitHub Actions deploy failed because server checkout had a dirty worktree and an untracked `deploy.sh`
+- Dirty server changes were preserved in `git stash` as `pre-deploy-safety-2026-04-01`
+- `deploy.sh` was restored from that stash and is now tracked in the repo to prevent future missing-script failures
 
 ---
 
@@ -136,7 +142,7 @@ Key models:
 ssh root@46.225.220.88 'bash /opt/analytics-platform/deploy.sh'
 ```
 
-Deploy script does:
+Tracked `deploy.sh` does:
 1. `git pull`
 2. `npm install --include=dev`
 3. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma)
@@ -194,11 +200,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-01T17:42:33Z
+- Generated at (UTC): 2026-04-01T17:46:15Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: edafd81 (edafd81b1e7ca3348579218ff32cd53eada87e95)
-- Commit date: 2026-04-01T15:46:25+02:00
+- Commit: 07ca32b (07ca32b379824c29bd0eb854861566a1a9b007ba)
+- Commit date: 2026-04-01T19:43:15+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
