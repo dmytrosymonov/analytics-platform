@@ -1,6 +1,6 @@
 import { Job } from 'bullmq';
 import { prisma } from '../lib/prisma';
-import { bot } from '../bot/bot.service';
+import { sendTelegramMessageSafe } from '../bot/bot.service';
 import { logger } from '../lib/logger';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -80,7 +80,7 @@ export async function handleDeliverJob(job: Job) {
       const chunks = splitMessage(result.formattedMessage);
       let lastMsgId: number | undefined;
       for (const chunk of chunks) {
-        const msg = await bot.telegram.sendMessage(Number(user.telegramId), chunk, { parse_mode: 'Markdown', disable_web_page_preview: true } as any);
+        const msg = await sendTelegramMessageSafe(Number(user.telegramId), chunk);
         lastMsgId = msg.message_id;
         await sleep(50); // Respect Telegram rate limits
       }

@@ -27,6 +27,35 @@ interface AskSession {
 }
 const sessions = new Map<number, AskSession>();
 
+function isTelegramParseError(err: any): boolean {
+  return /can't parse entities/i.test(err?.message || '');
+}
+
+export async function sendTelegramMessageSafe(chatId: number, text: string) {
+  try {
+    return await bot.telegram.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true,
+    } as any);
+  } catch (err: any) {
+    if (!isTelegramParseError(err)) throw err;
+    logger.warn({ chatId, err: err.message }, 'Telegram markdown send failed, retrying without parse mode');
+    return bot.telegram.sendMessage(chatId, text, {
+      disable_web_page_preview: true,
+    } as any);
+  }
+}
+
+async function replySafe(ctx: any, text: string, extra: Record<string, unknown> = {}) {
+  try {
+    return await ctx.reply(text, { parse_mode: 'Markdown', ...extra } as any);
+  } catch (err: any) {
+    if (!isTelegramParseError(err)) throw err;
+    logger.warn({ err: err.message }, 'Telegram markdown reply failed, retrying without parse mode');
+    return ctx.reply(text, extra as any);
+  }
+}
+
 // ── DB helpers ────────────────────────────────────────────────────────────────
 async function getUser(telegramId: number) {
   return prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
@@ -345,7 +374,7 @@ function registerHandlers(instance: Telegraf) {
 
     try {
       const message = await runAnalysis(scheduleId);
-      await ctx.reply(message, { parse_mode: 'Markdown', disable_web_page_preview: true } as any);
+      await replySafe(ctx, message, { disable_web_page_preview: true });
     } catch (err: any) {
       logger.error({ err, scheduleId }, 'On-demand analysis failed');
       await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
@@ -396,7 +425,7 @@ function registerHandlers(instance: Telegraf) {
 
     try {
       const answer = await runFreeQuery(session.sourceId, text);
-      await ctx.reply(answer, { parse_mode: 'Markdown', disable_web_page_preview: true } as any);
+      await replySafe(ctx, answer, { disable_web_page_preview: true });
     } catch (err: any) {
       logger.error({ err, sourceId: session.sourceId }, 'Free query failed');
       await ctx.reply(`❌ Ошибка: ${err.message}`);
