@@ -74,6 +74,7 @@ Cron (node-cron)
 | Google Analytics 4 | `ga4` | Service Account JSON | GA4 Data API v1 |
 | Redmine | `redmine` | API Key header | `/issues.json` |
 | YouTrack | `youtrack` | Bearer token | `/api/issues` |
+| YouTrack Daily Progress | `youtrack_progress` | Bearer token | `/api/issues` (статусы + комментарии) |
 
 ### Что собирает GTO Comments коннектор
 
@@ -112,6 +113,7 @@ Cron (node-cron)
 | GA4 | Ежедневный, Еженедельный |
 | Redmine | Ежедневный, Еженедельный |
 | YouTrack | Ежедневный, Еженедельный |
+| YouTrack Daily Progress | Ежедневный (12:15 Europe/Kyiv) |
 
 **Периоды вычисляются автоматически:**
 - `daily` → вчера 00:00 — сегодня 00:00
@@ -355,12 +357,22 @@ ls -la /opt/backups/analytics/
 
 ## Последнее обновление
 
-Документация актуальна на: **1 апреля 2026**
+Документация актуальна на: **2 апреля 2026**
 
 ### История изменений
 
 | Дата | Изменение |
 |------|----------|
+| 02.04.2026 | YouTrack Daily Progress: новый коннектор (`youtrack_progress`) — ежедневный дайджест прогресса на основе изменений статусов и комментариев к задачам (расписание 12:15 Europe/Kyiv) |
+| 02.04.2026 | Удалён источник Fireflies из платформы |
+| 02.04.2026 | GTO: исправлен расчёт себестоимости для трансферов и PEN-строк (transfer price_buy не всегда EUR; PEN-строки не должны снижать маржу до подтверждения) |
+| 02.04.2026 | Telegram: автоматический fallback на plain text при ошибках parse_mode (LLM иногда генерирует небезопасный Markdown) |
+| 02.04.2026 | Deploy script: валидация артефактов сборки перед перезапуском PM2, restart вместо delete+start, post-restart health check API |
+| 02.04.2026 | Deploy script: auto-stash грязных изменений на сервере перед git pull, retry npm install с очисткой node_modules при broken install state |
+| 02.04.2026 | GTO: anomaly detection разделён на две категории — отрицательная маржа и завышенная цена |
+| 02.04.2026 | Connector logs: лимит записей на странице увеличен с 1000 до 5000 |
+| 02.04.2026 | GTO: улучшена точность данных (пагинация, диагностика), исправлено определение валюты для отелей и услуг |
+| 02.04.2026 | Seed: принудительная активация v1 промпта при деплое, backfill source preferences |
 | 01.04.2026 | GTO Comments Analysis: новый коннектор с AI-анализом комментариев к заказам (сегодня + вчера), выявление тем по статусам CNF/CNX/ORQ/PEN, срочные комментарии, фильтрация авто-сообщений |
 | 01.04.2026 | HTTP-логи: персистентное хранение на диск (14-дневная ротация через NDJSON-файлы), полный body ответа до 100 КБ, нет ограничений по размеру |
 | 01.04.2026 | Логирование OpenAI: запросы и ответы к OpenAI теперь пишутся в connector logs (как отдельный источник `openai`) |
