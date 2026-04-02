@@ -84,6 +84,34 @@ function formatTourStartMonthLines(months: any[] = []) {
   );
 }
 
+function formatProductLines(products: any = {}) {
+  const labels = [
+    { key: 'package', label: '🏨Пакет' },
+    { key: 'hotel', label: '🏩Отель' },
+    { key: 'flight', label: '✈️Перелёт' },
+    { key: 'transfer', label: '🚐Трансферы' },
+    { key: 'insurance', label: '🛡️Страховки' },
+  ];
+
+  return labels
+    .map(({ key, label }) => ({ label, data: products?.[key] }))
+    .filter(item => item.data && item.data.orders > 0)
+    .map(item => `${item.label} ${Math.round(item.data.orders).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} зак / ${Math.round(item.data.tourists).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} тур, ср. глубина ${item.data.avg_lead_days ?? '—'} дн.`);
+}
+
+function injectProductBlocks(text: string, sections: any[] = []) {
+  let occurrence = 0;
+  return text.replace(
+    /---📦 Продукты---[\s\S]*?(?=\n\n(?:---🗓 Старт туров---|👥|💎|Самые популярные поставщики|🔴|📊 За последние 7 дней|🔮|$))/gu,
+    () => {
+      const section = sections[occurrence++];
+      const lines = formatProductLines(section?.product_breakdown || {});
+      if (lines.length === 0) return '---📦 Продукты---';
+      return `---📦 Продукты---\n${lines.join('\n')}`;
+    },
+  );
+}
+
 function injectTourStartMonthsBlock(text: string, months: any[] = []) {
   const lines = formatTourStartMonthLines(months);
   if (lines.length === 0) return text;
@@ -148,6 +176,10 @@ export async function handleAnalyzeJob(job: Job) {
     if (schedule?.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
       formattedMessage = formatGtoReportText(formattedMessage);
+      formattedMessage = injectProductBlocks(formattedMessage, [
+        (result.normalizedData as any)?.computed?.section1_yesterday,
+        (result.normalizedData as any)?.computed?.section2_last_7_days,
+      ]);
       formattedMessage = injectTourStartMonthsBlock(formattedMessage, (result.normalizedData as any)?.computed?.section1_yesterday?.tour_start_months || []);
     }
   }

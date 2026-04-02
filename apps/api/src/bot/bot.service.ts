@@ -500,11 +500,12 @@ function formatProductLines(products: any): string[] {
     { key: 'package', label: '🏨Пакет' },
     { key: 'hotel', label: '🏩Отель' },
     { key: 'flight', label: '✈️Перелёт' },
+    { key: 'transfer', label: '🚐Трансферы' },
+    { key: 'insurance', label: '🛡️Страховки' },
   ]
     .map(({ key, label }) => ({ label, data: products?.[key] }))
     .filter(item => item.data && item.data.orders > 0)
-    .slice(0, 3)
-    .map(item => `${item.label} ${formatInt(item.data.orders)} зак / ${formatInt(item.data.tourists)} тур`);
+    .map(item => `${item.label} ${formatInt(item.data.orders)} зак / ${formatInt(item.data.tourists)} тур, ср. глубина ${item.data.avg_lead_days ?? '—'} дн.`);
 }
 
 function formatSupplierLines(suppliers: any[]): string[] {

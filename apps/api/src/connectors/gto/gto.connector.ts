@@ -586,18 +586,20 @@ export class GTOConnector implements SourceConnector {
       (s.flight_details?.segment?.length > 0) ||
       (s.service_type_name || s.type || '').toLowerCase().match(/avia|авіа|авиа|air|flight/),
     );
-    const hasInsurance   = activeServices.some((s: any) =>
-      (s.service_type_name || s.type || s.name || '').toLowerCase().match(/insur|страх/),
-    );
-    const hasTransfer    = activeServices.some((s: any) =>
-      (s.service_type_name || s.type || '').toLowerCase().match(/transfer|трансф/),
-    );
+    const isInsuranceService = (s: any) =>
+      Boolean((s.service_type_name || s.type || s.name || '').toLowerCase().match(/insur|страх/));
+    const isTransferService = (s: any) =>
+      Boolean((s.service_type_name || s.type || '').toLowerCase().match(/transfer|трансф/));
+    const hasInsurance   = activeServices.some((s: any) => isInsuranceService(s));
+    const hasTransfer    = activeServices.some((s: any) => isTransferService(s));
+    const isStandaloneTransfer = !hasHotel && !hasFlight && hasTransfer && activeServices.every((s: any) => isTransferService(s));
+    const isStandaloneInsurance = !hasHotel && !hasFlight && !hasTransfer && hasInsurance && activeServices.every((s: any) => isInsuranceService(s));
 
     let productType: 'package' | 'hotel' | 'flight' | 'transfer' | 'other';
     if (hasHotel && hasFlight)     productType = 'package';
     else if (hasHotel)             productType = 'hotel';
     else if (hasFlight)            productType = 'flight';
-    else if (hasTransfer)          productType = 'transfer';
+    else if (isStandaloneTransfer) productType = 'transfer';
     else                           productType = 'other';
 
     // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
@@ -618,6 +620,7 @@ export class GTOConnector implements SourceConnector {
       profitPct,
       productType,
       hasInsurance,
+      isStandaloneInsurance,
       agentName,
       startDate,
       createdAt,
@@ -654,6 +657,41 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
+    const createProductBuckets = () => ({
+      package: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+      hotel: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+      flight: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+      transfer: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+      other: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+      insurance: { orders: 0, tourists: 0, lead_days_sum: 0, lead_days_count: 0 },
+    });
+    const addProductMetric = (
+      buckets: ReturnType<typeof createProductBuckets>,
+      key: keyof ReturnType<typeof createProductBuckets>,
+      tourists: number,
+      leadDays?: number | null,
+    ) => {
+      buckets[key].orders++;
+      buckets[key].tourists += tourists;
+      if (typeof leadDays === 'number' && Number.isFinite(leadDays)) {
+        buckets[key].lead_days_sum += leadDays;
+        buckets[key].lead_days_count += 1;
+      }
+    };
+    const finalizeProductBuckets = (buckets: ReturnType<typeof createProductBuckets>) =>
+      Object.fromEntries(
+        Object.entries(buckets).map(([key, value]) => [
+          key,
+          {
+            orders: value.orders,
+            tourists: value.tourists,
+            avg_lead_days: value.lead_days_count > 0
+              ? Math.round(value.lead_days_sum / value.lead_days_count)
+              : null,
+          },
+        ]),
+      );
+
     const filteredOrders = orders.filter(o => {
       const detail = detailMap.get(o.order_id);
       const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
@@ -668,11 +706,7 @@ export class GTOConnector implements SourceConnector {
     let totalTourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number>  = {};
     const touristsPerCountry: Record<string, number> = {};
-    const products: Record<string, { orders: number; tourists: number }> = {
-      package: { orders: 0, tourists: 0 }, hotel: { orders: 0, tourists: 0 },
-      flight: { orders: 0, tourists: 0 }, transfer: { orders: 0, tourists: 0 },
-      other: { orders: 0, tourists: 0 }, insurance: { orders: 0, tourists: 0 },
-    };
+    const products = createProductBuckets();
     const agents:    Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const suppliers: Record<string, { orders: number; cost: number }> = {};
     const orderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
@@ -687,11 +721,7 @@ export class GTOConnector implements SourceConnector {
     let activeProfitEur = 0;
     const activeDestinations: Record<string, number> = {};
     const activeTouristsPerCountry: Record<string, number> = {};
-    const activeProducts: Record<string, { orders: number; tourists: number }> = {
-      package: { orders: 0, tourists: 0 }, hotel: { orders: 0, tourists: 0 },
-      flight: { orders: 0, tourists: 0 }, transfer: { orders: 0, tourists: 0 },
-      other: { orders: 0, tourists: 0 }, insurance: { orders: 0, tourists: 0 },
-    };
+    const activeProducts = createProductBuckets();
     const activeAgents: Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const activeSuppliers: Record<string, { orders: number; cost: number }> = {};
     const activeOrderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
@@ -705,9 +735,8 @@ export class GTOConnector implements SourceConnector {
         touristsPerCountry[c] = (touristsPerCountry[c] || 0) + m.tourists;
       }
 
-      products[m.productType].orders++;
-      products[m.productType].tourists += m.tourists;
-      if (m.hasInsurance) { products.insurance.orders++; products.insurance.tourists += m.tourists; }
+      addProductMetric(products, m.productType, m.tourists, m.leadDays);
+      if (m.isStandaloneInsurance) addProductMetric(products, 'insurance', m.tourists, m.leadDays);
 
       if (m.agentName) {
         if (!agents[m.agentName]) agents[m.agentName] = { orders: 0, revenue: 0, tourists: 0 };
@@ -730,9 +759,8 @@ export class GTOConnector implements SourceConnector {
         activeTouristsPerCountry[c] = (activeTouristsPerCountry[c] || 0) + m.tourists;
       }
 
-      activeProducts[m.productType].orders++;
-      activeProducts[m.productType].tourists += m.tourists;
-      if (m.hasInsurance) { activeProducts.insurance.orders++; activeProducts.insurance.tourists += m.tourists; }
+      addProductMetric(activeProducts, m.productType, m.tourists, m.leadDays);
+      if (m.isStandaloneInsurance) addProductMetric(activeProducts, 'insurance', m.tourists, m.leadDays);
 
       if (m.agentName) {
         if (!activeAgents[m.agentName]) activeAgents[m.agentName] = { orders: 0, revenue: 0, tourists: 0 };
@@ -861,7 +889,7 @@ export class GTOConnector implements SourceConnector {
           tourists: touristsPerCountry[country] || 0,
           pct: totalTourists > 0 ? Math.round((touristsPerCountry[country] || 0) / totalTourists * 100) : 0,
         })),
-      product_breakdown: products,
+      product_breakdown: finalizeProductBuckets(products),
       top_agents_by_orders:      this.topList(agents, 'orders', 5),
       top_agents_by_revenue:     this.topList(agents, 'revenue', 5),
       top_suppliers_by_orders:   this.topSupplierList(suppliers, 5),
@@ -892,7 +920,7 @@ export class GTOConnector implements SourceConnector {
             tourists: activeTouristsPerCountry[country] || 0,
             pct: activeTourists > 0 ? Math.round((activeTouristsPerCountry[country] || 0) / activeTourists * 100) : 0,
           })),
-        product_breakdown: activeProducts,
+        product_breakdown: finalizeProductBuckets(activeProducts),
         top_agents_by_orders: this.topList(activeAgents, 'orders', 5),
         top_suppliers_by_orders: this.topSupplierList(activeSuppliers, 5),
         most_expensive_order: activeByPrice[0]

@@ -182,6 +182,8 @@ Key models:
 - `Today` GTO report should use the current business day period; `revenue` and `tourists` are calculated over all non-cancelled orders, while `profit` and `avg check` remain CNF-only to avoid overstating margin from ORQ/PEN orders
 - `Yesterday` and `Today` GTO reports should include a `Старт туров` block grouped by start month (for example `июнь 2026 - 10 туристов, GMV 2034 EUR, profit 432 EUR, ср. глубина 24 дн.`)
 - Average sales depth is the number of days between order creation date and travel start date; show it in the `Старт туров` block as `ср. глубина X дн.`
+- Telegram GTO `Продукты` blocks should include average sales depth per product line as `ср. глубина X дн.`
+- Telegram GTO `Продукты` blocks should include separate lines for `Трансферы` and `Страховки`, but only for standalone orders where that is the only active product in the order
 
 ---
 
