@@ -27,6 +27,45 @@ interface AskSession {
 }
 const sessions = new Map<number, AskSession>();
 
+function stripSummerSection(text: string): string {
+  return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
+}
+
+function formatInt(value: number): string {
+  return Math.round(value).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
+}
+
+function formatSummerSalesOutlook(metrics: any): string {
+  const section = metrics?.computed?.section4_summer;
+  if (!section) throw new Error('Летние данные недоступны');
+
+  const months = [section.june, section.july, section.august].filter(Boolean);
+  const topDestinations = Array.isArray(section.top_destinations_combined)
+    ? section.top_destinations_combined.slice(0, 5)
+    : [];
+
+  const lines: string[] = [
+    '☀️ *Summer Sales Outlook*',
+    `Сезон: лето ${section.year || ''}`.trim(),
+    '',
+  ];
+
+  for (const month of months) {
+    lines.push(
+      `${month.label}: ${formatInt(month.confirmed_orders)} зак / ${formatInt(month.tourists)} туристов / GMV: ${formatInt(month.revenue_eur)} EUR / Gross profit: ${formatInt(month.profit_eur)} EUR (${month.profit_pct}%)`,
+    );
+  }
+
+  if (topDestinations.length > 0) {
+    lines.push('', 'Самые популярные направления:');
+    for (const d of topDestinations) {
+      lines.push(`${d.flag || ''}${d.country} - ${formatInt(d.tourists)} туристов (${d.pct}%)`.trim());
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function isTelegramParseError(err: any): boolean {
   return /can't parse entities/i.test(err?.message || '');
 }
@@ -111,9 +150,10 @@ async function buildReportsKeyboard(userId: string) {
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+  rows.push([Markup.button.callback('☀️ Summer Sales Outlook', 'reports:summer')]);
 
   return {
-    text: '📋 *Мои подписки на отчёты*\n\nНажмите кнопку чтобы включить/выключить:',
+    text: '📋 *Мои подписки на отчёты*\n\nНажмите кнопку чтобы включить/выключить подписку или открыть отдельный сезонный отчёт:',
     keyboard: Markup.inlineKeyboard(rows),
   };
 }
@@ -194,7 +234,35 @@ async function runAnalysis(scheduleId: string): Promise<string> {
     runId: `bot-ondemand-${Date.now()}`,
   });
 
-  return analysis.telegramMessage;
+  let message = analysis.telegramMessage;
+  if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
+    message = stripSummerSection(message);
+  }
+
+  return message;
+}
+
+async function runSummerSalesOutlook(): Promise<string> {
+  const source = await prisma.dataSource.findFirst({
+    where: { type: 'gto', isEnabled: true },
+  });
+  if (!source) throw new Error('Источник GTO не найден или отключён');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: source.id } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach(s => { settings[s.key] = s.value; });
+
+  const timezone = await getSourceTimezone(source.id);
+  const { periodStart, periodEnd } = computePeriod('daily' as any, timezone);
+  const connector = connectorRegistry.get(source.type);
+  const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+  if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');
+
+  return formatSummerSalesOutlook(result.data.metrics);
 }
 
 // ── Core: fetch data + answer a free-form question via LLM ───────────────────
@@ -342,6 +410,26 @@ function registerHandlers(instance: Telegraf) {
     const { text, keyboard } = await buildReportsKeyboard(user.id);
     await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
     await ctx.answerCbQuery(!current ? '✅ Подписка включена' : '❌ Подписка отключена');
+  });
+
+  // Callback: open separate summer sales outlook from /reports submenu
+  instance.action('reports:summer', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Summer Sales Outlook*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const message = await runSummerSalesOutlook();
+      await replySafe(ctx, message, { disable_web_page_preview: true });
+    } catch (err: any) {
+      logger.error({ err }, 'Summer sales outlook failed');
+      await ctx.reply(`❌ Ошибка генерации летнего отчёта: ${err.message}`);
+    }
   });
 
   // /generate — show schedule selection keyboard

@@ -121,7 +121,6 @@ async function main() {
 • section2_last_7_days — заявки за последние 7 дней
 • section3_upcoming_7days — подтверждённые туры со стартом в ближайшие 7 дней
 • section3_upcoming_30days — подтверждённые туры со стартом в ближайшие 30 дней
-• section4_summer — подтверждённые туры июнь/июль/август (+ top_destinations_combined по всему лету)
 
 Поля секций 1 и 2:
   orders: {total, confirmed, cancelled, pending}
@@ -136,10 +135,6 @@ async function main() {
 Поля секций 3 (7d и 30d):
   confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
   top_destinations: [{country, flag, tourists, pct}]
-
-Поля секции 4 (june/july/august):
-  confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct
-  top_destinations_combined (только в корне section4): [{country, flag, tourists, pct}]
 
 Верни ТОЛЬКО валидный JSON:
 {
@@ -216,22 +211,10 @@ async function main() {
 🇪🇸Испания - X туристов (X%)
 🇮🇹Италия - X туристов (X%)
 
-
-☀️ Лето:
-Июнь: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
-Июль: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
-Август: X зак / X туристов / GMV: X EUR / Gross profit: X EUR (X%)
-
-Самые популярные направления:
-🇪🇸Испания - X туристов (X%)
-🇬🇷Греция - X туристов (X%)
-🇹🇷Турция - X туристов (X%)
-
 ИСТОЧНИК ДАННЫХ:
 - section1_yesterday: period.from = дата вчерашнего дня (только 1 день). Используй orders.total, orders.confirmed, orders.cancelled, orders.pending — ДОСЛОВНО.
 - section2_last_7_days: аналогично, за 7 дней.
 - section3_upcoming_7days / section3_upcoming_30days: confirmed_orders, tourists, revenue_eur, profit_eur, profit_pct.
-- section4_summer: june/july/august с confirmed_orders, tourists; top_destinations_combined — суммарно по всему лету.
 
 ПРАВИЛА ПОДСТАНОВКИ (выполнять строго):
 - Заявки вчера: section1_yesterday.orders.confirmed / .cancelled / .pending / .total

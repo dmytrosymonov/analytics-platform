@@ -153,6 +153,12 @@ Key models:
 - `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
 - Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
 
+## Telegram Bot Reports
+
+- Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
+- Summer season overview is exposed from the Telegram `/reports` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
+- Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
+
 ---
 
 ## Telegram Delivery Notes
@@ -231,11 +237,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T06:13:08Z
+- Generated at (UTC): 2026-04-02T09:04:41Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: fb554e5 (fb554e548f324a31cdb7dc074da4e4cf48365683)
-- Commit date: 2026-04-02T08:10:04+02:00
+- Commit: 6a9e024 (6a9e02454fac97d8cfa4cb48811f529065304eb5)
+- Commit date: 2026-04-02T11:03:13+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

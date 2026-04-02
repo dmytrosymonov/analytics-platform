@@ -153,6 +153,12 @@ Key models:
 - `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
 - Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
 
+## Telegram Bot Reports
+
+- Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
+- Summer season overview is exposed from the Telegram `/reports` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
+- Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
+
 ---
 
 ## Telegram Delivery Notes

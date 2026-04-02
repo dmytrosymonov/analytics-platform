@@ -5,6 +5,10 @@ import { promptRegistry } from '../llm/prompt-registry.service';
 import { deliverQueue } from '../queue/queues';
 import { logger } from '../lib/logger';
 
+function stripSummerSection(text: string) {
+  return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
+}
+
 export async function handleAnalyzeJob(job: Job) {
   const { runId, sourceId } = job.data;
   logger.info({ runId, sourceId }, 'Starting analyze job');
@@ -53,6 +57,14 @@ export async function handleAnalyzeJob(job: Job) {
     runId,
   });
 
+  let formattedMessage = llmResult.telegramMessage;
+  if (source?.type === 'gto' && run?.scheduleId) {
+    const schedule = await prisma.reportSchedule.findUnique({ where: { id: run.scheduleId } });
+    if (schedule?.periodType === 'daily') {
+      formattedMessage = stripSummerSection(formattedMessage);
+    }
+  }
+
   await prisma.reportResult.update({
     where: { runId_sourceId: { runId, sourceId } },
     data: {
@@ -60,7 +72,7 @@ export async function handleAnalyzeJob(job: Job) {
       llmRequest: { system: rendered.system, user: rendered.user } as any,
       llmResponse: llmResult.structuredOutput as any,
       structuredOutput: llmResult.structuredOutput as any,
-      formattedMessage: llmResult.telegramMessage,
+      formattedMessage,
       tokenUsage: llmResult.tokenUsage as any,
       llmModel: llmResult.model,
       llmCostUsd: llmResult.costUsd,
