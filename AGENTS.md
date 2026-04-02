@@ -192,6 +192,7 @@ Key models:
 - Manual `/generate` replies and background report delivery first try `Markdown` in Telegram
 - If Telegram rejects the message with a parse-entities error, the bot automatically retries the same text without `parse_mode`
 - This fallback is intended to keep report generation working even when LLM output contains unsafe Markdown
+- `YouTrack Daily Progress` post-processes Telegram text and expands bare issue keys to `KEY — task title`, so blocks like `кто что сделал` and `основные проблемы` stay readable even if the LLM omits the summary after a task key
 - In Telegram reports menu, `YouTrack Daily Progress` also exposes separate manual buttons for rolling windows: `24h`, `48h`, `72h`
 - These rolling-window buttons are manual-only and use the current moment minus the selected number of hours, not calendar-day boundaries
 

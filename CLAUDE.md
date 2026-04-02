@@ -192,6 +192,7 @@ Key models:
 - Manual `/generate` replies and background report delivery first try `Markdown` in Telegram
 - If Telegram rejects the message with a parse-entities error, the bot automatically retries the same text without `parse_mode`
 - This fallback is intended to keep report generation working even when LLM output contains unsafe Markdown
+- `YouTrack Daily Progress` post-processes Telegram text and expands bare issue keys to `KEY — task title`, so blocks like `кто что сделал` and `основные проблемы` stay readable even if the LLM omits the summary after a task key
 - In Telegram reports menu, `YouTrack Daily Progress` also exposes separate manual buttons for rolling windows: `24h`, `48h`, `72h`
 - These rolling-window buttons are manual-only and use the current moment minus the selected number of hours, not calendar-day boundaries
 
@@ -265,11 +266,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T19:12:39Z
+- Generated at (UTC): 2026-04-02T19:20:28Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: f67386c (f67386c35f7d15f47312915591d53952d2476e9a)
-- Commit date: 2026-04-02T20:36:03+02:00
+- Commit: 5608ad0 (5608ad0528dc009794331eef70cc5cf189b1fb67)
+- Commit date: 2026-04-02T21:12:45+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

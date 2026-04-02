@@ -8,6 +8,7 @@ import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
 import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone } from '../scheduler/scheduler.service';
+import { enrichYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -314,7 +315,7 @@ async function buildYoutrackReportsMenu() {
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (const schedule of schedules) {
     rows.push([Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`)]);
-    if (schedule.source.type === 'youtrack_progress') {
+    if (String(schedule.source.type) === 'youtrack_progress') {
       rows.push([
         Markup.button.callback('24h', `gen:youtrack_hours:${schedule.id}:24`),
         Markup.button.callback('48h', `gen:youtrack_hours:${schedule.id}:48`),
@@ -436,6 +437,9 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
         (fetchResult.data.metrics as any)?.computed?.section2_last_7_days,
       ]);
       formattedMessage = injectTourStartMonthsBlock(formattedMessage, (fetchResult.data.metrics as any)?.computed?.section1_yesterday?.tour_start_months || []);
+    }
+    if (String(schedule.source.type) === 'youtrack_progress') {
+      formattedMessage = enrichYouTrackProgressTelegramMessage(formattedMessage, fetchResult.data.metrics);
     }
 
     await prisma.reportResult.update({
@@ -604,6 +608,10 @@ async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promi
       runId: run.id,
     });
 
+    const formattedMessage = String(schedule.source.type) === 'youtrack_progress'
+      ? enrichYouTrackProgressTelegramMessage(analysis.telegramMessage, fetchResult.data.metrics)
+      : analysis.telegramMessage;
+
     await prisma.reportResult.update({
       where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
       data: {
@@ -611,7 +619,7 @@ async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promi
         llmRequest: { system: rendered.system, user: rendered.user } as any,
         llmResponse: analysis.structuredOutput as any,
         structuredOutput: analysis.structuredOutput as any,
-        formattedMessage: analysis.telegramMessage,
+        formattedMessage,
         tokenUsage: analysis.tokenUsage as any,
         llmModel: analysis.model,
         llmCostUsd: analysis.costUsd,
@@ -631,7 +639,7 @@ async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promi
     return {
       runId: run.id,
       resultId: storedResult.id,
-      message: analysis.telegramMessage,
+      message: formattedMessage,
     };
   } catch (err: any) {
     const errorSummary = err?.message || 'Rolling hours generation failed';
@@ -1145,7 +1153,7 @@ function registerHandlers(instance: Telegraf) {
       include: { source: { select: { name: true, type: true } } },
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
-    if (schedule.source.type !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
+    if (String(schedule.source.type) !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
 
     await ctx.editMessageText(
       `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${hours}h*...\nЭто может занять 1–2 минуты.`,
