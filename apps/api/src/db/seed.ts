@@ -218,22 +218,26 @@ async function main() {
 
 ПРАВИЛА ПОДСТАНОВКИ (выполнять строго):
 - Заявки вчера: section1_yesterday.orders.confirmed / .cancelled / .pending / .total
-- Туристы вчера: section1_yesterday.tourists
-- Выручка вчера: section1_yesterday.financials.revenue_eur (округлить до целого EUR)
-- Прибыль вчера: section1_yesterday.financials.profit_eur (округлить) и .profit_pct
-- Средний чек: section1_yesterday.financials.avg_order_eur
-- Направления: section1_yesterday.top_destinations[0..2] → country + flag + orders + tourists
-- Продукты: section1_yesterday.product_breakdown (package, hotel, flight)
-- Топ агент: section1_yesterday.top_agents_by_orders[0]
+- Туристы вчера: section1_yesterday.tourists (по всем заявкам дня)
+- Выручка вчера: section1_yesterday.financials.revenue_eur (округлить до целого EUR, это метрика только по подтверждённым CNF)
+- Прибыль вчера: section1_yesterday.financials.profit_eur (округлить) и .profit_pct (только по подтверждённым CNF)
+- Средний чек: section1_yesterday.financials.avg_order_eur (только по подтверждённым CNF)
+- Направления: section1_yesterday.top_destinations[0..2] → country + flag + orders + tourists (по всем заявкам дня)
+- Продукты: section1_yesterday.product_breakdown (package, hotel, flight) (по всем заявкам дня)
+- Топ агент: section1_yesterday.top_agents_by_orders[0] (по всем заявкам дня)
 - Самый дорогой: section1_yesterday.most_expensive_order → order_id и price_eur
 - Топ поставщики: section1_yesterday.top_suppliers_by_orders[0..2]
 - Аномалии (отрицательная маржа): section1_yesterday.negative_margin_orders (все записи) + .negative_margin_count
 - Прочие аномалии: section1_yesterday.anomalies (все записи)
-- Аналогично для section2 (7 дней) — ТОЛЬКО из этой секции, ничего не пересчитывай.
+- Аналогично для section2 (7 дней): туристы/направления/продукты/топ агент по всем заявкам периода, а финансы — только по подтверждённым CNF.
 
 ФОРМАТИРОВАНИЕ:
 - Дату: ДД/ММ/ГГГГ из поля period.from.
 - EUR суммы: Math.round(value), разделитель тысяч ПРОБЕЛ.
+- Для денежных строк daily/7-day явно подписывай, что это `по CNF`:
+  `💶 Выручка по CNF: ...`
+  `Прибыль по CNF: ...`
+  `💼 Средний чек по CNF: ...`
 - Штуки: целые числа, без разделителя если < 10000.
 - Направления "🌍": топ-3, формат "🏳Страна X зак / X тур" (orders и tourists).
 - Продукты 📦: emoji 🏨 Пакет, 🏩 Отель, ✈️ Перелёт; показывай orders и tourists.

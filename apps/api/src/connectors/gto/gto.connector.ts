@@ -635,17 +635,12 @@ export class GTOConnector implements SourceConnector {
     const agents:    Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const suppliers: Record<string, { orders: number; cost: number }> = {};
     const orderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
+    const allWithDetails = orders
+      .map(o => this.extractOrder(o, detailMap.get(o.order_id), rates))
+      .filter((m): m is NonNullable<typeof m> => Boolean(m));
 
-    for (const o of confirmed) {
-      const detail = detailMap.get(o.order_id);
-      const m = this.extractOrder(o, detail, rates);
-      if (!m) continue;
-
-      confirmedWithDetails++;
+    for (const m of allWithDetails) {
       totalTourists += m.tourists;
-      revenueEur    += m.priceEur;
-      costEur       += m.costEur;
-      profitEur     += m.profitEur;
 
       for (const c of m.countries) {
         destinations[c] = (destinations[c] || 0) + 1;
@@ -662,6 +657,17 @@ export class GTOConnector implements SourceConnector {
         agents[m.agentName].revenue += m.priceEur;
         agents[m.agentName].tourists += m.tourists;
       }
+    }
+
+    for (const o of confirmed) {
+      const detail = detailMap.get(o.order_id);
+      const m = this.extractOrder(o, detail, rates);
+      if (!m) continue;
+
+      confirmedWithDetails++;
+      revenueEur    += m.priceEur;
+      costEur       += m.costEur;
+      profitEur     += m.profitEur;
       for (const [sup, cost] of Object.entries(m.supplierCosts)) {
         if (!suppliers[sup]) suppliers[sup] = { orders: 0, cost: 0 };
         suppliers[sup].orders++;

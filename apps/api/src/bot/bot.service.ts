@@ -31,6 +31,13 @@ function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
 }
 
+function annotateCnfFinancials(text: string): string {
+  return text
+    .replace(/^💶\s*Выручка:/gmu, '💶 Выручка по CNF:')
+    .replace(/^Прибыль:/gmu, 'Прибыль по CNF:')
+    .replace(/^💼\s*Средний чек:/gmu, '💼 Средний чек по CNF:');
+}
+
 function formatInt(value: number): string {
   return Math.round(value).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
 }
@@ -277,6 +284,7 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
     let formattedMessage = analysis.telegramMessage;
     if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
+      formattedMessage = annotateCnfFinancials(formattedMessage);
     }
 
     await prisma.reportResult.update({

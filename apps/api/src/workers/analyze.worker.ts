@@ -9,6 +9,13 @@ function stripSummerSection(text: string) {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
 }
 
+function annotateCnfFinancials(text: string) {
+  return text
+    .replace(/^💶\s*Выручка:/gmu, '💶 Выручка по CNF:')
+    .replace(/^Прибыль:/gmu, 'Прибыль по CNF:')
+    .replace(/^💼\s*Средний чек:/gmu, '💼 Средний чек по CNF:');
+}
+
 export async function handleAnalyzeJob(job: Job) {
   const { runId, sourceId } = job.data;
   logger.info({ runId, sourceId }, 'Starting analyze job');
@@ -62,6 +69,7 @@ export async function handleAnalyzeJob(job: Job) {
     const schedule = await prisma.reportSchedule.findUnique({ where: { id: run.scheduleId } });
     if (schedule?.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
+      formattedMessage = annotateCnfFinancials(formattedMessage);
     }
   }
 
