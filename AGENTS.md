@@ -157,7 +157,7 @@ Key models:
 
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu with sections `Sales`, `Comments`, and `Youtrack`
-- `Sales` submenu currently includes `Daily`, `Today`, and `Summer`
+- `Sales` submenu currently includes `Yesterday`, `Today`, and `Summer`
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
@@ -180,6 +180,7 @@ Key models:
 - Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
 - `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
 - `Today` GTO report should use the current business day period; `revenue` and `tourists` are calculated over all non-cancelled orders, while `profit` and `avg check` remain CNF-only to avoid overstating margin from ORQ/PEN orders
+- `Yesterday` and `Today` GTO reports should include a `Старт туров` block grouped by start month (for example `июнь 2026 - 10 туристов, GMV 2034 EUR, profit 432 EUR`)
 
 ---
 

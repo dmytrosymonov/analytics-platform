@@ -75,6 +75,7 @@ const COUNTRY_EMOJI: Record<string, string> = {
   'USA': '🇺🇸', 'США': '🇺🇸',
 };
 const countryEmoji = (name: string) => COUNTRY_EMOJI[name] ?? '';
+const RU_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
 
 function shiftDateString(dateStr: string, offsetDays: number): string {
   const [year, month, day] = dateStr.split('-').map(Number);
@@ -96,6 +97,16 @@ export class GTOConnector implements SourceConnector {
 
   private isIgnoredAgent(name: string) {
     return this.ignoredAgentNames.has(name);
+  }
+
+  private monthBucketLabel(dateStr?: string | null) {
+    if (!dateStr) return null;
+    const match = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    if (!year || !month || month < 1 || month > 12) return null;
+    return `${RU_MONTHS[month - 1]} ${year}`;
   }
 
   private httpClient(baseUrl: string, apiKey: string, timeout: number) {
@@ -582,6 +593,7 @@ export class GTOConnector implements SourceConnector {
     // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
     const agentName = this.normalizeAgentName(rawAgent);
+    const startDate = detail.date_start || orderSummary?.date_start || null;
 
     return {
       orderId:        detail.order_id || orderSummary?.order_id,
@@ -595,6 +607,7 @@ export class GTOConnector implements SourceConnector {
       productType,
       hasInsurance,
       agentName,
+      startDate,
       supplierCosts,  // map: supplier_name → their specific service cost in this order
     };
   }
@@ -668,6 +681,7 @@ export class GTOConnector implements SourceConnector {
     const activeAgents: Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const activeSuppliers: Record<string, { orders: number; cost: number }> = {};
     const activeOrderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
+    const startMonthBuckets: Record<string, { tourists: number; revenue_eur: number; profit_eur: number }> = {};
 
     for (const m of allWithDetails) {
       totalTourists += m.tourists;
@@ -692,8 +706,10 @@ export class GTOConnector implements SourceConnector {
     for (const m of activeWithDetails) {
       activeTourists += m.tourists;
       activeRevenueEur += m.priceEur;
-      activeCostEur += m.costEur;
-      activeProfitEur += m.profitEur;
+      if (m.status === 'CNF') {
+        activeCostEur += m.costEur;
+        activeProfitEur += m.profitEur;
+      }
 
       for (const c of m.countries) {
         activeDestinations[c] = (activeDestinations[c] || 0) + 1;
@@ -724,6 +740,16 @@ export class GTOConnector implements SourceConnector {
         profitEur: m.profitEur,
         profitPct: m.profitPct,
       });
+
+      const monthLabel = this.monthBucketLabel(m.startDate);
+      if (monthLabel) {
+        if (!startMonthBuckets[monthLabel]) {
+          startMonthBuckets[monthLabel] = { tourists: 0, revenue_eur: 0, profit_eur: 0 };
+        }
+        startMonthBuckets[monthLabel].tourists += m.tourists;
+        startMonthBuckets[monthLabel].revenue_eur += m.priceEur;
+        if (m.status === 'CNF') startMonthBuckets[monthLabel].profit_eur += m.profitEur;
+      }
     }
 
     for (const o of confirmed) {
@@ -773,6 +799,14 @@ export class GTOConnector implements SourceConnector {
 
     const profitPct = revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0;
     const activeProfitPct = activeRevenueEur > 0 ? Math.round(activeProfitEur / activeRevenueEur * 100) : 0;
+    const tourStartMonths = Object.entries(startMonthBuckets)
+      .sort((a, b) => b[1].tourists - a[1].tourists)
+      .map(([month, data]) => ({
+        month,
+        tourists: Math.round(data.tourists),
+        revenue_eur: r2(data.revenue_eur),
+        profit_eur: r2(data.profit_eur),
+      }));
 
     return {
       orders: {
@@ -818,6 +852,7 @@ export class GTOConnector implements SourceConnector {
       anomalies: [],
       negative_margin_orders,          // ALL orders with profit_pct < 0, sorted worst-first
       negative_margin_count: negative_margin_orders.length,
+      tour_start_months: tourStartMonths,
       non_cancelled_snapshot: {
         orders_total: activeOrders.length,
         tourists: activeTourists,
@@ -846,6 +881,7 @@ export class GTOConnector implements SourceConnector {
           : null,
         negative_margin_orders: activeNegativeMarginOrders,
         negative_margin_count: activeNegativeMarginOrders.length,
+        tour_start_months: tourStartMonths,
       },
       data_available: filteredOrders.length > 0,
     };

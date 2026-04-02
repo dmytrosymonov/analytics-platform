@@ -157,7 +157,7 @@ Key models:
 
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu with sections `Sales`, `Comments`, and `Youtrack`
-- `Sales` submenu currently includes `Daily`, `Today`, and `Summer`
+- `Sales` submenu currently includes `Yesterday`, `Today`, and `Summer`
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
@@ -179,7 +179,8 @@ Key models:
 - In `🔮` upcoming blocks, destination lines should be sorted by tourist count descending
 - Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
 - `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
-- `Today` GTO report should use the current business day period and calculate revenue/profit/tourists over all non-cancelled orders
+- `Today` GTO report should use the current business day period; `revenue` and `tourists` are calculated over all non-cancelled orders, while `profit` and `avg check` remain CNF-only to avoid overstating margin from ORQ/PEN orders
+- `Yesterday` and `Today` GTO reports should include a `Старт туров` block grouped by start month (for example `июнь 2026 - 10 туристов, GMV 2034 EUR, profit 432 EUR`)
 
 ---
 
@@ -259,11 +260,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T15:51:12Z
+- Generated at (UTC): 2026-04-02T16:06:32Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 1b2fca0 (1b2fca0688e8d9424696d442e81c605daa3a56e7)
-- Commit date: 2026-04-02T16:35:12+02:00
+- Commit: 5cdbd69 (5cdbd69241827210ecb140469e106c7e3e0ecc9f)
+- Commit date: 2026-04-02T17:59:51+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

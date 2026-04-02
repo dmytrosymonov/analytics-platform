@@ -78,6 +78,22 @@ function formatGtoReportText(text: string) {
   return formatted.trim();
 }
 
+function formatTourStartMonthLines(months: any[] = []) {
+  return months.slice(0, 6).map((m) =>
+    `${m.month} - ${Math.round(m.tourists).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} туристов, GMV ${Math.round(m.revenue_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR, profit ${Math.round(m.profit_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR`,
+  );
+}
+
+function injectTourStartMonthsBlock(text: string, months: any[] = []) {
+  const lines = formatTourStartMonthLines(months);
+  if (lines.length === 0) return text;
+  const block = `---🗓 Старт туров---\n${lines.join('\n')}\n`;
+  if (text.includes('---📦 Продукты---')) {
+    return text.replace(/(---📦 Продукты---[\s\S]*?)(\n\n👥|\n👥|\n\n💎|\n💎)/u, `$1\n\n${block}$2`);
+  }
+  return `${text}\n\n${block}`.trim();
+}
+
 export async function handleAnalyzeJob(job: Job) {
   const { runId, sourceId } = job.data;
   logger.info({ runId, sourceId }, 'Starting analyze job');
@@ -132,6 +148,7 @@ export async function handleAnalyzeJob(job: Job) {
     if (schedule?.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
       formattedMessage = formatGtoReportText(formattedMessage);
+      formattedMessage = injectTourStartMonthsBlock(formattedMessage, (result.normalizedData as any)?.computed?.section1_yesterday?.tour_start_months || []);
     }
   }
 

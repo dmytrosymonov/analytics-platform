@@ -103,6 +103,22 @@ function formatGtoReportText(text: string): string {
   return formatted.trim();
 }
 
+function formatTourStartMonthLines(months: any[] = []): string[] {
+  return months.slice(0, 6).map((m) =>
+    `${m.month} - ${formatInt(m.tourists)} туристов, GMV ${formatInt(m.revenue_eur)} EUR, profit ${formatInt(m.profit_eur)} EUR`,
+  );
+}
+
+function injectTourStartMonthsBlock(text: string, months: any[] = []): string {
+  const lines = formatTourStartMonthLines(months);
+  if (lines.length === 0) return text;
+  const block = `---🗓 Старт туров---\n${lines.join('\n')}\n`;
+  if (text.includes('---📦 Продукты---')) {
+    return text.replace(/(---📦 Продукты---[\s\S]*?)(\n\n👥|\n👥|\n\n💎|\n💎)/u, `$1\n\n${block}$2`);
+  }
+  return `${text}\n\n${block}`.trim();
+}
+
 function formatInt(value: number): string {
   return Math.round(value).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
 }
@@ -262,7 +278,7 @@ async function buildTopReportsMenu() {
 
 async function buildSalesReportsMenu() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('Daily', 'gen:sales:daily')],
+    [Markup.button.callback('Yesterday', 'gen:sales:daily')],
     [Markup.button.callback('Today', 'gen:sales:today')],
     [Markup.button.callback('Summer', 'gen:sales:summer')],
     [Markup.button.callback('← Back', 'reports:home')],
@@ -382,6 +398,7 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
     if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
       formattedMessage = formatGtoReportText(formattedMessage);
+      formattedMessage = injectTourStartMonthsBlock(formattedMessage, (fetchResult.data.metrics as any)?.computed?.section1_yesterday?.tour_start_months || []);
     }
 
     await prisma.reportResult.update({
@@ -524,6 +541,11 @@ function formatGtoTodayReport(metrics: any): string {
     '---📦 Продукты---',
     ...formatProductLines(snapshot.product_breakdown || {}),
   ];
+
+  const startMonthLines = formatTourStartMonthLines(snapshot.tour_start_months || []);
+  if (startMonthLines.length > 0) {
+    lines.push('', '---🗓 Старт туров---', ...startMonthLines);
+  }
 
   if (topAgent) {
     lines.push('', `👥 Топ агент: ${topAgent.name} — ${formatInt(topAgent.orders)} зак, ${formatInt(topAgent.tourists)} тур`);
@@ -864,7 +886,7 @@ function registerHandlers(instance: Telegraf) {
     if (!schedule) return ctx.reply('Daily Sales Report не найден.');
 
     await ctx.editMessageText(
-      `⏳ Генерирую отчёт *${schedule.source.name}*...\nЭто может занять 1–2 минуты.`,
+      `⏳ Генерирую отчёт *Yesterday*...\nЭто может занять 1–2 минуты.`,
       { parse_mode: 'Markdown' },
     ).catch(() => {});
 
