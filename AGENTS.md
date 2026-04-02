@@ -179,7 +179,7 @@ Key models:
 - In `🔮` upcoming blocks, destination lines should be sorted by tourist count descending
 - Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
 - `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
-- `Today` GTO report should use the current business day period and calculate revenue/profit/tourists over all non-cancelled orders
+- `Today` GTO report should use the current business day period; `revenue` and `tourists` are calculated over all non-cancelled orders, while `profit` and `avg check` remain CNF-only to avoid overstating margin from ORQ/PEN orders
 
 ---
 

@@ -505,6 +505,7 @@ function formatGtoTodayReport(metrics: any): string {
 
   const topAgent = snapshot.top_agents_by_orders?.[0];
   const mostExpensive = snapshot.most_expensive_order;
+  const cnfFinancials = section.financials || {};
   const lines: string[] = [
     '📊 Отчёт по продажам GTO Today',
     `Период: ${section.period.from.split('-').reverse().join('/')}`,
@@ -513,8 +514,8 @@ function formatGtoTodayReport(metrics: any): string {
     `Туристов: ${formatInt(snapshot.tourists)}`,
     '',
     `💶 Выручка (без cancelled): ${formatInt(snapshot.financials.revenue_eur)} EUR`,
-    `Прибыль (без cancelled): ${formatInt(snapshot.financials.profit_eur)} EUR (${snapshot.financials.profit_pct}%)`,
-    `💼 Средний чек (без cancelled): ${formatInt(snapshot.financials.avg_order_eur)} EUR`,
+    `Прибыль по CNF: ${formatInt(cnfFinancials.profit_eur || 0)} EUR (${cnfFinancials.profit_pct || 0}%)`,
+    `💼 Средний чек по CNF: ${formatInt(cnfFinancials.avg_order_eur || 0)} EUR`,
     'Все денежные показатели приведены к EUR.',
     '',
     '---🌍 Направления---',
