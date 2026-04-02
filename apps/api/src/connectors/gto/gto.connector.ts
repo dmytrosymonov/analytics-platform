@@ -402,15 +402,19 @@ export class GTOConnector implements SourceConnector {
 
     // ── Cost ─────────────────────────────────────────────────────────────
     let costEur = 0;
-    const hotels   = Array.isArray(detail.hotel)   ? detail.hotel   : [];
+    const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
     const services = Array.isArray(detail.service) ? detail.service : [];
+    const confirmedHotels = hotels.filter((h: any) => h.status === 'CNF');
+    const confirmedServices = services.filter((s: any) => s.status === 'CNF');
+    const pendingServices = services.filter((s: any) => s.status && s.status !== 'CNF' && s.status !== 'CNX');
+    const eurTransferSuppliers = new Set(['suntransfers']);
 
     // Hotels: price_buy in hotel.currency.
     // Sanity: if price_buy > price_sell → currency label wrong → use UAH.
     // supplierCosts: tracks cost per supplier name for accurate reporting
     const supplierCosts: Record<string, number> = {};
 
-    for (const h of hotels) {
+    for (const h of confirmedHotels) {
       const priceBuy  = parseFloat(h.price_buy) || 0;
       const priceSell = parseFloat(h.price)     || 0;
       if (priceBuy <= 0) continue;
@@ -431,12 +435,14 @@ export class GTOConnector implements SourceConnector {
     }
 
     // Services:
-    // • transfer  — price_buy ALWAYS in EUR; no sanity check (value is trusted)
+    // • transfer  — supplier-specific currency rules:
+    //               some suppliers (for example SunTransfers) store buy price in EUR even if
+    //               service.currency is UAH; others (for example ITRAVEX) use real UAH values
     // • airticket — price_buy currency determined by supplier name tag [UAH/EUR/KZT/…];
     //               if cost > sell * 2 → mislabeled, fallback to UAH
     // • insurance / other — price_buy in service.currency;
     //               if price_buy > price_sell → price_buy is actually in UAH
-    for (const s of services) {
+    for (const s of confirmedServices) {
       const priceBuy  = parseFloat(s.price_buy) || 0;
       const priceSell = parseFloat(s.price)     || 0;
       if (priceBuy <= 0) continue;
@@ -444,7 +450,21 @@ export class GTOConnector implements SourceConnector {
       let serviceCostEur: number;
 
       if (s.type === 'transfer') {
-        serviceCostEur = toEur(priceBuy, 'EUR');
+        const transferSupplier = cleanSupName(s.supplier_name || s.service_supplier_name || '').toLowerCase();
+        const transferCurrency = eurTransferSuppliers.has(transferSupplier)
+          ? 'EUR'
+          : (s.currency || orderCurrency);
+        const transferCostConverted = toEur(priceBuy, transferCurrency);
+        const transferSellConverted = toEur(priceSell, transferCurrency);
+        const transferCostUah = toEur(priceBuy, 'UAH');
+        // If transfer cost explodes relative to its sell price or the whole order,
+        // prefer UAH as the safer fallback for mislabeled rows.
+        serviceCostEur = transferCurrency !== 'UAH' && (
+          (transferSellConverted > 0 && transferCostConverted > transferSellConverted * 2) ||
+          (priceEur > 0 && transferCostConverted > priceEur)
+        )
+          ? transferCostUah
+          : transferCostConverted;
 
       } else if (s.type === 'airticket') {
         const buyCurr = supplierTagCurrency(s.supplier_id) || s.currency || orderCurrency;
@@ -486,17 +506,27 @@ export class GTOConnector implements SourceConnector {
         profitPct,
         balanceAmount:   detail.balance_amount,
         balanceCurrency: detail.balance_currency,
-        hotels: hotels.map((h: any) => ({
+        pendingServices: pendingServices.map((s: any) => ({
+          type: s.type,
+          supplier: cleanSupName(s.supplier_name || ''),
+          status: s.status,
+          currency: s.currency || orderCurrency,
+          price_buy: s.price_buy,
+          price_sell: s.price,
+        })),
+        hotels: confirmedHotels.map((h: any) => ({
           supplier: cleanSupName(h.supplier_name || ''),
+          status: h.status,
           currency: h.currency || orderCurrency,
           price_buy:  h.price_buy,
           price_sell: h.price,
           costEur: r2(toEur(parseFloat(h.price_buy) || 0, h.currency || orderCurrency)),
           costUah: r2(toEur(parseFloat(h.price_buy) || 0, 'UAH')),
         })),
-        services: services.map((s: any) => ({
+        services: confirmedServices.map((s: any) => ({
           type:     s.type,
           supplier: cleanSupName(s.supplier_name || ''),
+          status: s.status,
           currency: s.currency || orderCurrency,
           price_buy:  s.price_buy,
           price_sell: s.price,

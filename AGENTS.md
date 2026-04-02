@@ -68,6 +68,13 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - **v3 base URL:** configurable in Settings → GTO API → `gto.v3_base_url`
 - **Base currency:** configurable in Settings → GTO API → `currency.base` (default: EUR)
 
+### GTO Cost Calculation Guardrails
+
+- Daily/weekly/monthly P&L for GTO must include only `CNF` hotel/service rows in себестоимость; `PEN` rows are operationally important but must not reduce reported margin until confirmed
+- Transfer `price_buy` is **not** universally EUR; supplier-specific handling is required
+- Known rule: `SunTransfers` buy prices are treated as EUR, while suppliers like `ITRAVEX` can provide `price_buy` in `UAH` and must respect the row currency unless a supplier tag overrides it
+- When investigating negative margin below the expected business floor (roughly worse than `-2%`), first compare computed cost against GTO `Total NETT` / package totals and inspect transfer currency interpretation plus any `PEN` extras
+
 ---
 
 ## GTO v3 API — Available Static Data
