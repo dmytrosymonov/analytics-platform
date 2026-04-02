@@ -172,3 +172,14 @@ export function computePeriod(periodType: 'daily' | 'weekly' | 'monthly', timezo
     periodEnd: currentMonthStart,
   };
 }
+
+export function computeCurrentDayPeriod(timezone = 'UTC'): { periodStart: Date; periodEnd: Date } {
+  const now = new Date();
+  const today = getZonedParts(now, timezone);
+  const todayStart = zonedDateTimeToUtc(timezone, today.year, today.month, today.day);
+  const nextDay = shiftCalendarDay(today.year, today.month, today.day, 1);
+  return {
+    periodStart: todayStart,
+    periodEnd: zonedDateTimeToUtc(timezone, nextDay.year, nextDay.month, nextDay.day),
+  };
+}

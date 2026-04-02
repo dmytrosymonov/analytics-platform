@@ -155,8 +155,12 @@ Key models:
 
 ## Telegram Bot Reports
 
+- Telegram command menu should expose only two top-level entries: `reports` and `settings`
+- `/reports` opens a nested report-generation menu with sections `Sales`, `Comments`, and `Youtrack`
+- `Sales` submenu currently includes `Daily`, `Today`, and `Summer`
+- `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
-- Summer season overview is exposed from the Telegram `/generate` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
+- Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 - Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
@@ -175,6 +179,7 @@ Key models:
 - In `🔮` upcoming blocks, destination lines should be sorted by tourist count descending
 - Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
 - `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
+- `Today` GTO report should use the current business day period and calculate revenue/profit/tourists over all non-cancelled orders
 
 ---
 

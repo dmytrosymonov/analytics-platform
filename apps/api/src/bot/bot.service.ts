@@ -1,4 +1,5 @@
 import { Telegraf, Markup } from 'telegraf';
+import { Prisma, PeriodType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { writeAuditLog } from '../lib/audit';
 import { logger } from '../lib/logger';
@@ -6,7 +7,7 @@ import { decrypt } from '../lib/encryption';
 import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
-import { computePeriod, getSourceTimezone } from '../scheduler/scheduler.service';
+import { computeCurrentDayPeriod, computePeriod, getSourceTimezone } from '../scheduler/scheduler.service';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -26,6 +27,8 @@ interface AskSession {
   sourceName: string;
 }
 const sessions = new Map<number, AskSession>();
+type ScheduleWithSource = Prisma.ReportScheduleGetPayload<{ include: { source: true } }>;
+type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { source: { select: { id: true; name: true; type: true } } } }>;
 
 function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -200,6 +203,29 @@ async function getUserSchedulePrefs(userId: string) {
   return new Map(prefs.map(p => [p.scheduleId, p.enabled]));
 }
 
+async function getScheduleBySourceTypeAndPeriod(sourceType: string, periodType: PeriodType): Promise<ScheduleWithSource | null> {
+  return prisma.reportSchedule.findFirst({
+    where: {
+      isEnabled: true,
+      periodType,
+      source: { is: { type: sourceType as any, isEnabled: true } },
+    },
+    include: { source: true },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+async function getSchedulesBySourceTypes(sourceTypes: string[]): Promise<ScheduleWithSourceSummary[]> {
+  return prisma.reportSchedule.findMany({
+    where: {
+      isEnabled: true,
+      source: { is: { type: { in: sourceTypes as any }, isEnabled: true } },
+    },
+    include: { source: { select: { id: true, name: true, type: true } } },
+    orderBy: [{ source: { name: 'asc' } }, { periodType: 'asc' }, { name: 'asc' }],
+  });
+}
+
 // ── /reports — build inline keyboard showing current subscription state ────────
 async function buildReportsKeyboard(userId: string) {
   const schedules = await getEnabledSchedules();
@@ -226,20 +252,29 @@ async function buildReportsKeyboard(userId: string) {
   };
 }
 
-// ── /generate — build source selection keyboard ────────────────────────────────
-async function buildGenerateKeyboard() {
-  const schedules = await getEnabledSchedules();
-  if (schedules.length === 0) return null;
-  const periodLabel = (p: string) => p === 'daily' ? 'день' : p === 'weekly' ? 'неделя' : 'месяц';
+async function buildTopReportsMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Sales', 'reports:sales')],
+    [Markup.button.callback('Comments', 'reports:comments')],
+    [Markup.button.callback('Youtrack', 'reports:youtrack')],
+  ]);
+}
 
-  const buttons = schedules.map(s =>
-    Markup.button.callback(
-      `${s.name} · ${s.source.name} (${periodLabel(s.periodType)})`,
-      `gen:${s.id}`,
-    ),
-  );
-  const rows = buttons.map(b => [b]);
-  rows.push([Markup.button.callback('☀️ Summer Sales Outlook', 'gen:summer')]);
+async function buildSalesReportsMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Daily', 'gen:sales:daily')],
+    [Markup.button.callback('Today', 'gen:sales:today')],
+    [Markup.button.callback('Summer', 'gen:sales:summer')],
+    [Markup.button.callback('← Back', 'reports:home')],
+  ]);
+}
+
+async function buildScheduleCategoryMenu(sourceTypes: string[], prefix: string) {
+  const schedules = await getSchedulesBySourceTypes(sourceTypes);
+  if (schedules.length === 0) return null;
+
+  const rows = schedules.map(s => [Markup.button.callback(`${s.name} · ${s.source.name}`, `gen:${prefix}:${s.id}`)]);
+  rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -439,6 +474,159 @@ async function runSummerSalesOutlook(): Promise<string> {
   return formatSummerSalesOutlook(result.data.metrics);
 }
 
+function formatTopDestinationLines(destinations: any[]): string[] {
+  return destinations.slice(0, 3).map(d => `${d.flag || ''}${d.country} ${formatInt(d.orders)} зак / ${formatInt(d.tourists)} тур`.trim());
+}
+
+function formatProductLines(products: any): string[] {
+  return [
+    { key: 'package', label: '🏨Пакет' },
+    { key: 'hotel', label: '🏩Отель' },
+    { key: 'flight', label: '✈️Перелёт' },
+  ]
+    .map(({ key, label }) => ({ label, data: products?.[key] }))
+    .filter(item => item.data && item.data.orders > 0)
+    .slice(0, 3)
+    .map(item => `${item.label} ${formatInt(item.data.orders)} зак / ${formatInt(item.data.tourists)} тур`);
+}
+
+function formatSupplierLines(suppliers: any[]): string[] {
+  return suppliers.slice(0, 3).map(s => `${s.name} - ${formatInt(s.orders)} заказов, ${formatInt(s.cost_eur)} EUR`);
+}
+
+function formatNegativeMarginLines(orders: any[]): string[] {
+  return orders.map(o => `#${o.order_id} — GMV ${formatInt(o.revenue_eur)} EUR, себест. ${formatInt(o.cost_eur)} EUR, маржа ${o.profit_pct}%`);
+}
+
+function formatGtoTodayReport(metrics: any): string {
+  const section = metrics?.computed?.section1_yesterday;
+  const snapshot = section?.non_cancelled_snapshot;
+  if (!section || !snapshot) throw new Error('Данные Today-отчёта недоступны');
+
+  const topAgent = snapshot.top_agents_by_orders?.[0];
+  const mostExpensive = snapshot.most_expensive_order;
+  const lines: string[] = [
+    '📊 Отчёт по продажам GTO Today',
+    `Период: ${section.period.from.split('-').reverse().join('/')}`,
+    '',
+    `📦  Заявок: ${formatInt(section.orders.total)} (✅${formatInt(section.orders.confirmed)} подтв, ❌${formatInt(section.orders.cancelled)} отмен, ⚠️${formatInt(section.orders.pending)} pending)`,
+    `Туристов: ${formatInt(snapshot.tourists)}`,
+    '',
+    `💶 Выручка (без cancelled): ${formatInt(snapshot.financials.revenue_eur)} EUR`,
+    `Прибыль (без cancelled): ${formatInt(snapshot.financials.profit_eur)} EUR (${snapshot.financials.profit_pct}%)`,
+    `💼 Средний чек (без cancelled): ${formatInt(snapshot.financials.avg_order_eur)} EUR`,
+    'Все денежные показатели приведены к EUR.',
+    '',
+    '---🌍 Направления---',
+    ...formatTopDestinationLines(snapshot.top_destinations || []),
+    '',
+    '---📦 Продукты---',
+    ...formatProductLines(snapshot.product_breakdown || {}),
+  ];
+
+  if (topAgent) {
+    lines.push('', `👥 Топ агент: ${topAgent.name} — ${formatInt(topAgent.orders)} зак, ${formatInt(topAgent.tourists)} тур`);
+  }
+
+  if (mostExpensive) {
+    lines.push('', `💎 Самый дорогой заказ: #${mostExpensive.order_id} — ${formatInt(mostExpensive.price_eur)} EUR`);
+  }
+
+  const supplierLines = formatSupplierLines(snapshot.top_suppliers_by_orders || []);
+  if (supplierLines.length > 0) {
+    lines.push('', 'Самые популярные поставщики (себестоимость):', ...supplierLines);
+  }
+
+  lines.push('', `🔴 Отрицательная маржа (${formatInt(snapshot.negative_margin_count || 0)} заказов):`);
+  const negativeLines = formatNegativeMarginLines(snapshot.negative_margin_orders || []);
+  if (negativeLines.length > 0) lines.push(...negativeLines);
+
+  return lines.join('\n').trim();
+}
+
+async function runGtoTodayReport(): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach(s => { settings[s.key] = s.value; });
+
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const { periodStart, periodEnd } = computeCurrentDayPeriod(timezone);
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const connector = connectorRegistry.get(schedule.source.type);
+    const fetchResult = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!fetchResult.success || !fetchResult.data) {
+      throw new Error(fetchResult.error?.message || 'Ошибка получения данных');
+    }
+
+    const message = formatGtoTodayReport(fetchResult.data.metrics);
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Today report generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 // ── Core: fetch data + answer a free-form question via LLM ───────────────────
 async function runFreeQuery(sourceId: string, question: string): Promise<string> {
   const source = await prisma.dataSource.findUnique({ where: { id: sourceId } });
@@ -515,7 +703,7 @@ function registerHandlers(instance: Telegraf) {
 
       const messages: Record<string, string> = {
         pending:  `⏳ *Ожидание подтверждения*\n\nЗапрос отправлен. Вы получите уведомление после одобрения.\n\nДоступные команды: /help`,
-        approved: `✅ *Добро пожаловать!*\n\nВы подписаны на аналитические отчёты.\n\n/reports — управление подписками\n/generate — сгенерировать отчёт сейчас\n/ask — задать вопрос по данным\n/help — все команды`,
+        approved: `✅ *Добро пожаловать!*\n\nВы подписаны на аналитические отчёты.\n\n/reports — меню отчётов\n/settings — настройки и подписки\n/ask — задать вопрос по данным\n/help — все команды`,
         blocked:  `🚫 *Доступ ограничен*\n\nВаш аккаунт заблокирован. Обратитесь к администратору.`,
         deleted:  `Аккаунт не найден. Обратитесь к администратору.`,
       };
@@ -547,8 +735,8 @@ function registerHandlers(instance: Telegraf) {
   instance.command('help', async (ctx) => {
     await ctx.reply(
       `*Analytics Report Bot*\n\n` +
-      `📋 /reports — управление подписками на отчёты\n` +
-      `⚡️ /generate — сгенерировать отчёт прямо сейчас\n` +
+      `📋 /reports — открыть меню отчётов\n` +
+      `⚙️ /settings — настройки и подписки\n` +
       `💬 /ask — задать вопрос по данным (ИИ ответит)\n` +
       `👤 /status — статус вашего аккаунта\n` +
       `/start — регистрация\n\n` +
@@ -557,13 +745,20 @@ function registerHandlers(instance: Telegraf) {
     );
   });
 
-  // /reports — show subscription management keyboard
+  // /reports — show top-level reports menu
   instance.command('reports', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    const keyboard = await buildTopReportsMenu();
+    await ctx.reply('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard });
+  });
+
+  instance.command('settings', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return;
     const { text, keyboard } = await buildReportsKeyboard(user.id);
     if (!keyboard) return ctx.reply(text);
-    await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+    await ctx.reply(`⚙️ *Настройки*\n\n${text.replace(/^📋 \*Мои подписки на отчёты\*\n\n/u, '')}`, { parse_mode: 'Markdown', ...keyboard });
   });
 
   // Callback: toggle schedule subscription
@@ -586,8 +781,34 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery(!current ? '✅ Подписка включена' : '❌ Подписка отключена');
   });
 
-  // Callback: open separate summer sales outlook from /generate submenu
-  instance.action('gen:summer', async (ctx) => {
+  instance.action('reports:home', async (ctx) => {
+    await ctx.answerCbQuery();
+    const keyboard = await buildTopReportsMenu();
+    await ctx.editMessageText('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('reports:sales', async (ctx) => {
+    await ctx.answerCbQuery();
+    const keyboard = await buildSalesReportsMenu();
+    await ctx.editMessageText('📊 *Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('reports:comments', async (ctx) => {
+    await ctx.answerCbQuery();
+    const keyboard = await buildScheduleCategoryMenu(['gto_comments'], 'comments');
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Comments.');
+    await ctx.editMessageText('💬 *Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('reports:youtrack', async (ctx) => {
+    await ctx.answerCbQuery();
+    const keyboard = await buildScheduleCategoryMenu(['youtrack', 'youtrack_progress'], 'youtrack');
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Youtrack.');
+    await ctx.editMessageText('🎯 *Youtrack*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  // Callback: open separate summer sales outlook from Sales submenu
+  instance.action('gen:sales:summer', async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
@@ -606,22 +827,78 @@ function registerHandlers(instance: Telegraf) {
     }
   });
 
-  // /generate — show schedule selection keyboard
-  instance.command('generate', async (ctx) => {
-    const user = await requireApproved(ctx);
-    if (!user) return;
-    const keyboard = await buildGenerateKeyboard();
-    if (!keyboard) return ctx.reply('Нет активных расписаний для генерации.');
-    await ctx.reply('⚡️ *Выберите отчёт для генерации:*', { parse_mode: 'Markdown', ...keyboard });
-  });
-
-  // Callback: generate selected report
-  instance.action(/^gen:(.+)$/, async (ctx) => {
+  instance.action('gen:sales:today', async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    const scheduleId = ctx.match[1];
-    if (scheduleId === 'summer') return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Today Sales Report*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoTodayReport();
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Today sales report failed');
+      await ctx.reply(`❌ Ошибка генерации today-отчёта: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:daily', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+
+    await ctx.editMessageText(
+      `⏳ Генерирую отчёт *${schedule.source.name}*...\nЭто может занять 1–2 минуты.`,
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runAnalysis(schedule.id);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err, scheduleId: schedule.id }, 'On-demand sales daily analysis failed');
+      await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
+    }
+  });
+
+  // /generate — legacy shortcut to the reports menu
+  instance.command('generate', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    const keyboard = await buildTopReportsMenu();
+    await ctx.reply('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard });
+  });
+
+  // Callback: generate selected report from Comments / Youtrack menus
+  instance.action(/^gen:(comments|youtrack):(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    const scheduleId = ctx.match[2];
 
     const schedule = await prisma.reportSchedule.findUnique({
       where: { id: scheduleId },
@@ -733,12 +1010,8 @@ export async function startBot(token?: string) {
 
   // Register bot command menu shown in Telegram UI
   await _bot.telegram.setMyCommands([
-    { command: 'reports',  description: 'Управление подписками на отчёты' },
-    { command: 'generate', description: 'Сгенерировать отчёт прямо сейчас' },
-    { command: 'ask',      description: 'Задать вопрос по данным (ИИ ответит)' },
-    { command: 'status',   description: 'Статус аккаунта' },
-    { command: 'help',     description: 'Помощь' },
-    { command: 'start',    description: 'Регистрация' },
+    { command: 'reports',  description: 'Отчёты' },
+    { command: 'settings', description: 'Настройки' },
   ]).catch(err => logger.warn({ err }, 'Failed to set bot commands'));
 
   if (process.env.TELEGRAM_WEBHOOK_URL) {

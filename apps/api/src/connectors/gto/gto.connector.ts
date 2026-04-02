@@ -652,6 +652,22 @@ export class GTOConnector implements SourceConnector {
     const allWithDetails = filteredOrders
       .map(o => this.extractOrder(o, detailMap.get(o.order_id), rates))
       .filter((m): m is NonNullable<typeof m> => Boolean(m));
+    const activeWithDetails = allWithDetails.filter(m => m.status !== 'CNX');
+    const activeOrders = filteredOrders.filter(o => o.status !== 'CNX');
+    let activeTourists = 0;
+    let activeRevenueEur = 0;
+    let activeCostEur = 0;
+    let activeProfitEur = 0;
+    const activeDestinations: Record<string, number> = {};
+    const activeTouristsPerCountry: Record<string, number> = {};
+    const activeProducts: Record<string, { orders: number; tourists: number }> = {
+      package: { orders: 0, tourists: 0 }, hotel: { orders: 0, tourists: 0 },
+      flight: { orders: 0, tourists: 0 }, transfer: { orders: 0, tourists: 0 },
+      other: { orders: 0, tourists: 0 }, insurance: { orders: 0, tourists: 0 },
+    };
+    const activeAgents: Record<string, { orders: number; revenue: number; tourists: number }> = {};
+    const activeSuppliers: Record<string, { orders: number; cost: number }> = {};
+    const activeOrderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
 
     for (const m of allWithDetails) {
       totalTourists += m.tourists;
@@ -671,6 +687,43 @@ export class GTOConnector implements SourceConnector {
         agents[m.agentName].revenue += m.priceEur;
         agents[m.agentName].tourists += m.tourists;
       }
+    }
+
+    for (const m of activeWithDetails) {
+      activeTourists += m.tourists;
+      activeRevenueEur += m.priceEur;
+      activeCostEur += m.costEur;
+      activeProfitEur += m.profitEur;
+
+      for (const c of m.countries) {
+        activeDestinations[c] = (activeDestinations[c] || 0) + 1;
+        activeTouristsPerCountry[c] = (activeTouristsPerCountry[c] || 0) + m.tourists;
+      }
+
+      activeProducts[m.productType].orders++;
+      activeProducts[m.productType].tourists += m.tourists;
+      if (m.hasInsurance) { activeProducts.insurance.orders++; activeProducts.insurance.tourists += m.tourists; }
+
+      if (m.agentName) {
+        if (!activeAgents[m.agentName]) activeAgents[m.agentName] = { orders: 0, revenue: 0, tourists: 0 };
+        activeAgents[m.agentName].orders++;
+        activeAgents[m.agentName].revenue += m.priceEur;
+        activeAgents[m.agentName].tourists += m.tourists;
+      }
+
+      for (const [sup, cost] of Object.entries(m.supplierCosts)) {
+        if (!activeSuppliers[sup]) activeSuppliers[sup] = { orders: 0, cost: 0 };
+        activeSuppliers[sup].orders++;
+        activeSuppliers[sup].cost += cost;
+      }
+
+      activeOrderValues.push({
+        orderId: m.orderId,
+        priceEur: m.priceEur,
+        costEur: m.costEur,
+        profitEur: m.profitEur,
+        profitPct: m.profitPct,
+      });
     }
 
     for (const o of confirmed) {
@@ -706,8 +759,20 @@ export class GTOConnector implements SourceConnector {
     const byPrice   = [...orderValues].sort((a, b) => b.priceEur - a.priceEur);
     const byProfit  = [...orderValues].sort((a, b) => b.profitEur - a.profitEur);
     const byProfPct = [...orderValues].filter(o => o.priceEur > 200).sort((a, b) => b.profitPct - a.profitPct);
+    const activeByPrice = [...activeOrderValues].sort((a, b) => b.priceEur - a.priceEur);
+    const activeNegativeMarginOrders = activeOrderValues
+      .filter(o => o.profitPct < 0)
+      .sort((a, b) => a.profitPct - b.profitPct)
+      .map(ov => ({
+        order_id: ov.orderId,
+        revenue_eur: r2(ov.priceEur),
+        cost_eur: r2(ov.costEur),
+        profit_eur: r2(ov.profitEur),
+        profit_pct: ov.profitPct,
+      }));
 
     const profitPct = revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0;
+    const activeProfitPct = activeRevenueEur > 0 ? Math.round(activeProfitEur / activeRevenueEur * 100) : 0;
 
     return {
       orders: {
@@ -753,6 +818,35 @@ export class GTOConnector implements SourceConnector {
       anomalies: [],
       negative_margin_orders,          // ALL orders with profit_pct < 0, sorted worst-first
       negative_margin_count: negative_margin_orders.length,
+      non_cancelled_snapshot: {
+        orders_total: activeOrders.length,
+        tourists: activeTourists,
+        financials: {
+          note: 'Revenue, cost and profit calculated for all non-cancelled orders',
+          revenue_eur: r2(activeRevenueEur),
+          cost_eur: r2(activeCostEur),
+          profit_eur: r2(activeProfitEur),
+          profit_pct: activeProfitPct,
+          avg_order_eur: activeOrders.length > 0 ? r2(activeRevenueEur / activeOrders.length) : 0,
+        },
+        top_destinations: Object.entries(activeDestinations)
+          .sort((a, b) => (activeTouristsPerCountry[b[0]] || 0) - (activeTouristsPerCountry[a[0]] || 0)).slice(0, 8)
+          .map(([country, orders]) => ({
+            country,
+            flag: countryEmoji(country),
+            orders,
+            tourists: activeTouristsPerCountry[country] || 0,
+            pct: activeTourists > 0 ? Math.round((activeTouristsPerCountry[country] || 0) / activeTourists * 100) : 0,
+          })),
+        product_breakdown: activeProducts,
+        top_agents_by_orders: this.topList(activeAgents, 'orders', 5),
+        top_suppliers_by_orders: this.topSupplierList(activeSuppliers, 5),
+        most_expensive_order: activeByPrice[0]
+          ? { order_id: activeByPrice[0].orderId, price_eur: r2(activeByPrice[0].priceEur) }
+          : null,
+        negative_margin_orders: activeNegativeMarginOrders,
+        negative_margin_count: activeNegativeMarginOrders.length,
+      },
       data_available: filteredOrders.length > 0,
     };
   }
