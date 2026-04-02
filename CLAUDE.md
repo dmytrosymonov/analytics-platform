@@ -41,6 +41,9 @@ apps/
 - `deploy.sh` was restored from that stash and is now tracked in the repo to prevent future missing-script failures
 - `deploy.sh` now auto-stashes dirty server-local changes before `git pull`, so generated `CLAUDE.md` and other runtime edits do not block future deploys
 - `deploy.sh` now retries `npm install` once after removing the target `node_modules` directory if npm fails with a broken install state (for example ENOENT inside `@esbuild/*`)
+- `deploy.sh` now validates critical build artifacts before touching PM2: Prisma client must exist after `prisma generate`, and admin build must produce `.next/BUILD_ID`
+- `deploy.sh` now restarts existing PM2 apps in place instead of deleting them first, reducing the chance of downtime if a later step fails
+- `deploy.sh` now performs a post-restart API health check on `http://localhost:4000/health` and fails the deploy if the API does not come back
 
 ---
 
@@ -172,11 +175,12 @@ Tracked `deploy.sh` does:
 1. if the server checkout is dirty, creates an automatic stash `auto-pre-deploy-<UTC timestamp>`
 2. `git pull`
 3. `npm install --include=dev` with one clean-reinstall retry if `node_modules` is corrupted
-4. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma)
+4. `prisma migrate deploy` + `prisma generate` (using local node_modules/.bin/prisma), then verifies Prisma client output exists
 5. `npx tsx src/db/seed.ts` (upsert — never overwrites existing data)
-6. `next build`
-7. PM2 restart cycle
-8. GitHub Actions then runs `cd /opt/analytics-platform && bash scripts/refresh-claude-docs.sh`
+6. `next build`, then verifies `.next/BUILD_ID` exists
+7. PM2 restart/update cycle without deleting healthy apps first
+8. API health check on `http://localhost:4000/health`
+9. GitHub Actions then runs `cd /opt/analytics-platform && bash scripts/refresh-claude-docs.sh`
 
 **Important:** seed uses `update: {}` for all upserts — existing settings/credentials are NEVER overwritten by deploy.
 
@@ -227,11 +231,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T06:09:57Z
+- Generated at (UTC): 2026-04-02T06:13:08Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: b66b7b6 (b66b7b6972149e66f5a86e52af8d614004695d09)
-- Commit date: 2026-04-02T08:08:44+02:00
+- Commit: fb554e5 (fb554e548f324a31cdb7dc074da4e4cf48365683)
+- Commit date: 2026-04-02T08:10:04+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
