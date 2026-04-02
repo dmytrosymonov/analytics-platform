@@ -168,6 +168,7 @@ Key models:
 - Rolling GTO windows (`last 7 days`, `upcoming`) must be calculated explicitly for inclusive `date_to`
 - Production/business timezone for GTO should be `Europe/Kyiv`, not `UTC`
 - In GTO daily/7-day reports, tourists, destinations, product mix, and top agent are calculated for all orders in the period, while revenue/profit/avg check remain CNF-only and must be labeled `по CNF` in Telegram text
+- Telegram GTO daily/7-day reports should also include a short note after the financial block: `Все денежные показатели приведены к EUR.`
 
 ---
 
@@ -247,11 +248,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T13:32:23Z
+- Generated at (UTC): 2026-04-02T14:02:25Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 1af61e9 (1af61e922ad48e5f6b2ac669a0faea64bab499c2)
-- Commit date: 2026-04-02T12:21:34+02:00
+- Commit: 089c296 (089c2967ef1fca8ffdaca86d0f57124fc05b682e)
+- Commit date: 2026-04-02T15:32:37+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

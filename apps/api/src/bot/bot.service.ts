@@ -35,7 +35,8 @@ function annotateCnfFinancials(text: string): string {
   return text
     .replace(/^💶\s*Выручка:/gmu, '💶 Выручка по CNF:')
     .replace(/^Прибыль:/gmu, 'Прибыль по CNF:')
-    .replace(/^💼\s*Средний чек:/gmu, '💼 Средний чек по CNF:');
+    .replace(/^💼\s*Средний чек:/gmu, '💼 Средний чек по CNF:')
+    .replace(/^💼 Средний чек по CNF:.*$/gmu, (line) => `${line}\nВсе денежные показатели приведены к EUR.`);
 }
 
 function formatInt(value: number): string {

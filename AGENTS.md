@@ -168,6 +168,7 @@ Key models:
 - Rolling GTO windows (`last 7 days`, `upcoming`) must be calculated explicitly for inclusive `date_to`
 - Production/business timezone for GTO should be `Europe/Kyiv`, not `UTC`
 - In GTO daily/7-day reports, tourists, destinations, product mix, and top agent are calculated for all orders in the period, while revenue/profit/avg check remain CNF-only and must be labeled `по CNF` in Telegram text
+- Telegram GTO daily/7-day reports should also include a short note after the financial block: `Все денежные показатели приведены к EUR.`
 
 ---
 
