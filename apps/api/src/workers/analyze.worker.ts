@@ -80,7 +80,7 @@ function formatGtoReportText(text: string) {
 
 function formatTourStartMonthLines(months: any[] = []) {
   return months.slice(0, 6).map((m) =>
-    `${m.month} - ${Math.round(m.tourists).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} туристов, GMV ${Math.round(m.revenue_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR, profit ${Math.round(m.profit_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR, ср. глубина ${m.avg_lead_days ?? '—'} дн.`,
+    `${m.month} - ${Math.round(m.tourists).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} туристов, GMV ${Math.round(m.revenue_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR, profit ${Math.round(m.profit_eur).toLocaleString('ru-RU').replace(/\u00a0/g, ' ')} EUR`,
   );
 }
 

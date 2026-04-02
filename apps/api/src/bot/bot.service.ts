@@ -105,7 +105,20 @@ function formatGtoReportText(text: string): string {
 
 function formatTourStartMonthLines(months: any[] = []): string[] {
   return months.slice(0, 6).map((m) =>
-    `${m.month} - ${formatInt(m.tourists)} туристов, GMV ${formatInt(m.revenue_eur)} EUR, profit ${formatInt(m.profit_eur)} EUR, ср. глубина ${m.avg_lead_days ?? '—'} дн.`,
+    `${m.month} - ${formatInt(m.tourists)} туристов, GMV ${formatInt(m.revenue_eur)} EUR, profit ${formatInt(m.profit_eur)} EUR`,
+  );
+}
+
+function injectProductBlocks(text: string, sections: any[] = []): string {
+  let occurrence = 0;
+  return text.replace(
+    /---📦 Продукты---[\s\S]*?(?=\n\n(?:---🗓 Старт туров---|👥|💎|Самые популярные поставщики|🔴|📊 За последние 7 дней|🔮|$))/gu,
+    () => {
+      const section = sections[occurrence++];
+      const lines = formatProductLines(section?.product_breakdown || {});
+      if (lines.length === 0) return '---📦 Продукты---';
+      return `---📦 Продукты---\n${lines.join('\n')}`;
+    },
   );
 }
 
@@ -398,6 +411,10 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
     if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
       formattedMessage = formatGtoReportText(formattedMessage);
+      formattedMessage = injectProductBlocks(formattedMessage, [
+        (fetchResult.data.metrics as any)?.computed?.section1_yesterday,
+        (fetchResult.data.metrics as any)?.computed?.section2_last_7_days,
+      ]);
       formattedMessage = injectTourStartMonthsBlock(formattedMessage, (fetchResult.data.metrics as any)?.computed?.section1_yesterday?.tour_start_months || []);
     }
 
