@@ -8,7 +8,7 @@ import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
 import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone } from '../scheduler/scheduler.service';
-import { enrichYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
+import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -439,7 +439,7 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
       formattedMessage = injectTourStartMonthsBlock(formattedMessage, (fetchResult.data.metrics as any)?.computed?.section1_yesterday?.tour_start_months || []);
     }
     if (String(schedule.source.type) === 'youtrack_progress') {
-      formattedMessage = enrichYouTrackProgressTelegramMessage(formattedMessage, fetchResult.data.metrics);
+      formattedMessage = formatYouTrackProgressTelegramMessage(formattedMessage, fetchResult.data.metrics, analysis.structuredOutput);
     }
 
     await prisma.reportResult.update({
@@ -609,7 +609,7 @@ async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promi
     });
 
     const formattedMessage = String(schedule.source.type) === 'youtrack_progress'
-      ? enrichYouTrackProgressTelegramMessage(analysis.telegramMessage, fetchResult.data.metrics)
+      ? formatYouTrackProgressTelegramMessage(analysis.telegramMessage, fetchResult.data.metrics, analysis.structuredOutput)
       : analysis.telegramMessage;
 
     await prisma.reportResult.update({

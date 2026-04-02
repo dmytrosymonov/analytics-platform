@@ -4,7 +4,7 @@ import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
 import { deliverQueue } from '../queue/queues';
 import { logger } from '../lib/logger';
-import { enrichYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
+import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 
 function stripSummerSection(text: string) {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -185,7 +185,7 @@ export async function handleAnalyzeJob(job: Job) {
     }
   }
   if (String(source?.type) === 'youtrack_progress') {
-    formattedMessage = enrichYouTrackProgressTelegramMessage(formattedMessage, result.normalizedData);
+    formattedMessage = formatYouTrackProgressTelegramMessage(formattedMessage, result.normalizedData, llmResult.structuredOutput);
   }
 
   await prisma.reportResult.update({
