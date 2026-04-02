@@ -150,10 +150,9 @@ async function buildReportsKeyboard(userId: string) {
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-  rows.push([Markup.button.callback('☀️ Summer Sales Outlook', 'reports:summer')]);
 
   return {
-    text: '📋 *Мои подписки на отчёты*\n\nНажмите кнопку чтобы включить/выключить подписку или открыть отдельный сезонный отчёт:',
+    text: '📋 *Мои подписки на отчёты*\n\nНажмите кнопку чтобы включить или выключить подписку:',
     keyboard: Markup.inlineKeyboard(rows),
   };
 }
@@ -171,6 +170,7 @@ async function buildGenerateKeyboard() {
     ),
   );
   const rows = buttons.map(b => [b]);
+  rows.push([Markup.button.callback('☀️ Summer Sales Outlook', 'gen:summer')]);
   return Markup.inlineKeyboard(rows);
 }
 
@@ -412,8 +412,8 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery(!current ? '✅ Подписка включена' : '❌ Подписка отключена');
   });
 
-  // Callback: open separate summer sales outlook from /reports submenu
-  instance.action('reports:summer', async (ctx) => {
+  // Callback: open separate summer sales outlook from /generate submenu
+  instance.action('gen:summer', async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
@@ -447,6 +447,7 @@ function registerHandlers(instance: Telegraf) {
     const user = await requireApproved(ctx);
     if (!user) return;
     const scheduleId = ctx.match[1];
+    if (scheduleId === 'summer') return;
 
     const schedule = await prisma.reportSchedule.findUnique({
       where: { id: scheduleId },

@@ -156,7 +156,7 @@ Key models:
 ## Telegram Bot Reports
 
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
-- Summer season overview is exposed from the Telegram `/reports` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
+- Summer season overview is exposed from the Telegram `/generate` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 
 ---
