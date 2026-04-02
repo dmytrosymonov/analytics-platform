@@ -17,6 +17,56 @@ function annotateCnfFinancials(text: string) {
     .replace(/^💼 Средний чек по CNF:.*$/gmu, (line) => `${line}\nВсе денежные показатели приведены к EUR.`);
 }
 
+function toColumnList(text: string, header: string) {
+  const pattern = new RegExp(`^${header}:\\s*(.+)$`, 'gmu');
+  return text.replace(pattern, (_match, items: string) => {
+    const lines = items.split(/\s*,\s*/).filter(Boolean);
+    return `${header}:\n${lines.join('\n')}`;
+  });
+}
+
+function removeOtherAnomalies(text: string) {
+  return text.replace(/\n⚠️ Прочие аномалии:[\s\S]*?(?=\n(?:📊 За последние 7 дней|🔮 Старт Ближ\. 7 дней|Старт ближ\. 30 дней|☀️ |\Z))/gu, '');
+}
+
+function sortDestinationLines(lines: string[]) {
+  return [...lines].sort((a, b) => {
+    const aTourists = Number(a.match(/-\s*(\d+)\s+турист/u)?.[1] || 0);
+    const bTourists = Number(b.match(/-\s*(\d+)\s+турист/u)?.[1] || 0);
+    return bTourists - aTourists;
+  });
+}
+
+function sortUpcomingBlocks(text: string) {
+  const lines = text.split('\n');
+  const result: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    result.push(lines[i]);
+    if (lines[i].trim() === 'Самые популярные направления:' || /^Старт ближ\. 30 дней:/u.test(lines[i].trim())) {
+      const block: string[] = [];
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1];
+        if (!next.trim()) break;
+        if (/^(📊|🔮|☀️|💶|📦|👥|💎|Самые популярные направления:)/u.test(next.trim())) break;
+        block.push(next);
+        i++;
+      }
+      if (block.length > 0) result.push(...sortDestinationLines(block));
+    }
+  }
+  return result.join('\n');
+}
+
+function formatGtoReportText(text: string) {
+  let formatted = text;
+  formatted = annotateCnfFinancials(formatted);
+  formatted = toColumnList(formatted, '🌍 Направления');
+  formatted = toColumnList(formatted, '📦 Продукты');
+  formatted = removeOtherAnomalies(formatted);
+  formatted = sortUpcomingBlocks(formatted);
+  return formatted.trim();
+}
+
 export async function handleAnalyzeJob(job: Job) {
   const { runId, sourceId } = job.data;
   logger.info({ runId, sourceId }, 'Starting analyze job');
@@ -70,7 +120,7 @@ export async function handleAnalyzeJob(job: Job) {
     const schedule = await prisma.reportSchedule.findUnique({ where: { id: run.scheduleId } });
     if (schedule?.periodType === 'daily') {
       formattedMessage = stripSummerSection(formattedMessage);
-      formattedMessage = annotateCnfFinancials(formattedMessage);
+      formattedMessage = formatGtoReportText(formattedMessage);
     }
   }
 

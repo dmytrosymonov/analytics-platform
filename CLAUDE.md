@@ -169,6 +169,10 @@ Key models:
 - Production/business timezone for GTO should be `Europe/Kyiv`, not `UTC`
 - In GTO daily/7-day reports, tourists, destinations, product mix, and top agent are calculated for all orders in the period, while revenue/profit/avg check remain CNF-only and must be labeled `по CNF` in Telegram text
 - Telegram GTO daily/7-day reports should also include a short note after the financial block: `Все денежные показатели приведены к EUR.`
+- Orders from test agent `GTO for Test-Goodwin` must be excluded from all GTO report metrics and rankings, not just the top-agent block
+- Telegram GTO daily/7-day reports should render `🌍 Направления` and `📦 Продукты` as vertical lists, one item per line
+- Telegram GTO daily/7-day reports should keep only the `🔴 Отрицательная маржа` anomaly block; generic `⚠️ Прочие аномалии` should not be shown
+- In `🔮` upcoming blocks, destination lines should be sorted by tourist count descending
 
 ---
 
@@ -248,11 +252,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T14:02:25Z
+- Generated at (UTC): 2026-04-02T14:18:09Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 089c296 (089c2967ef1fca8ffdaca86d0f57124fc05b682e)
-- Commit date: 2026-04-02T15:32:37+02:00
+- Commit: 1d58019 (1d58019d43c5908c4e87d3f29dc5450c43955c5b)
+- Commit date: 2026-04-02T16:02:35+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

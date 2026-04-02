@@ -88,6 +88,15 @@ function shiftDateString(dateStr: string, offsetDays: number): string {
 // ─── Connector ────────────────────────────────────────────────────────────────
 export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
+  private readonly ignoredAgentNames = new Set(['GTO for Test-Goodwin']);
+
+  private normalizeAgentName(name: string) {
+    return (name || '').replace(/\s*\[.*?\]/g, '').trim();
+  }
+
+  private isIgnoredAgent(name: string) {
+    return this.ignoredAgentNames.has(name);
+  }
 
   private httpClient(baseUrl: string, apiKey: string, timeout: number) {
     return createHttpClient({ baseURL: baseUrl, params: { apikey: apiKey }, timeout }, 'gto');
@@ -572,7 +581,7 @@ export class GTOConnector implements SourceConnector {
 
     // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
-    const agentName = rawAgent.replace(/\s*\[.*?\]/g, '').trim();
+    const agentName = this.normalizeAgentName(rawAgent);
 
     return {
       orderId:        detail.order_id || orderSummary?.order_id,
@@ -618,9 +627,14 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
-    const confirmed = orders.filter(o => o.status === 'CNF');
-    const cancelled = orders.filter(o => o.status === 'CNX');
-    const pending   = orders.filter(o => !['CNF', 'CNX'].includes(o.status));
+    const filteredOrders = orders.filter(o => {
+      const detail = detailMap.get(o.order_id);
+      const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
+      return !this.isIgnoredAgent(agentName);
+    });
+    const confirmed = filteredOrders.filter(o => o.status === 'CNF');
+    const cancelled = filteredOrders.filter(o => o.status === 'CNX');
+    const pending   = filteredOrders.filter(o => !['CNF', 'CNX'].includes(o.status));
 
     // Track how many confirmed orders have details loaded (data coverage)
     let confirmedWithDetails = 0;
@@ -635,7 +649,7 @@ export class GTOConnector implements SourceConnector {
     const agents:    Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const suppliers: Record<string, { orders: number; cost: number }> = {};
     const orderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
-    const allWithDetails = orders
+    const allWithDetails = filteredOrders
       .map(o => this.extractOrder(o, detailMap.get(o.order_id), rates))
       .filter((m): m is NonNullable<typeof m> => Boolean(m));
 
@@ -676,20 +690,7 @@ export class GTOConnector implements SourceConnector {
       orderValues.push({ orderId: m.orderId, priceEur: m.priceEur, costEur: m.costEur, profitEur: m.profitEur, profitPct: m.profitPct });
     }
 
-    // Anomalies — split into two categories for clear reporting
-    const avgPrice = orderValues.length > 0 ? revenueEur / orderValues.length : 0;
-
-    // 1. Suspicious high-price orders (>3x average AND >2000 EUR)
-    const anomalies: string[] = [];
-    for (const ov of orderValues) {
-      if (ov.priceEur > avgPrice * 3 && ov.priceEur > 2000) {
-        anomalies.push(`#${ov.orderId}: ${r2(ov.priceEur)} EUR (в ${Math.round(ov.priceEur / (avgPrice || 1))}x выше среднего)`);
-      }
-    }
-    if (orders.length > 0 && cancelled.length / orders.length > 0.3)
-      anomalies.push(`Высокий % отмен: ${Math.round(cancelled.length / orders.length * 100)}%`);
-
-    // 2. Negative-margin orders (all of them, sorted worst-first)
+    // Preserve only negative-margin orders for reporting.
     const allNegativeMargin = orderValues
       .filter(o => o.profitPct < 0)
       .sort((a, b) => a.profitPct - b.profitPct); // worst margin first
@@ -710,11 +711,11 @@ export class GTOConnector implements SourceConnector {
 
     return {
       orders: {
-        total:                 orders.length,
+        total:                 filteredOrders.length,
         confirmed:             confirmed.length,
         cancelled:             cancelled.length,
         pending:               pending.length,
-        cancellation_rate_pct: orders.length > 0 ? Math.round(cancelled.length / orders.length * 100) : 0,
+        cancellation_rate_pct: filteredOrders.length > 0 ? Math.round(cancelled.length / filteredOrders.length * 100) : 0,
       },
       data_coverage: {
         confirmed_total:       confirmed.length,
@@ -749,10 +750,10 @@ export class GTOConnector implements SourceConnector {
       most_expensive_order:  byPrice[0]   ? { order_id: byPrice[0].orderId,   price_eur:  r2(byPrice[0].priceEur) }    : null,
       most_profitable_abs:   byProfit[0]  ? { order_id: byProfit[0].orderId,  profit_eur: r2(byProfit[0].profitEur) }  : null,
       most_profitable_rel:   byProfPct[0] ? { order_id: byProfPct[0].orderId, profit_pct: byProfPct[0].profitPct }     : null,
-      anomalies,
+      anomalies: [],
       negative_margin_orders,          // ALL orders with profit_pct < 0, sorted worst-first
       negative_margin_count: negative_margin_orders.length,
-      data_available: orders.length > 0,
+      data_available: filteredOrders.length > 0,
     };
   }
 
@@ -762,13 +763,18 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
+    const filteredOrders = orders.filter(o => {
+      const detail = detailMap.get(o.order_id);
+      const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
+      return !this.isIgnoredAgent(agentName);
+    });
     let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number> = {};
     const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents: Record<string, { orders: number; revenue: number }> = {};
 
-    for (const o of orders) {
+    for (const o of filteredOrders) {
       const m = this.extractOrder(o, detailMap.get(o.order_id), rates);
       if (!m) continue;
       tourists   += m.tourists;
@@ -789,7 +795,7 @@ export class GTOConnector implements SourceConnector {
     }
 
     return {
-      confirmed_orders: orders.length,
+      confirmed_orders: filteredOrders.length,
       tourists,
       revenue_eur:  r2(revenueEur),
       cost_eur:     r2(costEur),
@@ -806,7 +812,7 @@ export class GTOConnector implements SourceConnector {
         })),
       product_breakdown: products,
       top_agents: this.topList(agents, 'orders', 5),
-      data_available: orders.length > 0,
+      data_available: filteredOrders.length > 0,
     };
   }
 
@@ -817,13 +823,18 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
+    const filteredOrders = orders.filter(o => {
+      const detail = detailMap.get(o.order_id);
+      const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
+      return !this.isIgnoredAgent(agentName);
+    });
     let tourists = 0, revenueEur = 0, costEur = 0, profitEur = 0;
     const destinations: Record<string, number> = {};
     const touristsPerCountry: Record<string, number> = {};
     const products = { package: 0, hotel: 0, flight: 0, transfer: 0, other: 0, insurance: 0 };
     const agents: Record<string, { orders: number; revenue: number }> = {};
 
-    for (const o of orders) {
+    for (const o of filteredOrders) {
       const m = this.extractOrder(o, detailMap.get(o.order_id), rates);
       if (!m) continue;
       tourists   += m.tourists;
@@ -847,7 +858,7 @@ export class GTOConnector implements SourceConnector {
 
     return {
       label,
-      confirmed_orders: orders.length,
+      confirmed_orders: filteredOrders.length,
       tourists,
       revenue_eur:  r2(revenueEur),
       cost_eur:     r2(costEur),
