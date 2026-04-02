@@ -132,17 +132,22 @@ export class GTOConnector implements SourceConnector {
     const tz = settings['timezone'] || 'Europe/Kiev';
     const formatTzDate = (date: Date): string => date.toLocaleDateString('sv-SE', { timeZone: tz });
 
-    const periodEndStr   = formatTzDate(period.end);
-    const todayStr       = periodEndStr;
-    const yesterStr      = shiftDateString(periodEndStr, -1);
-    const last7dStr      = shiftDateString(periodEndStr, -7);
-    const prev14dStr     = shiftDateString(periodEndStr, -14);
-    const next7dStr      = shiftDateString(periodEndStr, 7);
-    const next30dStr     = shiftDateString(periodEndStr, 30);
+    // GTO /orders_list treats date_to as inclusive.
+    // Anchor all report windows to the last day included in the requested run.
+    const reportDayStr   = shiftDateString(formatTzDate(period.end), -1);
+    const dailyFromStr   = reportDayStr;
+    const dailyToStr     = reportDayStr;
+    const last7dStr      = shiftDateString(reportDayStr, -7);
+    const prevWindowFrom = shiftDateString(reportDayStr, -15);
+    const prevWindowTo   = shiftDateString(reportDayStr, -8);
+    const next7dStr      = shiftDateString(reportDayStr, 7);
+    const next30dStr     = shiftDateString(reportDayStr, 30);
+    const prevUpcomingFrom = shiftDateString(reportDayStr, -8);
+    const prevUpcomingTo   = shiftDateString(reportDayStr, -1);
 
     // Summer months (next upcoming June/July/August relative to today in TZ)
-    const todayYear  = parseInt(todayStr.slice(0, 4), 10);
-    const todayMonth = parseInt(todayStr.slice(5, 7), 10);
+    const todayYear  = parseInt(reportDayStr.slice(0, 4), 10);
+    const todayMonth = parseInt(reportDayStr.slice(5, 7), 10);
     const year = todayMonth >= 10 ? todayYear + 1 : todayYear;
 
     // ── Helpers ────────────────────────────────────────────────────────────
@@ -220,17 +225,17 @@ export class GTOConnector implements SourceConnector {
       ordersAugust,
     ] = await Promise.all([
       // Section 1 — yesterday (by created_at, in business timezone)
-      fetchList('/orders_list', { date_from: yesterStr, date_to: todayStr, sort_by: 'created_at' }),
+      fetchList('/orders_list', { date_from: dailyFromStr, date_to: dailyToStr, sort_by: 'created_at' }),
       // Section 2 — last 7 days (by created_at)
-      fetchList('/orders_list', { date_from: last7dStr, date_to: todayStr, sort_by: 'created_at' }),
+      fetchList('/orders_list', { date_from: last7dStr, date_to: reportDayStr, sort_by: 'created_at' }),
       // Section 2 comparison — previous 7 days (days 8-14 ago, by created_at)
-      fetchList('/orders_list', { date_from: prev14dStr, date_to: last7dStr, sort_by: 'created_at' }),
+      fetchList('/orders_list', { date_from: prevWindowFrom, date_to: prevWindowTo, sort_by: 'created_at' }),
       // Section 3a — upcoming tours (start date = next 7 days, confirmed only)
-      fetchList('/orders_list', { date_from: todayStr, date_to: next7dStr, sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: reportDayStr, date_to: next7dStr, sort_by: 'date_start', status: 'CNF' }),
       // Section 3a comparison — tours started in past 7 days (confirmed only)
-      fetchList('/orders_list', { date_from: last7dStr, date_to: todayStr, sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: prevUpcomingFrom, date_to: prevUpcomingTo, sort_by: 'date_start', status: 'CNF' }),
       // Section 3b — upcoming 30 days (confirmed only)
-      fetchList('/orders_list', { date_from: todayStr, date_to: next30dStr, sort_by: 'date_start', status: 'CNF' }),
+      fetchList('/orders_list', { date_from: reportDayStr, date_to: next30dStr, sort_by: 'date_start', status: 'CNF' }),
       // Section 4 — summer months by date_start (confirmed only)
       fetchList('/orders_list', { date_from: `${year}-06-01`, date_to: `${year}-06-30`, sort_by: 'date_start', status: 'CNF' }),
       fetchList('/orders_list', { date_from: `${year}-07-01`, date_to: `${year}-07-31`, sort_by: 'date_start', status: 'CNF' }),
@@ -321,14 +326,14 @@ export class GTOConnector implements SourceConnector {
               ? `All amounts in EUR (rates date: ${rates.fetchedAt.slice(0, 10)})`
               : 'Currency rates unavailable',
             section1_yesterday: {
-              period: { from: yesterStr, to: todayStr },
+              period: { from: dailyFromStr, to: dailyToStr },
               ...s1,
             },
             section2_last_7_days: {
-              period: { from: last7dStr, to: todayStr },
+              period: { from: last7dStr, to: reportDayStr },
               ...s2,
               vs_prev_7_days: {
-                period: { from: prev14dStr, to: last7dStr },
+                period: { from: prevWindowFrom, to: prevWindowTo },
                 prev_orders_confirmed: s2prev.orders.confirmed,
                 prev_revenue_eur:      s2prev.financials.revenue_eur,
                 prev_profit_eur:       s2prev.financials.profit_eur,
@@ -346,11 +351,11 @@ export class GTOConnector implements SourceConnector {
               },
             },
             section3_upcoming_7days: {
-              period: { from: todayStr, to: next7dStr },
+              period: { from: reportDayStr, to: next7dStr },
               ...s3,
             },
             section3_upcoming_30days: {
-              period: { from: todayStr, to: next30dStr },
+              period: { from: reportDayStr, to: next30dStr },
               ...s3b,
             },
             section4_summer: s4,

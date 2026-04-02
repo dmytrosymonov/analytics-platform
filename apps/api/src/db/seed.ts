@@ -76,8 +76,8 @@ async function main() {
 
     // Default settings
     const defaultSettings: Record<string, Record<string, string>> = {
-      gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'Europe/Kiev' },
-      gto_comments: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', timezone: 'Europe/Kiev' },
+      gto: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', max_parallel_requests: '5', timezone: 'Europe/Kyiv' },
+      gto_comments: { request_timeout_seconds: '30', retry_count: '3', retry_backoff_seconds: '2', timezone: 'Europe/Kyiv' },
       ga4: { timeout: '30', retry_count: '3', retry_backoff: '2', timezone: 'UTC' },
       redmine: { timeout: '30', retry: '3', timezone: 'UTC' },
       youtrack: { timeout: '30', retry: '3', timezone: 'UTC' },

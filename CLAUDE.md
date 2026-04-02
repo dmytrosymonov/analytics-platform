@@ -159,6 +159,14 @@ Key models:
 - Summer season overview is exposed from the Telegram `/generate` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
+- Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+
+## GTO Date Windows
+
+- GTO `orders_list` treats `date_to` as inclusive
+- Daily sales snapshot must therefore query a single target day as `date_from = date_to = target_day`
+- Rolling GTO windows (`last 7 days`, `upcoming`) must be calculated explicitly for inclusive `date_to`
+- Production/business timezone for GTO should be `Europe/Kyiv`, not `UTC`
 
 ---
 
@@ -238,11 +246,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T09:32:13Z
+- Generated at (UTC): 2026-04-02T10:20:57Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 67751a0 (67751a05b095edd92d8cb8a75e95421734b8790d)
-- Commit date: 2026-04-02T11:18:53+02:00
+- Commit: 4f79fa0 (4f79fa0f99f26ce6e0aca3d4c448521a72864817)
+- Commit date: 2026-04-02T11:32:36+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

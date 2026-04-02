@@ -174,6 +174,154 @@ async function buildGenerateKeyboard() {
   return Markup.inlineKeyboard(rows);
 }
 
+async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await prisma.reportSchedule.findUnique({
+    where: { id: scheduleId },
+    include: { source: true },
+  });
+  if (!schedule) throw new Error('Расписание не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach(s => { settings[s.key] = s.value; });
+
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const { periodStart, periodEnd } = computePeriod(schedule.periodType as any, timezone);
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  const connector = connectorRegistry.get(schedule.source.type);
+  const promptVersion = await promptRegistry.getActivePrompt(schedule.source.id);
+  if (!promptVersion) {
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary: 'Промпт не настроен для этого источника' },
+    });
+    throw new Error('Промпт не настроен для этого источника');
+  }
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const fetchResult = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!fetchResult.success || !fetchResult.data) {
+      throw new Error(fetchResult.error?.message || 'Ошибка получения данных');
+    }
+
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: '',
+      },
+      update: {
+        normalizedData: fetchResult.data.metrics as any,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'analyze',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const rendered = await promptRegistry.renderPrompt(promptVersion, {
+      normalized_metrics_json: JSON.stringify(fetchResult.data.metrics),
+      report_period_start: periodStart.toISOString(),
+      report_period_end: periodEnd.toISOString(),
+      source_name: schedule.source.name,
+      output_language: 'Russian',
+      audience_type: 'business',
+    });
+
+    const analysis = await llmService.analyze({
+      systemPrompt: rendered.system,
+      userPrompt: rendered.user,
+      sourceId: schedule.source.id,
+      runId: run.id,
+    });
+
+    let formattedMessage = analysis.telegramMessage;
+    if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
+      formattedMessage = stripSummerSection(formattedMessage);
+    }
+
+    await prisma.reportResult.update({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      data: {
+        promptVersionId: promptVersion.id,
+        llmRequest: { system: rendered.system, user: rendered.user } as any,
+        llmResponse: analysis.structuredOutput as any,
+        structuredOutput: analysis.structuredOutput as any,
+        formattedMessage,
+        tokenUsage: analysis.tokenUsage as any,
+        llmModel: analysis.model,
+        llmCostUsd: analysis.costUsd,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'analyze' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return {
+      runId: run.id,
+      resultId: storedResult.id,
+      message: formattedMessage,
+    };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Manual generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 // ── /ask — build enabled sources keyboard ─────────────────────────────────────
 async function buildAskKeyboard() {
   const sources = await prisma.dataSource.findMany({
@@ -194,52 +342,8 @@ async function buildAskKeyboard() {
 }
 
 // ── Core: fetch connector data + run LLM analysis ────────────────────────────
-async function runAnalysis(scheduleId: string): Promise<string> {
-  const schedule = await prisma.reportSchedule.findUnique({
-    where: { id: scheduleId },
-    include: { source: true },
-  });
-  if (!schedule) throw new Error('Расписание не найдено');
-
-  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
-  if (!credRecord) throw new Error('Учётные данные не настроены');
-
-  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
-  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
-  const settings: Record<string, string> = {};
-  settingRows.forEach(s => { settings[s.key] = s.value; });
-
-  const timezone = await getSourceTimezone(schedule.source.id);
-  const { periodStart, periodEnd } = computePeriod(schedule.periodType as any, timezone);
-  const connector = connectorRegistry.get(schedule.source.type);
-  const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
-  if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');
-
-  const promptVersion = await promptRegistry.getActivePrompt(schedule.source.id);
-  if (!promptVersion) throw new Error('Промпт не настроен для этого источника');
-
-  const rendered = await promptRegistry.renderPrompt(promptVersion, {
-    normalized_metrics_json: JSON.stringify(result.data.metrics),
-    report_period_start:     periodStart.toISOString(),
-    report_period_end:       periodEnd.toISOString(),
-    source_name:             schedule.source.name,
-    output_language:         'Russian',
-    audience_type:           'business',
-  });
-
-  const analysis = await llmService.analyze({
-    systemPrompt: rendered.system,
-    userPrompt: rendered.user,
-    sourceId: schedule.source.id,
-    runId: `bot-ondemand-${Date.now()}`,
-  });
-
-  let message = analysis.telegramMessage;
-  if (schedule.source.type === 'gto' && schedule.periodType === 'daily') {
-    message = stripSummerSection(message);
-  }
-
-  return message;
+async function runAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
+  return runStoredAnalysis(scheduleId);
 }
 
 async function runSummerSalesOutlook(): Promise<string> {
@@ -462,8 +566,17 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const message = await runAnalysis(scheduleId);
-      await replySafe(ctx, message, { disable_web_page_preview: true });
+      const result = await runAnalysis(scheduleId);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
     } catch (err: any) {
       logger.error({ err, scheduleId }, 'On-demand analysis failed');
       await ctx.reply(`❌ Ошибка генерации: ${err.message}`);

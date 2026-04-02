@@ -159,6 +159,14 @@ Key models:
 - Summer season overview is exposed from the Telegram `/generate` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
+- Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+
+## GTO Date Windows
+
+- GTO `orders_list` treats `date_to` as inclusive
+- Daily sales snapshot must therefore query a single target day as `date_from = date_to = target_day`
+- Rolling GTO windows (`last 7 days`, `upcoming`) must be calculated explicitly for inclusive `date_to`
+- Production/business timezone for GTO should be `Europe/Kyiv`, not `UTC`
 
 ---
 
