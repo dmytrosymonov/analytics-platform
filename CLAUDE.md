@@ -68,6 +68,13 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - **v3 base URL:** configurable in Settings → GTO API → `gto.v3_base_url`
 - **Base currency:** configurable in Settings → GTO API → `currency.base` (default: EUR)
 
+### GTO Cost Calculation Guardrails
+
+- Daily/weekly/monthly P&L for GTO must include only `CNF` hotel/service rows in себестоимость; `PEN` rows are operationally important but must not reduce reported margin until confirmed
+- Transfer `price_buy` is **not** universally EUR; supplier-specific handling is required
+- Known rule: `SunTransfers` buy prices are treated as EUR, while suppliers like `ITRAVEX` can provide `price_buy` in `UAH` and must respect the row currency unless a supplier tag overrides it
+- When investigating negative margin below the expected business floor (roughly worse than `-2%`), first compare computed cost against GTO `Total NETT` / package totals and inspect transfer currency interpretation plus any `PEN` extras
+
 ---
 
 ## GTO v3 API — Available Static Data
@@ -145,6 +152,14 @@ Key models:
 
 ---
 
+## Telegram Delivery Notes
+
+- Manual `/generate` replies and background report delivery first try `Markdown` in Telegram
+- If Telegram rejects the message with a parse-entities error, the bot automatically retries the same text without `parse_mode`
+- This fallback is intended to keep report generation working even when LLM output contains unsafe Markdown
+
+---
+
 ## Deploy Process
 
 ```bash
@@ -212,11 +227,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-01T18:37:50Z
+- Generated at (UTC): 2026-04-02T06:09:57Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: f04bb6a (f04bb6ad23548113cfc582cd4b9019b04bafb711)
-- Commit date: 2026-04-01T20:16:46+02:00
+- Commit: b66b7b6 (b66b7b6972149e66f5a86e52af8d614004695d09)
+- Commit date: 2026-04-02T08:08:44+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

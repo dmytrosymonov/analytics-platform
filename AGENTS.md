@@ -152,6 +152,14 @@ Key models:
 
 ---
 
+## Telegram Delivery Notes
+
+- Manual `/generate` replies and background report delivery first try `Markdown` in Telegram
+- If Telegram rejects the message with a parse-entities error, the bot automatically retries the same text without `parse_mode`
+- This fallback is intended to keep report generation working even when LLM output contains unsafe Markdown
+
+---
+
 ## Deploy Process
 
 ```bash
