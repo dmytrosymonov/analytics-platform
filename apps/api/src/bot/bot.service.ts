@@ -48,7 +48,7 @@ function toColumnList(text: string, header: string): string {
 }
 
 function removeOtherAnomalies(text: string): string {
-  return text.replace(/\n⚠️ Прочие аномалии:[\s\S]*?(?=\n(?:📊 За последние 7 дней|🔮 Старт Ближ\. 7 дней|Старт ближ\. 30 дней|☀️ |\Z))/gu, '');
+  return text.replace(/\n⚠️ Прочие аномалии:[\s\S]*?(?=\n(?:📊 За последние 7 дней|🔮 Старт Ближ\. 7 дней|Старт ближ\. 30 дней|☀️ )|$)/gu, '');
 }
 
 function sortDestinationLines(lines: string[]): string[] {
