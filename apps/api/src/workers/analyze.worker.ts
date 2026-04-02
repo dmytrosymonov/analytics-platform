@@ -21,7 +21,7 @@ function toColumnList(text: string, header: string) {
   const pattern = new RegExp(`^${header}:\\s*(.+)$`, 'gmu');
   return text.replace(pattern, (_match, items: string) => {
     const lines = items.split(/\s*,\s*/).filter(Boolean);
-    return `${header}:\n${lines.join('\n')}`;
+    return `---${header}---\n${lines.join('\n')}`;
   });
 }
 
@@ -62,6 +62,7 @@ function formatGtoReportText(text: string) {
   formatted = annotateCnfFinancials(formatted);
   formatted = toColumnList(formatted, '🌍 Направления');
   formatted = toColumnList(formatted, '📦 Продукты');
+  formatted = formatted.replace(/(---🌍 Направления---[\s\S]*?)(\n---📦 Продукты---)/u, '$1\n$2');
   formatted = removeOtherAnomalies(formatted);
   formatted = sortUpcomingBlocks(formatted);
   return formatted.trim();
