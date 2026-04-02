@@ -105,7 +105,7 @@ function formatGtoReportText(text: string): string {
 
 function formatTourStartMonthLines(months: any[] = []): string[] {
   return months.slice(0, 6).map((m) =>
-    `${m.month} - ${formatInt(m.tourists)} туристов, GMV ${formatInt(m.revenue_eur)} EUR, profit ${formatInt(m.profit_eur)} EUR`,
+    `${m.month} - ${formatInt(m.tourists)} туристов, GMV ${formatInt(m.revenue_eur)} EUR, profit ${formatInt(m.profit_eur)} EUR, ср. глубина ${m.avg_lead_days ?? '—'} дн.`,
   );
 }
 

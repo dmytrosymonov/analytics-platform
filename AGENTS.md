@@ -180,7 +180,8 @@ Key models:
 - Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
 - `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
 - `Today` GTO report should use the current business day period; `revenue` and `tourists` are calculated over all non-cancelled orders, while `profit` and `avg check` remain CNF-only to avoid overstating margin from ORQ/PEN orders
-- `Yesterday` and `Today` GTO reports should include a `Старт туров` block grouped by start month (for example `июнь 2026 - 10 туристов, GMV 2034 EUR, profit 432 EUR`)
+- `Yesterday` and `Today` GTO reports should include a `Старт туров` block grouped by start month (for example `июнь 2026 - 10 туристов, GMV 2034 EUR, profit 432 EUR, ср. глубина 24 дн.`)
+- Average sales depth is the number of days between order creation date and travel start date; show it in the `Старт туров` block as `ср. глубина X дн.`
 
 ---
 

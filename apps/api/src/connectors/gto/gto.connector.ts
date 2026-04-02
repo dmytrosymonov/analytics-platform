@@ -109,6 +109,16 @@ export class GTOConnector implements SourceConnector {
     return `${RU_MONTHS[month - 1]} ${year}`;
   }
 
+  private salesLeadDays(createdAt?: string | null, startDate?: string | null) {
+    if (!createdAt || !startDate) return null;
+    const createdMatch = String(createdAt).match(/(\d{4})-(\d{2})-(\d{2})/);
+    const startMatch = String(startDate).match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!createdMatch || !startMatch) return null;
+    const createdUtc = Date.UTC(Number(createdMatch[1]), Number(createdMatch[2]) - 1, Number(createdMatch[3]));
+    const startUtc = Date.UTC(Number(startMatch[1]), Number(startMatch[2]) - 1, Number(startMatch[3]));
+    return Math.round((startUtc - createdUtc) / 86400000);
+  }
+
   private httpClient(baseUrl: string, apiKey: string, timeout: number) {
     return createHttpClient({ baseURL: baseUrl, params: { apikey: apiKey }, timeout }, 'gto');
   }
@@ -594,6 +604,8 @@ export class GTOConnector implements SourceConnector {
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
     const agentName = this.normalizeAgentName(rawAgent);
     const startDate = detail.date_start || orderSummary?.date_start || null;
+    const createdAt = detail.created_at || orderSummary?.created_at || null;
+    const leadDays = this.salesLeadDays(createdAt, startDate);
 
     return {
       orderId:        detail.order_id || orderSummary?.order_id,
@@ -608,6 +620,8 @@ export class GTOConnector implements SourceConnector {
       hasInsurance,
       agentName,
       startDate,
+      createdAt,
+      leadDays,
       supplierCosts,  // map: supplier_name → their specific service cost in this order
     };
   }
@@ -681,7 +695,7 @@ export class GTOConnector implements SourceConnector {
     const activeAgents: Record<string, { orders: number; revenue: number; tourists: number }> = {};
     const activeSuppliers: Record<string, { orders: number; cost: number }> = {};
     const activeOrderValues: Array<{ orderId: any; priceEur: number; costEur: number; profitEur: number; profitPct: number }> = [];
-    const startMonthBuckets: Record<string, { tourists: number; revenue_eur: number; profit_eur: number }> = {};
+    const startMonthBuckets: Record<string, { tourists: number; revenue_eur: number; profit_eur: number; lead_days_sum: number; lead_days_count: number }> = {};
 
     for (const m of allWithDetails) {
       totalTourists += m.tourists;
@@ -744,11 +758,15 @@ export class GTOConnector implements SourceConnector {
       const monthLabel = this.monthBucketLabel(m.startDate);
       if (monthLabel) {
         if (!startMonthBuckets[monthLabel]) {
-          startMonthBuckets[monthLabel] = { tourists: 0, revenue_eur: 0, profit_eur: 0 };
+          startMonthBuckets[monthLabel] = { tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 };
         }
         startMonthBuckets[monthLabel].tourists += m.tourists;
         startMonthBuckets[monthLabel].revenue_eur += m.priceEur;
         if (m.status === 'CNF') startMonthBuckets[monthLabel].profit_eur += m.profitEur;
+        if (typeof m.leadDays === 'number' && Number.isFinite(m.leadDays)) {
+          startMonthBuckets[monthLabel].lead_days_sum += m.leadDays;
+          startMonthBuckets[monthLabel].lead_days_count += 1;
+        }
       }
     }
 
@@ -806,6 +824,7 @@ export class GTOConnector implements SourceConnector {
         tourists: Math.round(data.tourists),
         revenue_eur: r2(data.revenue_eur),
         profit_eur: r2(data.profit_eur),
+        avg_lead_days: data.lead_days_count > 0 ? Math.round(data.lead_days_sum / data.lead_days_count) : null,
       }));
 
     return {
