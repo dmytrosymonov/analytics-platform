@@ -192,6 +192,7 @@ Key models:
 - Manual `/generate` replies and background report delivery first try `Markdown` in Telegram
 - If Telegram rejects the message with a parse-entities error, the bot automatically retries the same text without `parse_mode`
 - This fallback is intended to keep report generation working even when LLM output contains unsafe Markdown
+- Long Telegram reports are automatically split into smaller chunks before send/reply, preferring paragraph and line boundaries to avoid `message is too long` failures
 - `YouTrack Daily Progress` post-processes Telegram text and expands bare issue keys to `KEY — task title`, so blocks like `кто что сделал` and `основные проблемы` stay readable even if the LLM omits the summary after a task key
 - In `YouTrack Daily Progress`, the `Кто что сделал` block is normalized into per-person sections with one task per line in the form `KEY — task title — action taken`, so each task line includes both the task name and what actually changed
 - In Telegram reports menu, `YouTrack Daily Progress` also exposes separate manual buttons for rolling windows: `24h`, `48h`, `72h`
@@ -267,11 +268,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T19:38:39Z
+- Generated at (UTC): 2026-04-02T19:43:43Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: fab604a (fab604a6bd67c6e3fc356949a5b86cb094d80c42)
-- Commit date: 2026-04-02T21:21:24+02:00
+- Commit: 62f0a2c (62f0a2c0cbf956468e6fedf1a1f7b2d71fa1cfa1)
+- Commit date: 2026-04-02T21:38:50+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

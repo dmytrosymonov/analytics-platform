@@ -1,17 +1,9 @@
 import { Job } from 'bullmq';
 import { prisma } from '../lib/prisma';
-import { sendTelegramMessageSafe } from '../bot/bot.service';
+import { sendTelegramMessageSafe, splitTelegramMessage } from '../bot/bot.service';
 import { logger } from '../lib/logger';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-
-function splitMessage(text: string, maxLen = 4096): string[] {
-  if (text.length <= maxLen) return [text];
-  const chunks: string[] = [];
-  let i = 0;
-  while (i < text.length) { chunks.push(text.slice(i, i + maxLen)); i += maxLen; }
-  return chunks;
-}
 
 export async function handleDeliverJob(job: Job) {
   const { runId, sourceId } = job.data;
@@ -77,7 +69,7 @@ export async function handleDeliverJob(job: Job) {
     });
 
     try {
-      const chunks = splitMessage(result.formattedMessage);
+      const chunks = splitTelegramMessage(result.formattedMessage);
       let lastMsgId: number | undefined;
       for (const chunk of chunks) {
         const msg = await sendTelegramMessageSafe(Number(user.telegramId), chunk);

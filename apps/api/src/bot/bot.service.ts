@@ -172,29 +172,81 @@ function isTelegramParseError(err: any): boolean {
   return /can't parse entities/i.test(err?.message || '');
 }
 
-export async function sendTelegramMessageSafe(chatId: number, text: string) {
+function isTelegramTooLongError(err: any): boolean {
+  return /message is too long/i.test(err?.message || '');
+}
+
+export function splitTelegramMessage(text: string, maxLen = 3500): string[] {
+  const normalized = text.trim();
+  if (normalized.length <= maxLen) return [normalized];
+
+  const chunks: string[] = [];
+  let rest = normalized;
+
+  while (rest.length > maxLen) {
+    let splitAt = rest.lastIndexOf('\n\n', maxLen);
+    if (splitAt < Math.floor(maxLen * 0.5)) splitAt = rest.lastIndexOf('\n', maxLen);
+    if (splitAt < Math.floor(maxLen * 0.5)) splitAt = rest.lastIndexOf(' ', maxLen);
+    if (splitAt < Math.floor(maxLen * 0.5)) splitAt = maxLen;
+
+    const chunk = rest.slice(0, splitAt).trim();
+    if (chunk) chunks.push(chunk);
+    rest = rest.slice(splitAt).trim();
+  }
+
+  if (rest) chunks.push(rest);
+  return chunks;
+}
+
+async function sendTelegramChunk(chatId: number, text: string, extra: Record<string, unknown> = {}) {
   try {
     return await bot.telegram.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true,
+      ...extra,
     } as any);
   } catch (err: any) {
+    if (isTelegramTooLongError(err)) throw err;
     if (!isTelegramParseError(err)) throw err;
     logger.warn({ chatId, err: err.message }, 'Telegram markdown send failed, retrying without parse mode');
     return bot.telegram.sendMessage(chatId, text, {
       disable_web_page_preview: true,
+      ...extra,
     } as any);
   }
 }
 
-async function replySafe(ctx: any, text: string, extra: Record<string, unknown> = {}) {
+export async function sendTelegramMessageSafe(chatId: number, text: string, extra: Record<string, unknown> = {}) {
+  const chunks = splitTelegramMessage(text);
+  let lastMessage: any;
+
+  for (const chunk of chunks) {
+    lastMessage = await sendTelegramChunk(chatId, chunk, extra);
+  }
+
+  return lastMessage;
+}
+
+async function replyChunkSafe(ctx: any, text: string, extra: Record<string, unknown> = {}) {
   try {
     return await ctx.reply(text, { parse_mode: 'Markdown', ...extra } as any);
   } catch (err: any) {
+    if (isTelegramTooLongError(err)) throw err;
     if (!isTelegramParseError(err)) throw err;
     logger.warn({ err: err.message }, 'Telegram markdown reply failed, retrying without parse mode');
     return ctx.reply(text, extra as any);
   }
+}
+
+async function replySafe(ctx: any, text: string, extra: Record<string, unknown> = {}) {
+  const chunks = splitTelegramMessage(text);
+  let lastMessage: any;
+
+  for (const chunk of chunks) {
+    lastMessage = await replyChunkSafe(ctx, chunk, extra);
+  }
+
+  return lastMessage;
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
