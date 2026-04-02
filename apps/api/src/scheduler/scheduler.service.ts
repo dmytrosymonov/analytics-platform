@@ -183,3 +183,10 @@ export function computeCurrentDayPeriod(timezone = 'UTC'): { periodStart: Date; 
     periodEnd: zonedDateTimeToUtc(timezone, nextDay.year, nextDay.month, nextDay.day),
   };
 }
+
+export function computeRollingHoursPeriod(hours: number): { periodStart: Date; periodEnd: Date } {
+  const safeHours = Math.max(1, Math.min(hours, 24 * 30));
+  const periodEnd = new Date();
+  const periodStart = new Date(periodEnd.getTime() - safeHours * 3600000);
+  return { periodStart, periodEnd };
+}

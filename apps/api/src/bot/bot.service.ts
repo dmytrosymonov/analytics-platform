@@ -7,7 +7,7 @@ import { decrypt } from '../lib/encryption';
 import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
-import { computeCurrentDayPeriod, computePeriod, getSourceTimezone } from '../scheduler/scheduler.service';
+import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone } from '../scheduler/scheduler.service';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -307,6 +307,26 @@ async function buildScheduleCategoryMenu(sourceTypes: string[], prefix: string) 
   return Markup.inlineKeyboard(rows);
 }
 
+async function buildYoutrackReportsMenu() {
+  const schedules = await getSchedulesBySourceTypes(['youtrack', 'youtrack_progress']);
+  if (schedules.length === 0) return null;
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (const schedule of schedules) {
+    rows.push([Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`)]);
+    if (schedule.source.type === 'youtrack_progress') {
+      rows.push([
+        Markup.button.callback('24h', `gen:youtrack_hours:${schedule.id}:24`),
+        Markup.button.callback('48h', `gen:youtrack_hours:${schedule.id}:48`),
+        Markup.button.callback('72h', `gen:youtrack_hours:${schedule.id}:72`),
+      ]);
+    }
+  }
+
+  rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  return Markup.inlineKeyboard(rows);
+}
+
 async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await prisma.reportSchedule.findUnique({
     where: { id: scheduleId },
@@ -483,6 +503,148 @@ async function buildAskKeyboard() {
 // ── Core: fetch connector data + run LLM analysis ────────────────────────────
 async function runAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
   return runStoredAnalysis(scheduleId);
+}
+
+async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await prisma.reportSchedule.findUnique({
+    where: { id: scheduleId },
+    include: { source: true },
+  });
+  if (!schedule) throw new Error('Расписание не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach(s => { settings[s.key] = s.value; });
+
+  const { periodStart, periodEnd } = computeRollingHoursPeriod(hours);
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  const connector = connectorRegistry.get(schedule.source.type);
+  const promptVersion = await promptRegistry.getActivePrompt(schedule.source.id);
+  if (!promptVersion) {
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary: 'Промпт не настроен для этого источника' },
+    });
+    throw new Error('Промпт не настроен для этого источника');
+  }
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const fetchResult = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!fetchResult.success || !fetchResult.data) {
+      throw new Error(fetchResult.error?.message || 'Ошибка получения данных');
+    }
+
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: '',
+      },
+      update: {
+        normalizedData: fetchResult.data.metrics as any,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'analyze',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const rendered = await promptRegistry.renderPrompt(promptVersion, {
+      normalized_metrics_json: JSON.stringify(fetchResult.data.metrics),
+      report_period_start: periodStart.toISOString(),
+      report_period_end: periodEnd.toISOString(),
+      source_name: `${schedule.source.name} (${hours}h)`,
+      output_language: 'Russian',
+      audience_type: 'business',
+    });
+
+    const analysis = await llmService.analyze({
+      systemPrompt: rendered.system,
+      userPrompt: rendered.user,
+      sourceId: schedule.source.id,
+      runId: run.id,
+    });
+
+    await prisma.reportResult.update({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      data: {
+        promptVersionId: promptVersion.id,
+        llmRequest: { system: rendered.system, user: rendered.user } as any,
+        llmResponse: analysis.structuredOutput as any,
+        structuredOutput: analysis.structuredOutput as any,
+        formattedMessage: analysis.telegramMessage,
+        tokenUsage: analysis.tokenUsage as any,
+        llmModel: analysis.model,
+        llmCostUsd: analysis.costUsd,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'analyze' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return {
+      runId: run.id,
+      resultId: storedResult.id,
+      message: analysis.telegramMessage,
+    };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Rolling hours generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
 }
 
 async function runSummerSalesOutlook(): Promise<string> {
@@ -843,7 +1005,7 @@ function registerHandlers(instance: Telegraf) {
 
   instance.action('reports:youtrack', async (ctx) => {
     await ctx.answerCbQuery();
-    const keyboard = await buildScheduleCategoryMenu(['youtrack', 'youtrack_progress'], 'youtrack');
+    const keyboard = await buildYoutrackReportsMenu();
     if (!keyboard) return ctx.reply('Нет доступных отчётов Youtrack.');
     await ctx.editMessageText('🎯 *Youtrack*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
@@ -967,6 +1129,43 @@ function registerHandlers(instance: Telegraf) {
       }).catch(() => {});
     } catch (err: any) {
       logger.error({ err, scheduleId }, 'On-demand analysis failed');
+      await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
+    }
+  });
+
+  instance.action(/^gen:youtrack_hours:([^:]+):(24|48|72)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    const scheduleId = ctx.match[1];
+    const hours = Number(ctx.match[2]);
+    const schedule = await prisma.reportSchedule.findUnique({
+      where: { id: scheduleId },
+      include: { source: { select: { name: true, type: true } } },
+    });
+    if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (schedule.source.type !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
+
+    await ctx.editMessageText(
+      `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${hours}h*...\nЭто может занять 1–2 минуты.`,
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runRollingHoursAnalysis(scheduleId, hours);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err, scheduleId, hours }, 'On-demand YouTrack rolling-hours analysis failed');
       await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
     }
   });

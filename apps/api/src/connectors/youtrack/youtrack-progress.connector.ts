@@ -32,6 +32,10 @@ type ContributorActivity = {
   status_changes: number;
   comments: number;
   issues_touched: number;
+  tasks: Array<{
+    key: string;
+    summary: string;
+  }>;
   examples: string[];
 };
 
@@ -325,11 +329,17 @@ export class YouTrackProgressConnector implements SourceConnector {
   }
 
   private buildContributorActivity(issues: ProgressIssue[]): ContributorActivity[] {
-    const people = new Map<string, { statusChanges: number; comments: number; issues: Set<string>; examples: string[] }>();
+    const people = new Map<string, {
+      statusChanges: number;
+      comments: number;
+      issues: Set<string>;
+      tasks: Map<string, string>;
+      examples: string[];
+    }>();
 
     const ensure = (name: string) => {
       if (!people.has(name)) {
-        people.set(name, { statusChanges: 0, comments: 0, issues: new Set<string>(), examples: [] });
+        people.set(name, { statusChanges: 0, comments: 0, issues: new Set<string>(), tasks: new Map<string, string>(), examples: [] });
       }
       return people.get(name)!;
     };
@@ -339,6 +349,7 @@ export class YouTrackProgressConnector implements SourceConnector {
         const person = ensure(transition.author);
         person.statusChanges += 1;
         person.issues.add(issue.key);
+        person.tasks.set(issue.key, issue.summary);
         if (person.examples.length < 4) {
           person.examples.push(`${issue.key} — State: ${transition.from || 'unknown'} -> ${transition.to || 'unknown'}`);
         }
@@ -348,6 +359,7 @@ export class YouTrackProgressConnector implements SourceConnector {
         const person = ensure(comment.author);
         person.comments += 1;
         person.issues.add(issue.key);
+        person.tasks.set(issue.key, issue.summary);
         if (person.examples.length < 4) {
           person.examples.push(`${issue.key} — comment: ${comment.text}`);
         }
@@ -360,6 +372,7 @@ export class YouTrackProgressConnector implements SourceConnector {
         status_changes: stats.statusChanges,
         comments: stats.comments,
         issues_touched: stats.issues.size,
+        tasks: [...stats.tasks.entries()].slice(0, 6).map(([key, summary]) => ({ key, summary })),
         examples: stats.examples,
       }))
       .sort((a, b) => {
