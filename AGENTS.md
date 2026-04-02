@@ -157,8 +157,9 @@ Key models:
 
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu with sections `Sales`, `Comments`, and `Youtrack`
-- `Sales` submenu currently includes `Yesterday`, `Today`, and `Summer`
+- `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
+- `Sales` submenu should also expose `Payments Yesterday` and `Payments Today`
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
@@ -184,6 +185,8 @@ Key models:
 - Average sales depth is the number of days between order creation date and travel start date; show it in Telegram `Продукты` lines as `ср. глубина X дн.`, not in the `Старт туров` block
 - Telegram GTO `Продукты` blocks should include average sales depth per product line as `ср. глубина X дн.`
 - Telegram GTO `Продукты` blocks should include separate lines for `Трансферы` and `Страховки`, but only for standalone orders where that is the only active product in the order
+- GTO payments reports should use `/payments_list` with exact business-date filters and convert all amounts to EUR
+- Telegram GTO payments reports should present `Payments Today` and `Payments Yesterday` separately, with separate incoming (`type=in`) and outgoing (`type=out`) sections and grouping by `payment_form`
 
 ---
 

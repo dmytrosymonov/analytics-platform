@@ -9,10 +9,15 @@ import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
 import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone } from '../scheduler/scheduler.service';
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
+import { CurrencyService } from '../lib/currency.service';
+import { createHttpClient } from '../lib/http';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
 let _botRunning = false;
+
+const DEFAULT_GTO_BASE_URL = 'https://api.gto.ua/api/private';
+const DEFAULT_GTO_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 
 // Proxy so other modules always get the current instance
 export const bot = new Proxy({} as Telegraf, {
@@ -346,6 +351,8 @@ async function buildSalesReportsMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('Yesterday', 'gen:sales:daily')],
     [Markup.button.callback('Today', 'gen:sales:today')],
+    [Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')],
+    [Markup.button.callback('Payments Today', 'gen:sales:payments_today')],
     [Markup.button.callback('Summer', 'gen:sales:summer')],
     [Markup.button.callback('← Back', 'reports:home')],
   ]);
@@ -755,6 +762,242 @@ function formatNegativeMarginLines(orders: any[]): string[] {
   return orders.map(o => `#${o.order_id} — GMV ${formatInt(o.revenue_eur)} EUR, себест. ${formatInt(o.cost_eur)} EUR, маржа ${o.profit_pct}%`);
 }
 
+type PaymentDirection = 'in' | 'out';
+
+type PaymentRow = {
+  id: string;
+  type: PaymentDirection;
+  order_id: string;
+  amount_eur: number;
+  payment_form: string;
+  date: string;
+  received_from: string;
+  is_revoked: boolean;
+};
+
+function formatPaymentFormLines(forms: Array<{ payment_form: string; count: number; amount_eur: number }>): string[] {
+  return forms.map((form) => `${form.payment_form} — ${formatInt(form.count)} платежей, ${formatInt(form.amount_eur)} EUR`);
+}
+
+function formatTopPaymentLines(rows: PaymentRow[]): string[] {
+  return rows.slice(0, 5).map((row) => {
+    const suffix = row.received_from ? `, ${row.received_from}` : '';
+    return `#${row.order_id} — ${formatInt(row.amount_eur)} EUR (${row.payment_form}${suffix})`;
+  });
+}
+
+function formatGtoPaymentsReport(title: string, periodLabel: string, payload: any): string {
+  const incoming = payload?.incoming || { count: 0, amount_eur: 0, by_form: [], top_payments: [] };
+  const outgoing = payload?.outgoing || { count: 0, amount_eur: 0, by_form: [], top_payments: [] };
+
+  const lines: string[] = [
+    title,
+    `Период: ${periodLabel}`,
+    '',
+    'Все денежные показатели приведены к EUR.',
+    '',
+    '---📥 Входящие---',
+    `Платежей: ${formatInt(incoming.count)}`,
+    `Сумма: ${formatInt(incoming.amount_eur)} EUR`,
+  ];
+
+  const incomingForms = formatPaymentFormLines(incoming.by_form || []);
+  if (incomingForms.length > 0) {
+    lines.push('', 'Типы оплат:', ...incomingForms);
+  }
+
+  const incomingTop = formatTopPaymentLines(incoming.top_payments || []);
+  if (incomingTop.length > 0) {
+    lines.push('', 'Крупнейшие входящие:', ...incomingTop);
+  }
+
+  lines.push('', '---📤 Исходящие---', `Платежей: ${formatInt(outgoing.count)}`, `Сумма: ${formatInt(outgoing.amount_eur)} EUR`);
+
+  const outgoingForms = formatPaymentFormLines(outgoing.by_form || []);
+  if (outgoingForms.length > 0) {
+    lines.push('', 'Типы оплат:', ...outgoingForms);
+  }
+
+  const outgoingTop = formatTopPaymentLines(outgoing.top_payments || []);
+  if (outgoingTop.length > 0) {
+    lines.push('', 'Крупнейшие исходящие:', ...outgoingTop);
+  }
+
+  return lines.join('\n').trim();
+}
+
+async function getGtoPaymentsBaseConfig(sourceId: string) {
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach((s) => { settings[s.key] = s.value; });
+
+  const apiKey = String(credentials.api_key || '');
+  if (!apiKey) throw new Error('GTO API key не настроен');
+
+  const baseUrl = String(credentials.base_url || DEFAULT_GTO_BASE_URL).replace(/\/$/, '');
+  const timeout = parseInt(settings['request_timeout_seconds'] || '30', 10) * 1000;
+  const client = createHttpClient({ baseURL: baseUrl, params: { apikey: apiKey }, timeout }, 'gto-payments');
+
+  const v3Setting = await prisma.systemSetting.findUnique({ where: { key: 'gto.v3_base_url' } });
+  const v3BaseUrl = (v3Setting?.value || DEFAULT_GTO_V3_BASE_URL).replace(/\/$/, '');
+  const rates = await CurrencyService.getRates(apiKey, v3BaseUrl);
+
+  return { client, rates };
+}
+
+async function fetchGtoPaymentsForDate(sourceId: string, dateStr: string, type: PaymentDirection): Promise<PaymentRow[]> {
+  const { client, rates } = await getGtoPaymentsBaseConfig(sourceId);
+  const rows: PaymentRow[] = [];
+  const perPage = 1000;
+  let page = 1;
+
+  for (;;) {
+    const resp = await client.get('/payments_list', {
+      params: {
+        type,
+        date_from: dateStr,
+        date_to: dateStr,
+        per_page: perPage,
+        page,
+      },
+    });
+
+    const data = Array.isArray(resp.data?.data) ? resp.data.data : Array.isArray(resp.data) ? resp.data : [];
+    for (const item of data) {
+      if (item?.is_revoked) continue;
+      const amount = Math.abs(parseFloat(item?.amount) || 0);
+      const currency = String(item?.currency_code || item?.balance_currency_code || 'EUR');
+      rows.push({
+        id: String(item?.id || ''),
+        type,
+        order_id: String(item?.order_id || ''),
+        amount_eur: CurrencyService.toEur(amount, currency, rates),
+        payment_form: String(item?.payment_form || 'Unknown'),
+        date: String(item?.date || dateStr),
+        received_from: String(item?.received_from || '').trim(),
+        is_revoked: Boolean(item?.is_revoked),
+      });
+    }
+
+    if (data.length < perPage) break;
+    page++;
+    if (page > 20) break;
+  }
+
+  return rows;
+}
+
+function summarizePayments(rows: PaymentRow[]) {
+  const byForm = new Map<string, { count: number; amount_eur: number }>();
+  for (const row of rows) {
+    const key = row.payment_form || 'Unknown';
+    const existing = byForm.get(key) || { count: 0, amount_eur: 0 };
+    existing.count += 1;
+    existing.amount_eur += row.amount_eur;
+    byForm.set(key, existing);
+  }
+
+  return {
+    count: rows.length,
+    amount_eur: rows.reduce((sum, row) => sum + row.amount_eur, 0),
+    by_form: [...byForm.entries()]
+      .map(([payment_form, stats]) => ({ payment_form, count: stats.count, amount_eur: stats.amount_eur }))
+      .sort((a, b) => b.amount_eur - a.amount_eur),
+    top_payments: [...rows].sort((a, b) => b.amount_eur - a.amount_eur).slice(0, 5),
+  };
+}
+
+async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const period = mode === 'today' ? computeCurrentDayPeriod(timezone) : computePeriod('daily', timezone);
+  const dateStr = period.periodStart.toLocaleDateString('sv-SE', { timeZone: timezone });
+  const periodLabel = dateStr.split('-').reverse().join('/');
+
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const [incomingRows, outgoingRows] = await Promise.all([
+      fetchGtoPaymentsForDate(schedule.source.id, dateStr, 'in'),
+      fetchGtoPaymentsForDate(schedule.source.id, dateStr, 'out'),
+    ]);
+
+    const normalizedData = {
+      payments: {
+        period: { from: dateStr, to: dateStr },
+        incoming: summarizePayments(incomingRows),
+        outgoing: summarizePayments(outgoingRows),
+      },
+    };
+
+    const title = mode === 'today' ? '💳 Отчёт по оплатам GTO Today' : '💳 Отчёт по оплатам GTO Yesterday';
+    const message = formatGtoPaymentsReport(title, periodLabel, normalizedData.payments);
+
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: normalizedData as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: normalizedData as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Payments report generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 function formatGtoTodayReport(metrics: any): string {
   const section = metrics?.computed?.section1_yesterday;
   const snapshot = section?.non_cancelled_snapshot;
@@ -1115,6 +1358,62 @@ function registerHandlers(instance: Telegraf) {
     } catch (err: any) {
       logger.error({ err }, 'Today sales report failed');
       await ctx.reply(`❌ Ошибка генерации today-отчёта: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:payments_today', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Payments Today*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoPaymentsReport('today');
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Today payments report failed');
+      await ctx.reply(`❌ Ошибка генерации today-отчёта по оплатам: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:payments_yesterday', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Payments Yesterday*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoPaymentsReport('yesterday');
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Yesterday payments report failed');
+      await ctx.reply(`❌ Ошибка генерации yesterday-отчёта по оплатам: ${err.message}`);
     }
   });
 
