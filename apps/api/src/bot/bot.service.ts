@@ -84,9 +84,19 @@ function formatGtoReportText(text: string): string {
   formatted = annotateCnfFinancials(formatted);
   formatted = toColumnList(formatted, '🌍 Направления');
   formatted = toColumnList(formatted, '📦 Продукты');
-  formatted = formatted.replace(/(---🌍 Направления---[\s\S]*?)(\n---📦 Продукты---)/u, '$1\n$2');
+  formatted = formatted.replace(/(---🌍 Направления---[\s\S]*?)(\n---📦 Продукты---)/gu, '$1\n$2');
   formatted = removeOtherAnomalies(formatted);
   formatted = sortUpcomingBlocks(formatted);
+  formatted = formatted.replace(/(🔴 Отрицательная маржа[\s\S]*?)(\n🔮 Старт Ближ\. 7 дней:)/gu, '$1\n$2');
+  formatted = formatted.replace(
+    /^🔮 Старт Ближ\. 7 дней:\s*(\d+)\s+заказ\w*,\s*(\d+)\s+турист\w*,\s*GMV:\s*([^,]+),\s*Gross profit:\s*(.+)$/gmu,
+    '🔮 Старт Ближ. 7 дней: \n$1 заказов, \n$2 туристов, \nGMV: $3, \nGross profit: $4',
+  );
+  formatted = formatted.replace(
+    /^Старт ближ\. 30 дней:\s*(\d+)\s+заказ\w*,\s*(\d+)\s+турист\w*,\s*GMV:\s*([^,]+),\s*Gross profit:\s*(.+)$/gmu,
+    'Старт ближ. 30 дней: \n$1 заказов, \n$2 туристов, \nGMV: $3, \nGross profit: $4',
+  );
+  formatted = formatted.replace(/(Самые популярные направления:[\s\S]*?)(\nСтарт ближ\. 30 дней:)/gu, '$1\n$2');
   return formatted.trim();
 }
 

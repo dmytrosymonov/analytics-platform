@@ -173,6 +173,8 @@ Key models:
 - Telegram GTO daily/7-day reports should render `🌍 Направления` and `📦 Продукты` as vertical lists with section headers `---🌍 Направления---` and `---📦 Продукты---`, separated by a blank line
 - Telegram GTO daily/7-day reports should keep only the `🔴 Отрицательная маржа` anomaly block; generic `⚠️ Прочие аномалии` should not be shown
 - In `🔮` upcoming blocks, destination lines should be sorted by tourist count descending
+- Telegram GTO daily reports should also keep blank lines between major sections, including before `---📦 Продукты---`, before `🔮 Старт Ближ. 7 дней`, and before `Старт ближ. 30 дней`
+- `🔮 Старт Ближ. 7 дней` and `Старт ближ. 30 дней` should render their summary as multiline blocks: orders, tourists, GMV, and gross profit on separate lines
 
 ---
 
