@@ -158,6 +158,7 @@ Key models:
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `/generate` submenu as a dedicated action button: `☀️ Summer Sales Outlook`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
+- GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 
 ---
 
@@ -237,11 +238,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T09:18:32Z
+- Generated at (UTC): 2026-04-02T09:32:13Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 82d6083 (82d60838cb77975d19abace84fb50de35879b19e)
-- Commit date: 2026-04-02T11:04:59+02:00
+- Commit: 67751a0 (67751a05b095edd92d8cb8a75e95421734b8790d)
+- Commit date: 2026-04-02T11:18:53+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

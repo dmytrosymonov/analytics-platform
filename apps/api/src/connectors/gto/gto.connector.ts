@@ -76,6 +76,15 @@ const COUNTRY_EMOJI: Record<string, string> = {
 };
 const countryEmoji = (name: string) => COUNTRY_EMOJI[name] ?? '';
 
+function shiftDateString(dateStr: string, offsetDays: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays));
+  const yyyy = shifted.getUTCFullYear();
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // ─── Connector ────────────────────────────────────────────────────────────────
 export class GTOConnector implements SourceConnector {
   readonly sourceType = 'gto';
@@ -118,20 +127,18 @@ export class GTOConnector implements SourceConnector {
     if (!rates) warnings.push('Currency rates unavailable — amounts in original currencies');
 
     // ── Date ranges (timezone-aware) ──────────────────────────────────────
-    // Use configured timezone so "today/yesterday" matches business timezone, not server UTC.
+    // Anchor all relative windows to the requested report period, not server "now".
+    // This keeps manual /generate runs and scheduled runs consistent.
     const tz = settings['timezone'] || 'Europe/Kiev';
-    const dateTz = (offsetDays: number = 0): string => {
-      const d = new Date();
-      d.setDate(d.getDate() + offsetDays);
-      return d.toLocaleDateString('sv-SE', { timeZone: tz }); // always 'YYYY-MM-DD'
-    };
+    const formatTzDate = (date: Date): string => date.toLocaleDateString('sv-SE', { timeZone: tz });
 
-    const todayStr    = dateTz(0);
-    const yesterStr   = dateTz(-1);
-    const last7dStr   = dateTz(-7);
-    const prev14dStr  = dateTz(-14);
-    const next7dStr   = dateTz(7);
-    const next30dStr  = dateTz(30);
+    const periodEndStr   = formatTzDate(period.end);
+    const todayStr       = periodEndStr;
+    const yesterStr      = shiftDateString(periodEndStr, -1);
+    const last7dStr      = shiftDateString(periodEndStr, -7);
+    const prev14dStr     = shiftDateString(periodEndStr, -14);
+    const next7dStr      = shiftDateString(periodEndStr, 7);
+    const next30dStr     = shiftDateString(periodEndStr, 30);
 
     // Summer months (next upcoming June/July/August relative to today in TZ)
     const todayYear  = parseInt(todayStr.slice(0, 4), 10);
