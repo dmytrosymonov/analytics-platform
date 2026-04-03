@@ -101,6 +101,7 @@ model User {
   updatedAt             DateTime   @updatedAt @map("updated_at")
 
   reportPreferences    UserReportPreference[]
+  manualReportAccess   UserManualReportAccess[]
   schedulePreferences  UserSchedulePreference[]
   sentMessages         SentMessage[]
 
@@ -203,6 +204,20 @@ model UserReportPreference {
 
   @@unique([userId, sourceId])
   @@map("user_report_preferences")
+}
+
+model UserManualReportAccess {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  reportKey  String   @map("report_key")
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, reportKey])
+  @@map("user_manual_report_access")
 }
 
 model PromptTemplate {

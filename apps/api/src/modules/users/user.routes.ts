@@ -3,6 +3,13 @@ import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { writeAuditLog } from '../../lib/audit';
 import { bot } from '../../bot/bot.service';
+import { MANUAL_REPORT_ACCESS_DEFINITIONS, getManualReportAccessDefinition } from '../../lib/report-access';
+
+const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
+  findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
+  findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
+  upsert: (args: unknown) => Promise<unknown>;
+};
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
   pending: ['approved', 'deleted'],
@@ -177,5 +184,59 @@ export async function userRoutes(app: FastifyInstance) {
     });
 
     return reply.send({ success: true, data: pref });
+  });
+
+  app.get('/:id/manual-report-access', auth, async (request, reply) => {
+    const { id } = request.params as any;
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.status(404).send({ success: false, error: { message: 'User not found' } });
+
+    const rows = await prismaManualReportAccess.findMany({ where: { userId: id } });
+    const enabledByKey = new Map(rows.map((row) => [row.reportKey, row.enabled]));
+
+    return reply.send({
+      success: true,
+      data: MANUAL_REPORT_ACCESS_DEFINITIONS.map((definition) => ({
+        ...definition,
+        enabled: enabledByKey.get(definition.key) ?? true,
+      })),
+    });
+  });
+
+  app.patch('/:id/manual-report-access/:reportKey', auth, async (request, reply) => {
+    const { id, reportKey } = request.params as any;
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(request.body);
+    const actor = (request.user as any);
+
+    const definition = getManualReportAccessDefinition(reportKey);
+    if (!definition) {
+      return reply.status(404).send({ success: false, error: { message: 'Manual report access key not found' } });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.status(404).send({ success: false, error: { message: 'User not found' } });
+
+    const existing = await prismaManualReportAccess.findUnique({
+      where: { userId_reportKey: { userId: id, reportKey } },
+    });
+
+    const access = await prismaManualReportAccess.upsert({
+      where: { userId_reportKey: { userId: id, reportKey } },
+      create: { userId: id, reportKey, enabled },
+      update: { enabled },
+    });
+
+    await writeAuditLog({
+      actorType: 'admin',
+      actorId: actor.sub,
+      action: 'user.manual_report_access.updated',
+      entityType: 'user',
+      entityId: id,
+      beforeState: { reportKey, enabled: existing?.enabled ?? true, label: definition.label },
+      afterState: { reportKey, enabled, label: definition.label },
+      ipAddress: request.ip,
+    });
+
+    return reply.send({ success: true, data: access });
   });
 }

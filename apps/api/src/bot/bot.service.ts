@@ -11,6 +11,7 @@ import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getS
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
+import { MANUAL_REPORT_ACCESS_DEFINITIONS } from '../lib/report-access';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -35,6 +36,11 @@ interface AskSession {
 const sessions = new Map<number, AskSession>();
 type ScheduleWithSource = Prisma.ReportScheduleGetPayload<{ include: { source: true } }>;
 type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { source: { select: { id: true; name: true; type: true } } } }>;
+type ManualReportAccessState = typeof MANUAL_REPORT_ACCESS_DEFINITIONS[number] & { enabled: boolean };
+const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
+  findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
+  findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
+};
 
 function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -290,6 +296,55 @@ async function getUserSchedulePrefs(userId: string) {
   return new Map(prefs.map(p => [p.scheduleId, p.enabled]));
 }
 
+async function getUserManualReportAccess(userId: string): Promise<ManualReportAccessState[]> {
+  const rows = await prismaManualReportAccess.findMany({ where: { userId } });
+  const enabledByKey = new Map(rows.map((row) => [row.reportKey, row.enabled]));
+  return MANUAL_REPORT_ACCESS_DEFINITIONS.map((definition) => ({
+    ...definition,
+    enabled: enabledByKey.get(definition.key) ?? true,
+  }));
+}
+
+async function isManualReportAllowed(userId: string, reportKey: string): Promise<boolean> {
+  const pref = await prismaManualReportAccess.findUnique({
+    where: { userId_reportKey: { userId, reportKey } },
+  });
+  return pref?.enabled ?? true;
+}
+
+async function isScheduleAllowed(userId: string, scheduleId: string): Promise<boolean> {
+  const pref = await prisma.userSchedulePreference.findUnique({
+    where: { userId_scheduleId: { userId, scheduleId } },
+  });
+  return pref?.enabled ?? true;
+}
+
+async function getAllowedSchedulesBySourceTypes(userId: string, sourceTypes: string[]): Promise<ScheduleWithSourceSummary[]> {
+  const [schedules, prefs] = await Promise.all([
+    getSchedulesBySourceTypes(sourceTypes),
+    getUserSchedulePrefs(userId),
+  ]);
+  return schedules.filter((schedule) => prefs.get(schedule.id) ?? true);
+}
+
+async function ensureManualReportAllowed(ctx: any, userId: string, reportKey: string): Promise<boolean> {
+  const allowed = await isManualReportAllowed(userId, reportKey);
+  if (!allowed) {
+    await ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    return false;
+  }
+  return true;
+}
+
+async function ensureScheduleAllowed(ctx: any, userId: string, scheduleId: string): Promise<boolean> {
+  const allowed = await isScheduleAllowed(userId, scheduleId);
+  if (!allowed) {
+    await ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    return false;
+  }
+  return true;
+}
+
 async function getScheduleBySourceTypeAndPeriod(sourceType: string, periodType: PeriodType): Promise<ScheduleWithSource | null> {
   return prisma.reportSchedule.findFirst({
     where: {
@@ -315,51 +370,97 @@ async function getSchedulesBySourceTypes(sourceTypes: string[]): Promise<Schedul
 
 // ── /reports — build inline keyboard showing current subscription state ────────
 async function buildReportsKeyboard(userId: string) {
-  const schedules = await getEnabledSchedules();
-  if (schedules.length === 0) {
-    return { text: 'Нет активных расписаний. Попросите администратора настроить их.', keyboard: null };
-  }
+  const [schedules, manualReports] = await Promise.all([
+    getEnabledSchedules(),
+    getUserManualReportAccess(userId),
+  ]);
   const prefs = await getUserSchedulePrefs(userId);
   const periodLabel = (p: string) => p === 'daily' ? 'день' : p === 'weekly' ? 'неделя' : 'месяц';
+  const allowedSchedules = schedules.filter((schedule) => prefs.get(schedule.id) ?? true);
+  const enabledManualReports = manualReports.filter((report) => report.enabled);
+  const lines: string[] = [
+    '📋 *Доступные отчёты*',
+    '',
+    'Доступ управляется администратором из бекофиса.',
+  ];
 
-  const buttons = schedules.map(s => {
-    const enabled = prefs.get(s.id) ?? true;
-    return Markup.button.callback(
-      `${enabled ? '✅' : '❌'} ${s.name} · ${s.source.name} (${periodLabel(s.periodType)})`,
-      `sub:${s.id}`,
-    );
-  });
+  if (enabledManualReports.length > 0) {
+    lines.push('', '*Ручные отчёты:*');
+    for (const report of enabledManualReports) {
+      lines.push(`• ${report.label}`);
+    }
+  }
 
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+  if (allowedSchedules.length > 0) {
+    lines.push('', '*Расписания и генерации:*');
+    for (const schedule of allowedSchedules) {
+      lines.push(`• ${schedule.name} · ${schedule.source.name} (${periodLabel(schedule.periodType)})`);
+    }
+  }
+
+  if (enabledManualReports.length === 0 && allowedSchedules.length === 0) {
+    lines.push('', 'Сейчас для вас нет доступных отчётов.');
+  }
 
   return {
-    text: '📋 *Мои подписки на отчёты*\n\nНажмите кнопку чтобы включить или выключить подписку:',
-    keyboard: Markup.inlineKeyboard(rows),
+    text: lines.join('\n'),
+    keyboard: null,
   };
 }
 
-async function buildTopReportsMenu() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('Sales', 'reports:sales')],
-    [Markup.button.callback('Comments', 'reports:comments')],
-    [Markup.button.callback('Youtrack', 'reports:youtrack')],
+async function buildTopReportsMenu(userId: string) {
+  const [manualReports, commentsSchedules, redmineSchedules, youtrackSchedules] = await Promise.all([
+    getUserManualReportAccess(userId),
+    getAllowedSchedulesBySourceTypes(userId, ['gto_comments']),
+    getAllowedSchedulesBySourceTypes(userId, ['redmine']),
+    getAllowedSchedulesBySourceTypes(userId, ['youtrack', 'youtrack_progress']),
   ]);
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  if (manualReports.some((report) => report.category === 'sales' && report.enabled)) {
+    rows.push([Markup.button.callback('Sales', 'reports:sales')]);
+  }
+  if (commentsSchedules.length > 0) {
+    rows.push([Markup.button.callback('Comments', 'reports:comments')]);
+  }
+  if (redmineSchedules.length > 0) {
+    rows.push([Markup.button.callback('Redmine', 'reports:redmine')]);
+  }
+  if (youtrackSchedules.length > 0) {
+    rows.push([Markup.button.callback('Youtrack', 'reports:youtrack')]);
+  }
+
+  if (rows.length === 0) return null;
+  return Markup.inlineKeyboard(rows);
 }
 
-async function buildSalesReportsMenu() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('Yesterday', 'gen:sales:daily')],
-    [Markup.button.callback('Today', 'gen:sales:today')],
-    [Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')],
-    [Markup.button.callback('Payments Today', 'gen:sales:payments_today')],
-    [Markup.button.callback('Summer', 'gen:sales:summer')],
-    [Markup.button.callback('← Back', 'reports:home')],
-  ]);
+async function buildSalesReportsMenu(userId: string) {
+  const reports = await getUserManualReportAccess(userId);
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+
+  if (reports.find((report) => report.key === 'sales.yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
+  }
+  if (reports.find((report) => report.key === 'sales.today')?.enabled) {
+    rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
+  }
+  if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
+  }
+  if (reports.find((report) => report.key === 'sales.payments_today')?.enabled) {
+    rows.push([Markup.button.callback('Payments Today', 'gen:sales:payments_today')]);
+  }
+  if (reports.find((report) => report.key === 'sales.summer')?.enabled) {
+    rows.push([Markup.button.callback('Summer', 'gen:sales:summer')]);
+  }
+  if (rows.length === 0) return null;
+
+  rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  return Markup.inlineKeyboard(rows);
 }
 
-async function buildScheduleCategoryMenu(sourceTypes: string[], prefix: string) {
-  const schedules = await getSchedulesBySourceTypes(sourceTypes);
+async function buildScheduleCategoryMenu(userId: string, sourceTypes: string[], prefix: string) {
+  const schedules = await getAllowedSchedulesBySourceTypes(userId, sourceTypes);
   if (schedules.length === 0) return null;
 
   const rows = schedules.map(s => [Markup.button.callback(`${s.name} · ${s.source.name}`, `gen:${prefix}:${s.id}`)]);
@@ -367,8 +468,8 @@ async function buildScheduleCategoryMenu(sourceTypes: string[], prefix: string) 
   return Markup.inlineKeyboard(rows);
 }
 
-async function buildYoutrackReportsMenu() {
-  const schedules = await getSchedulesBySourceTypes(['youtrack', 'youtrack_progress']);
+async function buildYoutrackReportsMenu(userId: string) {
+  const schedules = await getAllowedSchedulesBySourceTypes(userId, ['youtrack', 'youtrack_progress']);
   if (schedules.length === 0) return null;
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
@@ -384,6 +485,27 @@ async function buildYoutrackReportsMenu() {
   }
 
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function buildRedmineReportsMenu(userId: string) {
+  const schedules = await getAllowedSchedulesBySourceTypes(userId, ['redmine']);
+  if (schedules.length === 0) return null;
+
+  const preferredSchedule =
+    schedules.find(schedule => schedule.periodType === 'daily') ||
+    schedules.find(schedule => schedule.periodType === 'weekly') ||
+    schedules[0];
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [
+      Markup.button.callback('24h', `gen:redmine_hours:${preferredSchedule.id}:24`),
+      Markup.button.callback('48h', `gen:redmine_hours:${preferredSchedule.id}:48`),
+    ],
+    [Markup.button.callback('7 days', `gen:redmine_hours:${preferredSchedule.id}:168`)],
+    [Markup.button.callback('← Back', 'reports:home')],
+  ];
+
   return Markup.inlineKeyboard(rows);
 }
 
@@ -1209,7 +1331,7 @@ function registerHandlers(instance: Telegraf) {
 
       const messages: Record<string, string> = {
         pending:  `⏳ *Ожидание подтверждения*\n\nЗапрос отправлен. Вы получите уведомление после одобрения.\n\nДоступные команды: /help`,
-        approved: `✅ *Добро пожаловать!*\n\nВы подписаны на аналитические отчёты.\n\n/reports — меню отчётов\n/settings — настройки и подписки\n/ask — задать вопрос по данным\n/help — все команды`,
+        approved: `✅ *Добро пожаловать!*\n\nВы подписаны на аналитические отчёты.\n\n/reports — меню отчётов\n/settings — ваши доступы\n/ask — задать вопрос по данным\n/help — все команды`,
         blocked:  `🚫 *Доступ ограничен*\n\nВаш аккаунт заблокирован. Обратитесь к администратору.`,
         deleted:  `Аккаунт не найден. Обратитесь к администратору.`,
       };
@@ -1242,7 +1364,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.reply(
       `*Analytics Report Bot*\n\n` +
       `📋 /reports — открыть меню отчётов\n` +
-      `⚙️ /settings — настройки и подписки\n` +
+      `⚙️ /settings — посмотреть доступные отчёты\n` +
       `💬 /ask — задать вопрос по данным (ИИ ответит)\n` +
       `👤 /status — статус вашего аккаунта\n` +
       `/start — регистрация\n\n` +
@@ -1255,60 +1377,66 @@ function registerHandlers(instance: Telegraf) {
   instance.command('reports', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return;
-    const keyboard = await buildTopReportsMenu();
+    const keyboard = await buildTopReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Сейчас для вас нет доступных отчётов. Обратитесь к администратору.');
     await ctx.reply('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.command('settings', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return;
-    const { text, keyboard } = await buildReportsKeyboard(user.id);
-    if (!keyboard) return ctx.reply(text);
-    await ctx.reply(`⚙️ *Настройки*\n\n${text.replace(/^📋 \*Мои подписки на отчёты\*\n\n/u, '')}`, { parse_mode: 'Markdown', ...keyboard });
+    const { text } = await buildReportsKeyboard(user.id);
+    await ctx.reply(text, { parse_mode: 'Markdown' });
   });
 
   // Callback: toggle schedule subscription
   instance.action(/^sub:(.+)$/, async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return ctx.answerCbQuery();
-    const scheduleId = ctx.match[1];
-
-    const prefs = await getUserSchedulePrefs(user.id);
-    const current = prefs.get(scheduleId) ?? true;
-    await prisma.userSchedulePreference.upsert({
-      where: { userId_scheduleId: { userId: user.id, scheduleId } },
-      create: { userId: user.id, scheduleId, enabled: !current },
-      update: { enabled: !current },
-    });
-
-    // Refresh the keyboard in place
-    const { text, keyboard } = await buildReportsKeyboard(user.id);
-    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
-    await ctx.answerCbQuery(!current ? '✅ Подписка включена' : '❌ Подписка отключена');
+    await ctx.answerCbQuery('Доступ к отчётам теперь настраивается администратором в бекофисе.');
   });
 
   instance.action('reports:home', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildTopReportsMenu();
+    const keyboard = await buildTopReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Сейчас для вас нет доступных отчётов. Обратитесь к администратору.');
     await ctx.editMessageText('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
   instance.action('reports:sales', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildSalesReportsMenu();
+    const keyboard = await buildSalesReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Sales.');
     await ctx.editMessageText('📊 *Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
   instance.action('reports:comments', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildScheduleCategoryMenu(['gto_comments'], 'comments');
+    const keyboard = await buildScheduleCategoryMenu(user.id, ['gto_comments'], 'comments');
     if (!keyboard) return ctx.reply('Нет доступных отчётов Comments.');
     await ctx.editMessageText('💬 *Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
-  instance.action('reports:youtrack', async (ctx) => {
+  instance.action('reports:redmine', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildYoutrackReportsMenu();
+    const keyboard = await buildRedmineReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Redmine.');
+    await ctx.editMessageText('🐞 *Redmine*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('reports:youtrack', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const keyboard = await buildYoutrackReportsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Youtrack.');
     await ctx.editMessageText('🎯 *Youtrack*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
@@ -1318,6 +1446,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
+    if (!(await ensureManualReportAllowed(ctx, user.id, 'sales.summer'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Summer Sales Outlook*...\nЭто может занять до минуты.',
@@ -1337,6 +1466,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
+    if (!(await ensureManualReportAllowed(ctx, user.id, 'sales.today'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Today Sales Report*...\nЭто может занять до минуты.',
@@ -1365,6 +1495,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
+    if (!(await ensureManualReportAllowed(ctx, user.id, 'sales.payments_today'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Payments Today*...\nЭто может занять до минуты.',
@@ -1393,6 +1524,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
+    if (!(await ensureManualReportAllowed(ctx, user.id, 'sales.payments_yesterday'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Payments Yesterday*...\nЭто может занять до минуты.',
@@ -1421,6 +1553,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
+    if (!(await ensureManualReportAllowed(ctx, user.id, 'sales.yesterday'))) return;
     const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
     if (!schedule) return ctx.reply('Daily Sales Report не найден.');
 
@@ -1451,7 +1584,8 @@ function registerHandlers(instance: Telegraf) {
   instance.command('generate', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return;
-    const keyboard = await buildTopReportsMenu();
+    const keyboard = await buildTopReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Сейчас для вас нет доступных отчётов. Обратитесь к администратору.');
     await ctx.reply('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard });
   });
 
@@ -1467,6 +1601,7 @@ function registerHandlers(instance: Telegraf) {
       include: { source: { select: { name: true } } },
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (!(await ensureScheduleAllowed(ctx, user.id, scheduleId))) return;
 
     // Confirm and start
     await ctx.editMessageText(
@@ -1504,6 +1639,7 @@ function registerHandlers(instance: Telegraf) {
       include: { source: { select: { name: true, type: true } } },
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (!(await ensureScheduleAllowed(ctx, user.id, scheduleId))) return;
     if (String(schedule.source.type) !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
 
     await ctx.editMessageText(
@@ -1525,6 +1661,45 @@ function registerHandlers(instance: Telegraf) {
       }).catch(() => {});
     } catch (err: any) {
       logger.error({ err, scheduleId, hours }, 'On-demand YouTrack rolling-hours analysis failed');
+      await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
+    }
+  });
+
+  instance.action(/^gen:redmine_hours:([^:]+):(24|48|168)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    const scheduleId = ctx.match[1];
+    const hours = Number(ctx.match[2]);
+    const schedule = await prisma.reportSchedule.findUnique({
+      where: { id: scheduleId },
+      include: { source: { select: { name: true, type: true } } },
+    });
+    if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (!(await ensureScheduleAllowed(ctx, user.id, scheduleId))) return;
+    if (String(schedule.source.type) !== 'redmine') return ctx.reply('Этот режим доступен только для Redmine.');
+
+    const label = hours === 168 ? '7 days' : `${hours}h`;
+    await ctx.editMessageText(
+      `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${label}*...\nЭто может занять 1–2 минуты.`,
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runRollingHoursAnalysis(scheduleId, hours);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err, scheduleId, hours }, 'On-demand Redmine rolling-hours analysis failed');
       await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
     }
   });

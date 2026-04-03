@@ -128,11 +128,27 @@ export async function scheduleRoutes(app: FastifyInstance) {
   app.patch('/preferences/:userId/:scheduleId', auth, async (request, reply) => {
     const { userId, scheduleId } = request.params as any;
     const { enabled } = z.object({ enabled: z.boolean() }).parse(request.body);
+    const actor = (request.user as any);
+
+    const existing = await prisma.userSchedulePreference.findUnique({
+      where: { userId_scheduleId: { userId, scheduleId } },
+    });
 
     const pref = await prisma.userSchedulePreference.upsert({
       where: { userId_scheduleId: { userId, scheduleId } },
       create: { userId, scheduleId, enabled },
       update: { enabled },
+    });
+
+    await writeAuditLog({
+      actorType: 'admin',
+      actorId: actor.sub,
+      action: 'user.schedule_access.updated',
+      entityType: 'user',
+      entityId: userId,
+      beforeState: { scheduleId, enabled: existing?.enabled ?? true },
+      afterState: { scheduleId, enabled },
+      ipAddress: request.ip,
     });
 
     return reply.send({ success: true, data: pref });

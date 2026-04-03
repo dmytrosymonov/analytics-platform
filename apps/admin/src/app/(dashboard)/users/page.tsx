@@ -137,14 +137,26 @@ function UserPreferences({ userId }: { userId: string }) {
     queryFn: () => authFetch(`/api/v1/schedules/preferences/${userId}`),
   });
 
+  const { data: manualAccessData } = useQuery({
+    queryKey: ['manual-report-access', userId],
+    queryFn: () => authFetch(`/api/v1/users/${userId}/manual-report-access`),
+  });
+
   const toggle = useMutation({
     mutationFn: ({ scheduleId, enabled }: { scheduleId: string; enabled: boolean }) =>
       authPost(`/api/v1/schedules/preferences/${userId}/${scheduleId}`, { enabled }, 'PATCH'),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['schedule-prefs', userId] }); toast.success('Updated'); },
   });
 
+  const toggleManual = useMutation({
+    mutationFn: ({ reportKey, enabled }: { reportKey: string; enabled: boolean }) =>
+      authPost(`/api/v1/users/${userId}/manual-report-access/${encodeURIComponent(reportKey)}`, { enabled }, 'PATCH'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['manual-report-access', userId] }); toast.success('Updated'); },
+  });
+
   const allSchedules: any[] = schedulesData?.data?.data || [];
   const prefs: any[] = prefsData?.data?.data || [];
+  const manualAccess: any[] = manualAccessData?.data?.data || [];
   const prefMap: Record<string, boolean> = {};
   prefs.forEach((p: any) => { prefMap[p.scheduleId] = p.enabled; });
 
@@ -155,16 +167,43 @@ function UserPreferences({ userId }: { userId: string }) {
     bySource[sch.sourceId].schedules.push(sch);
   });
 
-  if (allSchedules.length === 0) {
-    return <p className="text-sm text-gray-400">No schedules configured yet. Add schedules in the Sources section.</p>;
+  const manualByCategory: Record<string, any[]> = {};
+  manualAccess.forEach((item: any) => {
+    if (!manualByCategory[item.category]) manualByCategory[item.category] = [];
+    manualByCategory[item.category].push(item);
+  });
+
+  if (allSchedules.length === 0 && manualAccess.length === 0) {
+    return <p className="text-sm text-gray-400">No report access controls configured yet.</p>;
   }
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-semibold text-gray-500 uppercase">Report Subscriptions</p>
+      <p className="text-xs font-semibold text-gray-500 uppercase">Report Access</p>
+      <p className="text-sm text-gray-500">
+        Access is managed from the back office. Telegram users can only see and run reports enabled here.
+      </p>
+      {Object.entries(manualByCategory).map(([category, items]) => (
+        <div key={category}>
+          <p className="text-xs text-gray-400 mb-1.5">{category === 'sales' ? 'Manual Sales Reports' : category}</p>
+          <div className="flex flex-wrap gap-2">
+            {items.map((item: any) => (
+              <button key={item.key}
+                onClick={() => toggleManual.mutate({ reportKey: item.key, enabled: !item.enabled })}
+                title={item.description}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                  item.enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
+                }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${item.enabled ? 'bg-current' : 'bg-gray-300'}`} />
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
       {Object.values(bySource).map(({ sourceName, schedules }) => (
         <div key={sourceName}>
-          <p className="text-xs text-gray-400 mb-1.5">{sourceName}</p>
+          <p className="text-xs text-gray-400 mb-1.5">{sourceName} Schedules</p>
           <div className="flex flex-wrap gap-2">
             {schedules.map((sch: any) => {
               const enabled = prefMap[sch.id] ?? true;
