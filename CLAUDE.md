@@ -167,8 +167,10 @@ Key models:
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu, but only shows sections and buttons explicitly allowed for that user by admin-side access settings in the back office
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
-- Access to Telegram reports is admin-managed from the back office per user: manual Sales actions are controlled separately from schedule-based report actions
-- `/settings` is read-only for end users and should list currently available reports; it must not let Telegram users grant themselves access or re-enable blocked report buttons
+- Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
+- Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
+- Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
+- `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
 - `Redmine` submenu should expose manual activity reports for rolling windows `24h`, `48h`, and `7 days`
 - Redmine rolling-window buttons are manual-only and should use the current moment minus the selected window, not calendar-day boundaries
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
@@ -284,11 +286,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T08:43:59Z
+- Generated at (UTC): 2026-04-03T09:01:04Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 33ea099 (33ea099cd3dd219749ba6c43658310f3a8c6bce2)
-- Commit date: 2026-04-03T10:24:32+02:00
+- Commit: 9e87418 (9e87418bbcbef54b9cd9cd8f68083fe371f4f20b)
+- Commit date: 2026-04-03T10:46:02+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

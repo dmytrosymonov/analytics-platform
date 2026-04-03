@@ -28,26 +28,21 @@ export async function handleDeliverJob(job: Job) {
   const run = await prisma.reportRun.findUnique({ where: { id: runId } });
   const scheduleId = run?.scheduleId ?? job.data.scheduleId;
 
-  // Eligible users: approved + global enabled + subscribed to this schedule (or source if legacy)
+  // Eligible users: approved + global enabled + source access.
+  // If there is a schedule, its per-user preference acts as a secondary subscription filter.
   let users;
   if (scheduleId) {
     users = await prisma.user.findMany({
       where: {
         status: 'approved',
         globalReportsEnabled: true,
-        schedulePreferences: { some: { scheduleId, enabled: true } },
+        reportPreferences: { some: { sourceId, reportsEnabled: true } },
+        OR: [
+          { schedulePreferences: { none: { scheduleId } } },
+          { schedulePreferences: { some: { scheduleId, enabled: true } } },
+        ],
       },
     });
-    // If no schedule prefs yet, fall back to source prefs (for users added before schedules)
-    if (users.length === 0) {
-      users = await prisma.user.findMany({
-        where: {
-          status: 'approved',
-          globalReportsEnabled: true,
-          reportPreferences: { some: { sourceId, reportsEnabled: true } },
-        },
-      });
-    }
   } else {
     users = await prisma.user.findMany({
       where: {

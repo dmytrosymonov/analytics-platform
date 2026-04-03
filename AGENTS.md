@@ -167,8 +167,10 @@ Key models:
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu, but only shows sections and buttons explicitly allowed for that user by admin-side access settings in the back office
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
-- Access to Telegram reports is admin-managed from the back office per user: manual Sales actions are controlled separately from schedule-based report actions
-- `/settings` is read-only for end users and should list currently available reports; it must not let Telegram users grant themselves access or re-enable blocked report buttons
+- Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
+- Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
+- Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
+- `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
 - `Redmine` submenu should expose manual activity reports for rolling windows `24h`, `48h`, and `7 days`
 - Redmine rolling-window buttons are manual-only and should use the current moment minus the selected window, not calendar-day boundaries
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
