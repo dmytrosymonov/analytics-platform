@@ -398,28 +398,52 @@ Return ONLY valid JSON:
 }`,
       },
       redmine: {
-        system: `You are a project management analyst specializing in issue tracking and team productivity.
-Analyze the provided Redmine data and generate a structured JSON report.
+        system: `You are a delivery and support operations analyst specializing in Redmine issue tracking.
+Analyze the provided Redmine data and generate a concise structured JSON report.
+Use only facts present in the JSON payload.
+Do not invent projects, issues, comments, timings, or users.
 Always respond with valid JSON only.`,
         user: `Analyze Redmine project data for {{report_period_start}} to {{report_period_end}}.
 
 Source: {{source_name}}
-Data:
+Normalized data:
 {{normalized_metrics_json}}
+
+Business rules:
+- "first response" already means the first public non-empty comment from responder usernames i.yarovyi or tina after issue creation
+- "answered" already means there was at least one public non-empty responder comment during the selected period
+- "closed" already means the issue was closed during the selected period
+- Group everything by project
+- Keep the Telegram message compact, specific, and readable
+- Mention only issues that appear in the normalized data
+- For every listed issue include a short body summary and responder SLA when available
+- For comment summaries, describe only what is present in the comment summary fields
 
 Return ONLY valid JSON:
 {
-  "executive_summary": "2-3 sentence summary",
+  "executive_summary": "2-3 sentence summary of the period",
   "key_metrics": {
-    "issues_created": 0,
-    "issues_closed": 0,
-    "closure_rate": 0,
-    "overdue_count": 0
+    "created_count": 0,
+    "answered_count": 0,
+    "closed_count": 0,
+    "commented_count": 0,
+    "avg_first_response_minutes": 0
   },
-  "team_insights": ["insight 1"],
-  "bottlenecks": ["bottleneck 1"],
-  "recommendations": ["rec 1"],
-  "telegram_message": "Formatted Telegram message with markdown"
+  "project_summaries": [
+    {
+      "project_name": "Project name",
+      "created_count": 0,
+      "answered_count": 0,
+      "closed_count": 0,
+      "commented_count": 0,
+      "avg_first_response_minutes": 0,
+      "highlights": ["short fact 1", "short fact 2"]
+    }
+  ],
+  "team_insights": ["insight 1", "insight 2"],
+  "risks_or_bottlenecks": ["risk 1", "risk 2"],
+  "recommendations": ["rec 1", "rec 2"],
+  "telegram_message": "Markdown message for Telegram, ideally <= 3500 chars. Structure: 1) short period summary, 2) per-project metrics, 3) new issues with short descriptions and first-response SLA, 4) notable new public comments by project and issue, 5) short risks/next steps"
 }`,
       },
       youtrack: {

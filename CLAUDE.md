@@ -1,6 +1,6 @@
 # Analytics Platform — Project Documentation
 
-> **Updated:** 2026-03-25
+> **Updated:** 2026-04-03
 > **Owner:** Dmytro Symonov
 > **Production:** https://dsym.goodwin-soft.com/analytics-platform
 
@@ -153,6 +153,15 @@ Key models:
 - `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
 - Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
 
+## Redmine Reports
+
+- Redmine reports are grouped by project and should include per-project sections for newly created issues, newly answered issues, newly closed issues, and new public comments during the selected period
+- Redmine `first response` means the first public comment with non-empty text from responder usernames `i.yarovyi` or `tina` after issue creation
+- Redmine `answered` means the issue received at least one public comment with non-empty text from `i.yarovyi` or `tina` during the selected period
+- Redmine reports should include a short issue description summary derived from the issue body, plus compact summaries of new public comments
+- Redmine connector must page through issue lists and should not truncate datasets at the first 100 issues
+- If no qualifying responder comment exists for an issue, `first_response_at`, `first_response_by`, and response-time metrics remain empty/null
+
 ## Telegram Bot Reports
 
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
@@ -271,11 +280,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-02T19:48:00Z
+- Generated at (UTC): 2026-04-03T08:19:51Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: bf29f54 (bf29f54fc3667bd6e92890dcc40d5cdb17b33980)
-- Commit date: 2026-04-02T21:43:47+02:00
+- Commit: 7fcbe51 (7fcbe51505798af33b7d7018181e77b30f1f979f)
+- Commit date: 2026-04-02T21:48:12+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

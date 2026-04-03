@@ -46,7 +46,7 @@ export async function promptRoutes(app: FastifyInstance) {
         systemPrompt: body.systemPrompt,
         userPrompt: body.userPrompt,
         variables: body.variables,
-        outputSchema: body.outputSchema,
+        outputSchema: body.outputSchema as any,
         createdBy: actor.sub,
       },
     });

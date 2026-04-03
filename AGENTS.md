@@ -1,6 +1,6 @@
 # Analytics Platform — Project Documentation
 
-> **Updated:** 2026-03-25
+> **Updated:** 2026-04-03
 > **Owner:** Dmytro Symonov
 > **Production:** https://dsym.goodwin-soft.com/analytics-platform
 
@@ -152,6 +152,15 @@ Key models:
 - Report period boundaries (`daily` / `weekly` / `monthly`) are also calculated in the source timezone
 - `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
 - Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
+
+## Redmine Reports
+
+- Redmine reports are grouped by project and should include per-project sections for newly created issues, newly answered issues, newly closed issues, and new public comments during the selected period
+- Redmine `first response` means the first public comment with non-empty text from responder usernames `i.yarovyi` or `tina` after issue creation
+- Redmine `answered` means the issue received at least one public comment with non-empty text from `i.yarovyi` or `tina` during the selected period
+- Redmine reports should include a short issue description summary derived from the issue body, plus compact summaries of new public comments
+- Redmine connector must page through issue lists and should not truncate datasets at the first 100 issues
+- If no qualifying responder comment exists for an issue, `first_response_at`, `first_response_by`, and response-time metrics remain empty/null
 
 ## Telegram Bot Reports
 

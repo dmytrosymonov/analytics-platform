@@ -6,7 +6,7 @@ import { handleDeliverJob } from './deliver.worker';
 import { logger } from '../lib/logger';
 
 export async function startWorkers() {
-  const connection = redis;
+  const connection = redis as any;
 
   const fetchWorker = new Worker('source-fetch', handleFetchJob, { connection, concurrency: 5 });
   const analyzeWorker = new Worker('source-analyze', handleAnalyzeJob, { connection, concurrency: 3 });
