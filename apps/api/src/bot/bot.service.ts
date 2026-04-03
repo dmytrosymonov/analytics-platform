@@ -11,7 +11,11 @@ import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getS
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
-import { MANUAL_REPORT_ACCESS_DEFINITIONS } from '../lib/report-access';
+import {
+  listManualReportAccessDefinitions,
+  makeScheduleHoursReportKey,
+  makeScheduleRunReportKey,
+} from '../lib/report-access';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -36,7 +40,7 @@ interface AskSession {
 const sessions = new Map<number, AskSession>();
 type ScheduleWithSource = Prisma.ReportScheduleGetPayload<{ include: { source: true } }>;
 type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { source: { select: { id: true; name: true; type: true } } } }>;
-type ManualReportAccessState = typeof MANUAL_REPORT_ACCESS_DEFINITIONS[number] & { enabled: boolean };
+type ManualReportAccessState = ReturnType<typeof listManualReportAccessDefinitions>[number] & { enabled: boolean };
 const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
   findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
   findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
@@ -321,9 +325,14 @@ async function getUserSourceAccess(userId: string) {
 }
 
 async function getUserManualReportAccess(userId: string): Promise<ManualReportAccessState[]> {
+  const schedules = await prisma.reportSchedule.findMany({
+    include: { source: { select: { type: true, name: true } } },
+    orderBy: [{ source: { name: 'asc' } }, { periodType: 'asc' }, { name: 'asc' }],
+  });
+  const definitions = listManualReportAccessDefinitions(schedules);
   const rows = await prismaManualReportAccess.findMany({ where: { userId } });
   const enabledByKey = new Map(rows.map((row) => [row.reportKey, row.enabled]));
-  return MANUAL_REPORT_ACCESS_DEFINITIONS.map((definition) => ({
+  return definitions.map((definition) => ({
     ...definition,
     enabled: enabledByKey.get(definition.key) ?? true,
   }));
@@ -437,7 +446,7 @@ async function buildReportsKeyboard(userId: string) {
       lines.push(`• ${source.name}`);
       const sourceManualReports = manualReports.filter((report) => report.sourceType === String(source.type) && report.enabled);
       for (const report of sourceManualReports) {
-        lines.push(`  - ${report.label}`);
+        lines.push(`- ${report.label}`);
       }
     }
   }
@@ -521,46 +530,56 @@ async function buildSalesReportsMenu(userId: string) {
 }
 
 async function buildScheduleCategoryMenu(userId: string, sourceTypes: string[], prefix: string) {
-  const [allowed, schedules] = await Promise.all([
+  const [allowed, schedules, manualReports] = await Promise.all([
     hasSourceAccess(userId, sourceTypes),
     getManualSchedulesBySourceTypes(sourceTypes),
+    getUserManualReportAccess(userId),
   ]);
   if (!allowed) return null;
-  if (schedules.length === 0) return null;
+  const allowedSchedules = schedules.filter((schedule) =>
+    manualReports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled),
+  );
+  if (allowedSchedules.length === 0) return null;
 
-  const rows = schedules.map(s => [Markup.button.callback(`${s.name} · ${s.source.name}`, `gen:${prefix}:${s.id}`)]);
+  const rows = allowedSchedules.map(s => [Markup.button.callback(`${s.name} · ${s.source.name}`, `gen:${prefix}:${s.id}`)]);
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
 }
 
 async function buildYoutrackReportsMenu(userId: string) {
-  const [allowed, schedules] = await Promise.all([
+  const [allowed, schedules, manualReports] = await Promise.all([
     hasSourceAccess(userId, ['youtrack', 'youtrack_progress']),
     getManualSchedulesBySourceTypes(['youtrack', 'youtrack_progress']),
+    getUserManualReportAccess(userId),
   ]);
   if (!allowed) return null;
   if (schedules.length === 0) return null;
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (const schedule of schedules) {
-    rows.push([Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`)]);
+    if (manualReports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled)) {
+      rows.push([Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`)]);
+    }
     if (String(schedule.source.type) === 'youtrack_progress') {
-      rows.push([
-        Markup.button.callback('24h', `gen:youtrack_hours:${schedule.id}:24`),
-        Markup.button.callback('48h', `gen:youtrack_hours:${schedule.id}:48`),
-        Markup.button.callback('72h', `gen:youtrack_hours:${schedule.id}:72`),
-      ]);
+      const hourButtons = [24, 48, 72]
+        .filter((hours) => manualReports.some((report) => report.key === makeScheduleHoursReportKey(schedule.id, hours) && report.enabled))
+        .map((hours) => Markup.button.callback(`${hours}h`, `gen:youtrack_hours:${schedule.id}:${hours}`));
+      if (hourButtons.length > 0) {
+        rows.push(hourButtons);
+      }
     }
   }
 
+  if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
 }
 
 async function buildRedmineReportsMenu(userId: string) {
-  const [allowed, schedules] = await Promise.all([
+  const [allowed, schedules, manualReports] = await Promise.all([
     hasSourceAccess(userId, ['redmine']),
     getManualSchedulesBySourceTypes(['redmine']),
+    getUserManualReportAccess(userId),
   ]);
   if (!allowed) return null;
   if (schedules.length === 0) return null;
@@ -570,14 +589,16 @@ async function buildRedmineReportsMenu(userId: string) {
     schedules.find(schedule => schedule.periodType === 'weekly') ||
     schedules[0];
 
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [
-    [
-      Markup.button.callback('24h', `gen:redmine_hours:${preferredSchedule.id}:24`),
-      Markup.button.callback('48h', `gen:redmine_hours:${preferredSchedule.id}:48`),
-    ],
-    [Markup.button.callback('7 days', `gen:redmine_hours:${preferredSchedule.id}:168`)],
-    [Markup.button.callback('← Back', 'reports:home')],
-  ];
+  const topRow = [24, 48]
+    .filter((hours) => manualReports.some((report) => report.key === `redmine.hours.${hours}` && report.enabled))
+    .map((hours) => Markup.button.callback(`${hours}h`, `gen:redmine_hours:${preferredSchedule.id}:${hours}`));
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  if (topRow.length > 0) rows.push(topRow);
+  if (manualReports.some((report) => report.key === 'redmine.hours.168' && report.enabled)) {
+    rows.push([Markup.button.callback('7 days', `gen:redmine_hours:${preferredSchedule.id}:168`)]);
+  }
+  if (rows.length === 0) return null;
+  rows.push([Markup.button.callback('← Back', 'reports:home')]);
 
   return Markup.inlineKeyboard(rows);
 }
@@ -1675,6 +1696,9 @@ function registerHandlers(instance: Telegraf) {
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
     if (!(await ensureScheduleSourceAccess(ctx, user.id, scheduleId))) return;
+    if (!(await hasManualReportAccess(user.id, makeScheduleRunReportKey(scheduleId)))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
 
     // Confirm and start
     await ctx.editMessageText(
@@ -1713,6 +1737,9 @@ function registerHandlers(instance: Telegraf) {
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
     if (!(await ensureScheduleSourceAccess(ctx, user.id, scheduleId))) return;
+    if (!(await hasManualReportAccess(user.id, makeScheduleHoursReportKey(scheduleId, hours)))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
     if (String(schedule.source.type) !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
 
     await ctx.editMessageText(
@@ -1751,6 +1778,9 @@ function registerHandlers(instance: Telegraf) {
     });
     if (!schedule) return ctx.reply('Расписание не найдено.');
     if (!(await ensureScheduleSourceAccess(ctx, user.id, scheduleId))) return;
+    if (!(await hasManualReportAccess(user.id, `redmine.hours.${hours}`))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
     if (String(schedule.source.type) !== 'redmine') return ctx.reply('Этот режим доступен только для Redmine.');
 
     const label = hours === 168 ? '7 days' : `${hours}h`;

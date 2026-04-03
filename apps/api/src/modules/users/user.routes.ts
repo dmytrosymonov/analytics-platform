@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { writeAuditLog } from '../../lib/audit';
 import { bot } from '../../bot/bot.service';
-import { MANUAL_REPORT_ACCESS_DEFINITIONS, getManualReportAccessDefinition } from '../../lib/report-access';
+import { listManualReportAccessDefinitions } from '../../lib/report-access';
 
 const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
   findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
@@ -26,6 +26,14 @@ function serializeUser(user: any) {
 
 export async function userRoutes(app: FastifyInstance) {
   const auth = { onRequest: [(app as any).authenticate] };
+
+  async function loadManualReportAccessDefinitions() {
+    const schedules = await prisma.reportSchedule.findMany({
+      include: { source: { select: { type: true, name: true } } },
+      orderBy: [{ source: { name: 'asc' } }, { periodType: 'asc' }, { name: 'asc' }],
+    });
+    return listManualReportAccessDefinitions(schedules);
+  }
 
   // Manually add a user by Telegram ID
   app.post('/', auth, async (request, reply) => {
@@ -191,12 +199,13 @@ export async function userRoutes(app: FastifyInstance) {
     const user = await prisma.user.findUnique({ where: { id } });
     if (!user) return reply.status(404).send({ success: false, error: { message: 'User not found' } });
 
+    const definitions = await loadManualReportAccessDefinitions();
     const rows = await prismaManualReportAccess.findMany({ where: { userId: id } });
     const enabledByKey = new Map(rows.map((row) => [row.reportKey, row.enabled]));
 
     return reply.send({
       success: true,
-      data: MANUAL_REPORT_ACCESS_DEFINITIONS.map((definition) => ({
+      data: definitions.map((definition) => ({
         ...definition,
         enabled: enabledByKey.get(definition.key) ?? true,
       })),
@@ -208,7 +217,8 @@ export async function userRoutes(app: FastifyInstance) {
     const { enabled } = z.object({ enabled: z.boolean() }).parse(request.body);
     const actor = (request.user as any);
 
-    const definition = getManualReportAccessDefinition(reportKey);
+    const definitions = await loadManualReportAccessDefinitions();
+    const definition = definitions.find((item) => item.key === reportKey);
     if (!definition) {
       return reply.status(404).send({ success: false, error: { message: 'Manual report access key not found' } });
     }

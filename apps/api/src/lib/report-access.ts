@@ -1,4 +1,4 @@
-export type ManualReportAccessCategory = 'sales';
+export type ManualReportAccessCategory = 'sales' | 'comments' | 'redmine' | 'youtrack';
 
 export interface ManualReportAccessDefinition {
   key: string;
@@ -44,8 +44,77 @@ export const MANUAL_REPORT_ACCESS_DEFINITIONS: ManualReportAccessDefinition[] = 
     label: 'Summer',
     description: 'Dedicated summer sales outlook report.',
   },
+  {
+    key: 'redmine.hours.24',
+    category: 'redmine',
+    sourceType: 'redmine',
+    label: '24h',
+    description: 'Redmine activity report for the last 24 hours.',
+  },
+  {
+    key: 'redmine.hours.48',
+    category: 'redmine',
+    sourceType: 'redmine',
+    label: '48h',
+    description: 'Redmine activity report for the last 48 hours.',
+  },
+  {
+    key: 'redmine.hours.168',
+    category: 'redmine',
+    sourceType: 'redmine',
+    label: '7 days',
+    description: 'Redmine activity report for the last 7 days.',
+  },
 ];
 
-export function getManualReportAccessDefinition(reportKey: string): ManualReportAccessDefinition | undefined {
-  return MANUAL_REPORT_ACCESS_DEFINITIONS.find((definition) => definition.key === reportKey);
+export interface ScheduleAccessLike {
+  id: string;
+  name: string;
+  source: {
+    type: string;
+    name: string;
+  };
+}
+
+export function makeScheduleRunReportKey(scheduleId: string): string {
+  return `schedule.run.${scheduleId}`;
+}
+
+export function makeScheduleHoursReportKey(scheduleId: string, hours: number): string {
+  return `schedule.hours.${scheduleId}.${hours}`;
+}
+
+export function listManualReportAccessDefinitions(schedules: ScheduleAccessLike[]): ManualReportAccessDefinition[] {
+  const dynamic: ManualReportAccessDefinition[] = [];
+
+  for (const schedule of schedules) {
+    const sourceType = String(schedule.source.type);
+    if (sourceType === 'gto_comments' || sourceType === 'youtrack' || sourceType === 'youtrack_progress') {
+      dynamic.push({
+        key: makeScheduleRunReportKey(schedule.id),
+        category: sourceType === 'gto_comments' ? 'comments' : 'youtrack',
+        sourceType,
+        label: schedule.name,
+        description: `Manual generation of ${schedule.name}.`,
+      });
+    }
+
+    if (sourceType === 'youtrack_progress') {
+      for (const hours of [24, 48, 72]) {
+        dynamic.push({
+          key: makeScheduleHoursReportKey(schedule.id, hours),
+          category: 'youtrack',
+          sourceType,
+          label: `${schedule.name} · ${hours}h`,
+          description: `Manual YouTrack Daily Progress report for the last ${hours} hours.`,
+        });
+      }
+    }
+  }
+
+  return [...MANUAL_REPORT_ACCESS_DEFINITIONS, ...dynamic];
+}
+
+export function getManualReportAccessDefinition(reportKey: string, schedules: ScheduleAccessLike[]): ManualReportAccessDefinition | undefined {
+  return listManualReportAccessDefinitions(schedules).find((definition) => definition.key === reportKey);
 }

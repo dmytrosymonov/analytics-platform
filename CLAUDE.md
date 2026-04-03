@@ -169,7 +169,7 @@ Key models:
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
-- A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, `Summer`)
+- A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
 - Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
 - `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
@@ -288,11 +288,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T09:21:50Z
+- Generated at (UTC): 2026-04-03T09:28:21Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: b1f98be (b1f98bea7829eb44ef379ba9fde424031a93def1)
-- Commit date: 2026-04-03T11:03:00+02:00
+- Commit: f091bf4 (f091bf48b39f6389d2625bac884bda027c5846cf)
+- Commit date: 2026-04-03T11:21:57+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
