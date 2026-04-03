@@ -132,6 +132,11 @@ function UserPreferences({ userId }: { userId: string }) {
     queryFn: () => authFetch(`/api/v1/users/${userId}/preferences`),
   });
 
+  const { data: manualAccessData } = useQuery({
+    queryKey: ['manual-report-access', userId],
+    queryFn: () => authFetch(`/api/v1/users/${userId}/manual-report-access`),
+  });
+
   const { data: schedulesData } = useQuery({
     queryKey: ['schedules'],
     queryFn: () => authFetch('/api/v1/schedules'),
@@ -157,7 +162,17 @@ function UserPreferences({ userId }: { userId: string }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['schedule-prefs', userId] }); toast.success('Updated'); },
   });
 
+  const toggleManual = useMutation({
+    mutationFn: ({ reportKey, enabled }: { reportKey: string; enabled: boolean }) =>
+      authPost(`/api/v1/users/${userId}/manual-report-access/${encodeURIComponent(reportKey)}`, { enabled }, 'PATCH'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['manual-report-access', userId] });
+      toast.success('Updated');
+    },
+  });
+
   const sourcePrefs: any[] = sourcePrefsData?.data?.data || [];
+  const manualAccess: any[] = manualAccessData?.data?.data || [];
   const allSchedules: any[] = schedulesData?.data?.data || [];
   const prefs: any[] = prefsData?.data?.data || [];
   const sourcePrefMap: Record<string, boolean> = {};
@@ -166,7 +181,7 @@ function UserPreferences({ userId }: { userId: string }) {
   prefs.forEach((p: any) => { prefMap[p.scheduleId] = p.enabled; });
 
   // Group schedules by source
-  const bySource: Record<string, { sourceId: string; sourceName: string; sourceType: string; enabled: boolean; schedules: any[] }> = {};
+  const bySource: Record<string, { sourceId: string; sourceName: string; sourceType: string; enabled: boolean; schedules: any[]; manualReports: any[] }> = {};
   allSchedules.forEach((sch: any) => {
     if (!bySource[sch.sourceId]) {
       bySource[sch.sourceId] = {
@@ -175,6 +190,7 @@ function UserPreferences({ userId }: { userId: string }) {
         sourceType: sch.source?.type || sch.sourceId,
         enabled: sourcePrefMap[sch.sourceId] ?? true,
         schedules: [],
+        manualReports: [],
       };
     }
     bySource[sch.sourceId].schedules.push(sch);
@@ -188,13 +204,21 @@ function UserPreferences({ userId }: { userId: string }) {
         sourceType: pref.source?.type || pref.sourceId,
         enabled: pref.reportsEnabled,
         schedules: [],
+        manualReports: [],
       };
     } else {
       bySource[pref.sourceId].enabled = pref.reportsEnabled;
     }
   });
 
-  if (allSchedules.length === 0 && sourcePrefs.length === 0) {
+  manualAccess.forEach((report: any) => {
+    const sourceEntry = Object.values(bySource).find((source) => source.sourceType === report.sourceType);
+    if (sourceEntry) {
+      sourceEntry.manualReports.push(report);
+    }
+  });
+
+  if (allSchedules.length === 0 && sourcePrefs.length === 0 && manualAccess.length === 0) {
     return <p className="text-sm text-gray-400">No report access controls configured yet.</p>;
   }
 
@@ -204,7 +228,7 @@ function UserPreferences({ userId }: { userId: string }) {
       <p className="text-sm text-gray-500">
         First enable access to the source/report type. Schedule chips below control only regular delivery subscriptions.
       </p>
-      {Object.values(bySource).map(({ sourceId, sourceName, sourceType, enabled, schedules }) => (
+      {Object.values(bySource).map(({ sourceId, sourceName, sourceType, enabled, schedules, manualReports }) => (
         <div key={sourceId}>
           <p className="text-xs text-gray-400 mb-1.5">{sourceName}</p>
           <div className="flex flex-wrap gap-2 mb-2">
@@ -220,6 +244,24 @@ function UserPreferences({ userId }: { userId: string }) {
               {sourceType === 'gto' ? 'Manual Sales + scheduled sales reports' : 'Manual generation + regular subscriptions'}
             </span>
           </div>
+          {manualReports.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {manualReports.map((report: any) => (
+                <button
+                  key={report.key}
+                  onClick={() => enabled && toggleManual.mutate({ reportKey: report.key, enabled: !report.enabled })}
+                  disabled={!enabled}
+                  title={report.description}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                    !enabled ? 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed' :
+                    report.enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
+                  }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${report.enabled && enabled ? 'bg-current' : 'bg-gray-300'}`} />
+                  {report.label}
+                </button>
+              ))}
+            </div>
+          )}
           {schedules.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {schedules.map((sch: any) => {

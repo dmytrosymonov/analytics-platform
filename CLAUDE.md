@@ -169,6 +169,8 @@ Key models:
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
+- A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, `Summer`)
+- Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
 - `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
 - `Redmine` submenu should expose manual activity reports for rolling windows `24h`, `48h`, and `7 days`
@@ -286,11 +288,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T09:01:04Z
+- Generated at (UTC): 2026-04-03T09:21:50Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 9e87418 (9e87418bbcbef54b9cd9cd8f68083fe371f4f20b)
-- Commit date: 2026-04-03T10:46:02+02:00
+- Commit: b1f98be (b1f98bea7829eb44ef379ba9fde424031a93def1)
+- Commit date: 2026-04-03T11:03:00+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

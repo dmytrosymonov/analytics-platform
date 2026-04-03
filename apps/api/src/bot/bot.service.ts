@@ -11,6 +11,7 @@ import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getS
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
+import { MANUAL_REPORT_ACCESS_DEFINITIONS } from '../lib/report-access';
 
 // ── Mutable bot instance (replaced on reload) ────────────────────────────────
 let _bot: Telegraf = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || 'placeholder:token');
@@ -35,6 +36,11 @@ interface AskSession {
 const sessions = new Map<number, AskSession>();
 type ScheduleWithSource = Prisma.ReportScheduleGetPayload<{ include: { source: true } }>;
 type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { source: { select: { id: true; name: true; type: true } } } }>;
+type ManualReportAccessState = typeof MANUAL_REPORT_ACCESS_DEFINITIONS[number] & { enabled: boolean };
+const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
+  findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
+  findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
+};
 
 function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -314,9 +320,25 @@ async function getUserSourceAccess(userId: string) {
   }));
 }
 
+async function getUserManualReportAccess(userId: string): Promise<ManualReportAccessState[]> {
+  const rows = await prismaManualReportAccess.findMany({ where: { userId } });
+  const enabledByKey = new Map(rows.map((row) => [row.reportKey, row.enabled]));
+  return MANUAL_REPORT_ACCESS_DEFINITIONS.map((definition) => ({
+    ...definition,
+    enabled: enabledByKey.get(definition.key) ?? true,
+  }));
+}
+
 async function hasSourceAccess(userId: string, sourceTypes: string[]): Promise<boolean> {
   const access = await getUserSourceAccess(userId);
   return access.some((source) => sourceTypes.includes(String(source.type)) && source.enabled);
+}
+
+async function hasManualReportAccess(userId: string, reportKey: string): Promise<boolean> {
+  const pref = await prismaManualReportAccess.findUnique({
+    where: { userId_reportKey: { userId, reportKey } },
+  });
+  return pref?.enabled ?? true;
 }
 
 async function getManualSchedulesBySourceTypes(sourceTypes: string[]): Promise<ScheduleWithSourceSummary[]> {
@@ -332,6 +354,18 @@ async function getManualSchedulesBySourceTypes(sourceTypes: string[]): Promise<S
 async function ensureSourceAccess(ctx: any, userId: string, sourceTypes: string[]): Promise<boolean> {
   const allowed = await hasSourceAccess(userId, sourceTypes);
   if (!allowed) {
+    await ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    return false;
+  }
+  return true;
+}
+
+async function ensureManualReportAccess(ctx: any, userId: string, sourceTypes: string[], reportKey: string): Promise<boolean> {
+  const [sourceAllowed, reportAllowed] = await Promise.all([
+    hasSourceAccess(userId, sourceTypes),
+    hasManualReportAccess(userId, reportKey),
+  ]);
+  if (!sourceAllowed || !reportAllowed) {
     await ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
     return false;
   }
@@ -380,12 +414,13 @@ async function getSchedulesBySourceTypes(sourceTypes: string[]): Promise<Schedul
 
 // ── /reports — build inline keyboard showing current subscription state ────────
 async function buildReportsKeyboard(userId: string) {
-  const [sources, schedules] = await Promise.all([
+  const [sources, schedules, manualReports] = await Promise.all([
     getUserSourceAccess(userId),
     prisma.reportSchedule.findMany({
       include: { source: { select: { id: true, name: true, type: true } } },
       orderBy: [{ source: { name: 'asc' } }, { periodType: 'asc' }, { name: 'asc' }],
     }),
+    getUserManualReportAccess(userId),
   ]);
   const prefs = await getUserSchedulePrefs(userId);
   const periodLabel = (p: string) => p === 'daily' ? 'день' : p === 'weekly' ? 'неделя' : 'месяц';
@@ -400,6 +435,10 @@ async function buildReportsKeyboard(userId: string) {
     lines.push('', '*Доступ к источникам:*');
     for (const source of enabledSources) {
       lines.push(`• ${source.name}`);
+      const sourceManualReports = manualReports.filter((report) => report.sourceType === String(source.type) && report.enabled);
+      for (const report of sourceManualReports) {
+        lines.push(`  - ${report.label}`);
+      }
     }
   }
 
@@ -425,18 +464,19 @@ async function buildReportsKeyboard(userId: string) {
 }
 
 async function buildTopReportsMenu(userId: string) {
-  const [hasGto, hasComments, hasRedmine, hasYoutrack, commentsSchedules, redmineSchedules, youtrackSchedules] = await Promise.all([
+  const [hasGto, hasComments, hasRedmine, hasYoutrack, manualReports, commentsSchedules, redmineSchedules, youtrackSchedules] = await Promise.all([
     hasSourceAccess(userId, ['gto']),
     hasSourceAccess(userId, ['gto_comments']),
     hasSourceAccess(userId, ['redmine']),
     hasSourceAccess(userId, ['youtrack', 'youtrack_progress']),
+    getUserManualReportAccess(userId),
     getManualSchedulesBySourceTypes(['gto_comments']),
     getManualSchedulesBySourceTypes(['redmine']),
     getManualSchedulesBySourceTypes(['youtrack', 'youtrack_progress']),
   ]);
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  if (hasGto) {
+  if (hasGto && manualReports.some((report) => report.sourceType === 'gto' && report.enabled)) {
     rows.push([Markup.button.callback('Sales', 'reports:sales')]);
   }
   if (hasComments && commentsSchedules.length > 0) {
@@ -454,14 +494,28 @@ async function buildTopReportsMenu(userId: string) {
 }
 
 async function buildSalesReportsMenu(userId: string) {
-  const allowed = await hasSourceAccess(userId, ['gto']);
+  const [allowed, reports] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    getUserManualReportAccess(userId),
+  ]);
   if (!allowed) return null;
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
-  rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
-  rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
-  rows.push([Markup.button.callback('Payments Today', 'gen:sales:payments_today')]);
-  rows.push([Markup.button.callback('Summer', 'gen:sales:summer')]);
+  if (reports.find((report) => report.key === 'sales.yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
+  }
+  if (reports.find((report) => report.key === 'sales.today')?.enabled) {
+    rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
+  }
+  if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
+  }
+  if (reports.find((report) => report.key === 'sales.payments_today')?.enabled) {
+    rows.push([Markup.button.callback('Payments Today', 'gen:sales:payments_today')]);
+  }
+  if (reports.find((report) => report.key === 'sales.summer')?.enabled) {
+    rows.push([Markup.button.callback('Summer', 'gen:sales:summer')]);
+  }
+  if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
 }
@@ -1465,7 +1519,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.summer'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Summer Sales Outlook*...\nЭто может занять до минуты.',
@@ -1485,7 +1539,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.today'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Today Sales Report*...\nЭто может занять до минуты.',
@@ -1514,7 +1568,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.payments_today'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Payments Today*...\nЭто может занять до минуты.',
@@ -1543,7 +1597,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.payments_yesterday'))) return;
 
     await ctx.editMessageText(
       '⏳ Готовлю *Payments Yesterday*...\nЭто может занять до минуты.',
@@ -1572,7 +1626,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
-    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.yesterday'))) return;
     const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
     if (!schedule) return ctx.reply('Daily Sales Report не найден.');
 
