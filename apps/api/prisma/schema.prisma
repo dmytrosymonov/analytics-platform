@@ -165,6 +165,7 @@ model ReportSchedule {
   name           String
   description    String?
   cronExpression String     @map("cron_expression")
+  weekendCronExpression String? @map("weekend_cron_expression")
   periodType     PeriodType @map("period_type")
   isEnabled      Boolean    @default(false) @map("is_enabled")
   createdAt      DateTime   @default(now()) @map("created_at")

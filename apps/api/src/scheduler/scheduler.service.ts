@@ -3,8 +3,21 @@ import { prisma } from '../lib/prisma';
 import { fetchQueue } from '../queue/queues';
 import { logger } from '../lib/logger';
 
-const scheduledTasks = new Map<string, cron.ScheduledTask>();
+type RegisteredSchedule = {
+  id: string;
+  cronExpression: string;
+  weekendCronExpression?: string | null;
+  source: { id: string; type: string };
+  periodType: string;
+  name: string;
+  timezone?: string;
+};
+
+type ScheduleScope = 'default' | 'weekend';
+
+const scheduledTasks = new Map<string, cron.ScheduledTask[]>();
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
+const weekdayFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
 export async function startScheduler() {
   const schedules = await prisma.reportSchedule.findMany({
@@ -26,25 +39,78 @@ export async function getSourceTimezone(sourceId: string): Promise<string> {
   return timezoneSetting?.value || 'UTC';
 }
 
-export async function registerSchedule(schedule: { id: string; cronExpression: string; source: { id: string; type: string }; periodType: string; name: string; timezone?: string }) {
-  // Stop existing task if any
-  const existing = scheduledTasks.get(schedule.id);
-  if (existing) { existing.stop(); scheduledTasks.delete(schedule.id); }
+export async function registerSchedule(schedule: RegisteredSchedule) {
+  unregisterSchedule(schedule.id);
 
-  const validExpr = cron.validate(schedule.cronExpression) ? schedule.cronExpression : '0 8 * * *';
   const timezone = schedule.timezone || await getSourceTimezone(schedule.source.id);
+  const tasks: cron.ScheduledTask[] = [];
 
-  const task = cron.schedule(validExpr, async () => {
-    await triggerScheduledRun(schedule.id);
-  }, { timezone });
+  tasks.push(
+    createScheduledTask(schedule, timezone, 'default', cron.validate(schedule.cronExpression) ? schedule.cronExpression : '0 8 * * *'),
+  );
 
-  scheduledTasks.set(schedule.id, task);
-  logger.info({ scheduleId: schedule.id, name: schedule.name, cron: validExpr, timezone }, 'Scheduled source cron');
+  if (schedule.weekendCronExpression) {
+    if (cron.validate(schedule.weekendCronExpression)) {
+      tasks.push(createScheduledTask(schedule, timezone, 'weekend', schedule.weekendCronExpression));
+    } else {
+      logger.warn(
+        { scheduleId: schedule.id, name: schedule.name, cron: schedule.weekendCronExpression },
+        'Skipping invalid weekend cron expression',
+      );
+    }
+  }
+
+  scheduledTasks.set(schedule.id, tasks);
+  logger.info(
+    {
+      scheduleId: schedule.id,
+      name: schedule.name,
+      cron: schedule.cronExpression,
+      weekendCron: schedule.weekendCronExpression || null,
+      timezone,
+    },
+    'Scheduled source cron',
+  );
+}
+
+function createScheduledTask(schedule: RegisteredSchedule, timezone: string, scope: ScheduleScope, expression: string) {
+  return cron.schedule(
+    expression,
+    async () => {
+      const weekend = isWeekendInTimezone(new Date(), timezone);
+      if (scope === 'default' && schedule.weekendCronExpression && weekend) return;
+      if (scope === 'weekend' && !weekend) return;
+      await triggerScheduledRun(schedule.id);
+    },
+    { timezone },
+  );
+}
+
+function getWeekdayFormatter(timezone: string): Intl.DateTimeFormat {
+  const cached = weekdayFormatterCache.get(timezone);
+  if (cached) return cached;
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'short',
+  });
+  weekdayFormatterCache.set(timezone, formatter);
+  return formatter;
+}
+
+function isWeekendInTimezone(date: Date, timezone: string) {
+  const weekday = getWeekdayFormatter(timezone).format(date);
+  return weekday === 'Sat' || weekday === 'Sun';
 }
 
 export function unregisterSchedule(scheduleId: string) {
-  const task = scheduledTasks.get(scheduleId);
-  if (task) { task.stop(); scheduledTasks.delete(scheduleId); }
+  const tasks = scheduledTasks.get(scheduleId);
+  if (!tasks?.length) return;
+
+  for (const task of tasks) {
+    task.stop();
+  }
+  scheduledTasks.delete(scheduleId);
 }
 
 export async function triggerScheduledRun(scheduleId: string) {

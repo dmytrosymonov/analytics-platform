@@ -35,31 +35,31 @@ async function main() {
     });
 
     // Default schedules
-    const defaultSchedules: Record<string, { name: string; description: string; cron: string; periodType: 'daily' | 'weekly' | 'monthly' }[]> = {
+    const defaultSchedules: Record<string, { name: string; description: string; cron: string; weekendCron?: string; periodType: 'daily' | 'weekly' | 'monthly' }[]> = {
       gto:      [
-        { name: 'Daily Sales Report',   description: 'Sales metrics for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
+        { name: 'Daily Sales Report',   description: 'Sales metrics for yesterday',        cron: '0 8 * * *',   weekendCron: '0 10 * * 0,6', periodType: 'daily'   },
         { name: 'Weekly Sales Summary', description: 'Aggregated sales for the past week',  cron: '0 9 * * 1',   periodType: 'weekly'  },
         { name: 'Monthly Sales Report', description: 'Full month sales analysis',            cron: '0 9 1 * *',   periodType: 'monthly' },
       ],
       gto_comments: [
-        { name: 'Daily Comments Report',   description: 'AI analysis of order comments for today and yesterday', cron: '0 9 * * *', periodType: 'daily'   },
+        { name: 'Daily Comments Report',   description: 'AI analysis of order comments for today and yesterday', cron: '0 8 * * *', weekendCron: '0 10 * * 0,6', periodType: 'daily'   },
         { name: 'Weekly Comments Report',  description: 'AI analysis of order comments for the past 7 days',    cron: '0 9 * * 1', periodType: 'weekly'  },
         { name: 'Monthly Comments Report', description: 'AI analysis of order comments for the past 30 days',   cron: '0 9 1 * *', periodType: 'monthly' },
       ],
       ga4:      [
-        { name: 'Daily Traffic Report',  description: 'Web traffic metrics for yesterday',  cron: '0 8 * * *',   periodType: 'daily'   },
+        { name: 'Daily Traffic Report',  description: 'Web traffic metrics for yesterday',  cron: '0 8 * * *',   weekendCron: '0 10 * * 0,6', periodType: 'daily'   },
         { name: 'Weekly Traffic Summary',description: 'Aggregated traffic for the past week',cron: '0 9 * * 1',  periodType: 'weekly'  },
       ],
       redmine:  [
-        { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
+        { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   weekendCron: '0 10 * * 0,6', periodType: 'daily'   },
         { name: 'Weekly Issues Summary', description: 'Aggregated issues for the past week', cron: '0 9 * * 1',   periodType: 'weekly'  },
       ],
       youtrack: [
-        { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   periodType: 'daily'   },
+        { name: 'Daily Issues Report',   description: 'Issue activity for yesterday',        cron: '0 8 * * *',   weekendCron: '0 10 * * 0,6', periodType: 'daily'   },
         { name: 'Weekly Sprint Summary', description: 'Sprint progress for the past week',   cron: '0 9 * * 1',   periodType: 'weekly'  },
       ],
       youtrack_progress: [
-        { name: 'Daily Progress Report', description: 'Yesterday progress after the daily standup', cron: '15 12 * * *', periodType: 'daily' },
+        { name: 'Daily Progress Report', description: 'Yesterday progress after the daily standup', cron: '0 8 * * *', weekendCron: '0 10 * * 0,6', periodType: 'daily' },
       ],
     };
 
@@ -69,7 +69,15 @@ async function main() {
       });
       if (!existing) {
         await prisma.reportSchedule.create({
-          data: { sourceId: source.id, name: sch.name, description: sch.description, cronExpression: sch.cron, periodType: sch.periodType, isEnabled: false },
+          data: {
+            sourceId: source.id,
+            name: sch.name,
+            description: sch.description,
+            cronExpression: sch.cron,
+            weekendCronExpression: sch.weekendCron ?? null,
+            periodType: sch.periodType,
+            isEnabled: false,
+          },
         });
       }
     }

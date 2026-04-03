@@ -149,9 +149,10 @@ Key models:
 ## Scheduling and Time Zones
 
 - Cron jobs are registered with the source-specific `timezone` from `source_settings` when present; otherwise they fall back to `UTC`
+- `ReportSchedule` can optionally define a separate `weekend_cron_expression`; when present, the primary `cron_expression` is used on weekdays/default dates and the weekend cron is used on Saturday/Sunday in the source timezone
 - Report period boundaries (`daily` / `weekly` / `monthly`) are also calculated in the source timezone
-- `youtrack_progress` defaults to `Europe/Kyiv` and is intended to run after the daily standup
-- Default `youtrack_progress` schedule: `Daily Progress Report` at `12:15` `Europe/Kyiv`
+- Source schedule editing in the back office should label cron fields as source-timezone based, not UTC-based
+- Default daily delivery target is `08:00` `Europe/Kyiv` on weekdays and `10:00` `Europe/Kyiv` on weekends when a schedule is configured with both cron fields
 
 ## Redmine Reports
 
@@ -175,7 +176,7 @@ Key models:
 - Regular schedule subscriptions are self-managed by end users in Telegram via `/settings`; users choose which enabled schedules they want to receive
 - Back office should not grant schedule subscriptions anymore; it should only display saved subscriptions and allow admins to remove them if needed
 - In the back-office Users access UI, `YouTrack` and `YouTrack Daily Progress` should be grouped visually under a single `YouTrack` section, while keeping their permissions separate inside that group
-- `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
+- `/settings` should let end users opt into or out of regular schedule subscriptions, but it must not let Telegram users grant themselves source access or re-enable blocked manual report buttons
 - `Redmine` submenu should expose manual activity reports for rolling windows `24h`, `48h`, and `7 days`
 - Redmine rolling-window buttons are manual-only and should use the current moment minus the selected window, not calendar-day boundaries
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
@@ -292,11 +293,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T10:37:58Z
+- Generated at (UTC): 2026-04-03T10:49:35Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: a27759a (a27759a1e20945d46cd5d8b92a2fb9371a25dd8b)
-- Commit date: 2026-04-03T12:19:49+02:00
+- Commit: 20e8c0e (20e8c0eb555c6ed48105a10f710e2677e2ec32b9)
+- Commit date: 2026-04-03T12:37:58+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

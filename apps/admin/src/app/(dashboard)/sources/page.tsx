@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authFetch, authPost } from '@/lib/api';
 import toast from 'react-hot-toast';
-import { CheckCircle, XCircle, AlertCircle, Settings2, ChevronDown, ChevronUp, Plus, Play, Trash2, Clock } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, Settings2, ChevronDown, ChevronUp, Plus, Play, Trash2, Clock, Pencil } from 'lucide-react';
 
 const PERIOD_LABELS: Record<string, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 const PERIOD_COLORS: Record<string, string> = {
@@ -19,6 +19,7 @@ export default function SourcesPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [addingSchedule, setAddingSchedule] = useState<string | null>(null);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({ queryKey: ['sources'], queryFn: () => authFetch('/api/v1/sources') });
   const { data: schedulesData } = useQuery({ queryKey: ['schedules'], queryFn: () => authFetch('/api/v1/schedules') });
@@ -167,37 +168,63 @@ export default function SourcesPage() {
 
                   <div className="space-y-2">
                     {sourceSchedules.map((sch: any) => (
-                      <div key={sch.id} className="bg-white rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${PERIOD_COLORS[sch.periodType]}`}>
-                          {PERIOD_LABELS[sch.periodType]}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900">{sch.name}</p>
-                          <p className="text-xs text-gray-400 font-mono">{sch.cronExpression} {sch.description && `· ${sch.description}`}</p>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-xs font-medium ${sch.isEnabled ? 'text-green-600' : 'text-gray-400'}`}>
-                            {sch.isEnabled ? '● Active' : '○ Inactive'}
+                      <div key={sch.id} className="bg-white rounded-lg border border-gray-200 px-4 py-3">
+                        <div className="flex items-start gap-3">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${PERIOD_COLORS[sch.periodType]}`}>
+                            {PERIOD_LABELS[sch.periodType]}
                           </span>
-                          <button className={`btn btn-sm ${sch.isEnabled ? 'btn-danger' : 'btn-success'}`}
-                            onClick={() => toggleSchedule.mutate({ id: sch.id, isEnabled: !sch.isEnabled })}>
-                            {sch.isEnabled ? 'Disable' : 'Enable'}
-                          </button>
-                          <button className="btn btn-sm btn-secondary flex items-center gap-1" title="Run now"
-                            onClick={() => triggerSchedule.mutate(sch.id)}>
-                            <Play size={12} /> Run now
-                          </button>
-                          <button className="btn btn-sm btn-danger" title="Delete"
-                            onClick={() => { if (confirm(`Delete "${sch.name}"?`)) deleteSchedule.mutate(sch.id); }}>
-                            <Trash2 size={12} />
-                          </button>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900">{sch.name}</p>
+                            <div className="text-xs text-gray-400 font-mono space-y-0.5 mt-1">
+                              <p>
+                                {sch.weekendCronExpression ? 'Weekdays/default' : 'All days'}: {sch.cronExpression}
+                              </p>
+                              {sch.weekendCronExpression && (
+                                <p>Weekends: {sch.weekendCronExpression}</p>
+                              )}
+                              {sch.description && <p className="font-sans text-gray-500">{sch.description}</p>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs font-medium ${sch.isEnabled ? 'text-green-600' : 'text-gray-400'}`}>
+                              {sch.isEnabled ? '● Active' : '○ Inactive'}
+                            </span>
+                            <button className="btn btn-sm btn-secondary" title="Edit"
+                              onClick={() => setEditingScheduleId(editingScheduleId === sch.id ? null : sch.id)}>
+                              <Pencil size={12} />
+                            </button>
+                            <button className={`btn btn-sm ${sch.isEnabled ? 'btn-danger' : 'btn-success'}`}
+                              onClick={() => toggleSchedule.mutate({ id: sch.id, isEnabled: !sch.isEnabled })}>
+                              {sch.isEnabled ? 'Disable' : 'Enable'}
+                            </button>
+                            <button className="btn btn-sm btn-secondary flex items-center gap-1" title="Run now"
+                              onClick={() => triggerSchedule.mutate(sch.id)}>
+                              <Play size={12} /> Run now
+                            </button>
+                            <button className="btn btn-sm btn-danger" title="Delete"
+                              onClick={() => { if (confirm(`Delete "${sch.name}"?`)) deleteSchedule.mutate(sch.id); }}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </div>
+
+                        {editingScheduleId === sch.id && (
+                          <ScheduleForm
+                            sourceId={source.id}
+                            schedule={sch}
+                            onClose={() => setEditingScheduleId(null)}
+                            onSuccess={() => {
+                              qc.invalidateQueries({ queryKey: ['schedules'] });
+                              setEditingScheduleId(null);
+                            }}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>
 
                   {addingSchedule === source.id && (
-                    <AddScheduleForm sourceId={source.id} onClose={() => setAddingSchedule(null)}
+                    <ScheduleForm sourceId={source.id} onClose={() => setAddingSchedule(null)}
                       onSuccess={() => { qc.invalidateQueries({ queryKey: ['schedules'] }); setAddingSchedule(null); }} />
                   )}
                 </div>
@@ -210,24 +237,56 @@ export default function SourcesPage() {
   );
 }
 
-function AddScheduleForm({ sourceId, onClose, onSuccess }: { sourceId: string; onClose: () => void; onSuccess: () => void }) {
-  const [form, setForm] = useState({ name: '', description: '', cronExpression: '0 8 * * *', periodType: 'daily', isEnabled: false });
+type ScheduleFormState = {
+  name: string;
+  description: string;
+  cronExpression: string;
+  weekendCronExpression: string;
+  periodType: string;
+  isEnabled: boolean;
+};
 
-  const create = useMutation({
-    mutationFn: () => authPost('/api/v1/schedules', { ...form, sourceId, isEnabled: form.isEnabled }, 'POST'),
-    onSuccess: () => { toast.success('Schedule created'); onSuccess(); },
-    onError: () => toast.error('Failed to create schedule'),
+function ScheduleForm({
+  sourceId,
+  schedule,
+  onClose,
+  onSuccess,
+}: {
+  sourceId: string;
+  schedule?: any;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [form, setForm] = useState<ScheduleFormState>({
+    name: schedule?.name || '',
+    description: schedule?.description || '',
+    cronExpression: schedule?.cronExpression || '0 8 * * *',
+    weekendCronExpression: schedule?.weekendCronExpression || '',
+    periodType: schedule?.periodType || 'daily',
+    isEnabled: schedule?.isEnabled || false,
+  });
+
+  const save = useMutation({
+    mutationFn: () => schedule
+      ? authPost(`/api/v1/schedules/${schedule.id}`, form, 'PATCH')
+      : authPost('/api/v1/schedules', { ...form, sourceId }, 'POST'),
+    onSuccess: () => {
+      toast.success(schedule ? 'Schedule updated' : 'Schedule created');
+      onSuccess();
+    },
+    onError: () => toast.error(schedule ? 'Failed to update schedule' : 'Failed to create schedule'),
   });
 
   const presets = [
-    { label: 'Every day 08:00', cron: '0 8 * * *', period: 'daily' },
-    { label: 'Every Monday 09:00', cron: '0 9 * * 1', period: 'weekly' },
-    { label: '1st of month 09:00', cron: '0 9 1 * *', period: 'monthly' },
+    { label: '08:00 every day', cron: '0 8 * * *', weekendCron: '', period: 'daily' },
+    { label: '08:00 weekdays / 10:00 weekends', cron: '0 8 * * *', weekendCron: '0 10 * * 0,6', period: 'daily' },
+    { label: 'Monday 09:00', cron: '0 9 * * 1', weekendCron: '', period: 'weekly' },
+    { label: '1st of month 09:00', cron: '0 9 1 * *', weekendCron: '', period: 'monthly' },
   ];
 
   return (
     <div className="mt-4 bg-white rounded-lg border border-blue-200 p-4">
-      <h4 className="font-medium text-sm text-gray-800 mb-3">New Schedule</h4>
+      <h4 className="font-medium text-sm text-gray-800 mb-3">{schedule ? 'Edit Schedule' : 'New Schedule'}</h4>
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
           <label className="label">Name</label>
@@ -242,13 +301,25 @@ function AddScheduleForm({ sourceId, onClose, onSuccess }: { sourceId: string; o
           </select>
         </div>
         <div>
-          <label className="label">Cron Expression (UTC)</label>
+          <label className="label">Primary Cron (source timezone)</label>
           <input className="input font-mono" placeholder="0 8 * * *" value={form.cronExpression} onChange={e => setForm(p => ({ ...p, cronExpression: e.target.value }))} />
         </div>
-        <div className="col-span-2 flex gap-2">
+        <div className="col-span-2">
+          <label className="label">Weekend Cron (optional, source timezone)</label>
+          <input className="input font-mono" placeholder="0 10 * * 0,6" value={form.weekendCronExpression} onChange={e => setForm(p => ({ ...p, weekendCronExpression: e.target.value }))} />
+          <p className="mt-1 text-xs text-gray-500">
+            If set, the primary cron runs on weekdays/default dates, and this cron is used on Saturday/Sunday.
+          </p>
+        </div>
+        <div className="col-span-2 flex flex-wrap gap-2">
           {presets.map(p => (
-            <button key={p.cron} type="button" className="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
-              onClick={() => setForm(prev => ({ ...prev, cronExpression: p.cron, periodType: p.period }))}>
+            <button key={`${p.label}-${p.cron}`} type="button" className="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+              onClick={() => setForm(prev => ({
+                ...prev,
+                cronExpression: p.cron,
+                weekendCronExpression: p.weekendCron,
+                periodType: p.period,
+              }))}>
               {p.label}
             </button>
           ))}
@@ -259,8 +330,8 @@ function AddScheduleForm({ sourceId, onClose, onSuccess }: { sourceId: string; o
         </div>
       </div>
       <div className="flex gap-2 mt-3">
-        <button className="btn-primary" onClick={() => create.mutate()} disabled={!form.name || create.isPending}>
-          {create.isPending ? 'Creating...' : 'Create Schedule'}
+        <button className="btn-primary" onClick={() => save.mutate()} disabled={!form.name || !form.cronExpression || save.isPending}>
+          {save.isPending ? (schedule ? 'Saving...' : 'Creating...') : (schedule ? 'Save Changes' : 'Create Schedule')}
         </button>
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
       </div>

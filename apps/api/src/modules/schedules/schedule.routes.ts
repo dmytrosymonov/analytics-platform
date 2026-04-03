@@ -5,6 +5,11 @@ import { writeAuditLog } from '../../lib/audit';
 import { computePeriod, getSourceTimezone, registerSchedule, unregisterSchedule } from '../../scheduler/scheduler.service';
 import { fetchQueue } from '../../queue/queues';
 
+const optionalCronField = z.preprocess(
+  value => typeof value === 'string' && value.trim() === '' ? null : value,
+  z.string().trim().min(1).nullable().optional(),
+);
+
 export async function scheduleRoutes(app: FastifyInstance) {
   const auth = { onRequest: [(app as any).authenticate] };
 
@@ -27,6 +32,7 @@ export async function scheduleRoutes(app: FastifyInstance) {
       name: z.string().min(1).max(100),
       description: z.string().optional(),
       cronExpression: z.string(),
+      weekendCronExpression: optionalCronField,
       periodType: z.enum(['daily', 'weekly', 'monthly']),
       isEnabled: z.boolean().default(false),
     }).parse(request.body);
@@ -52,6 +58,7 @@ export async function scheduleRoutes(app: FastifyInstance) {
       name: z.string().min(1).max(100).optional(),
       description: z.string().optional(),
       cronExpression: z.string().optional(),
+      weekendCronExpression: optionalCronField,
       periodType: z.enum(['daily', 'weekly', 'monthly']).optional(),
       isEnabled: z.boolean().optional(),
     }).parse(request.body);
