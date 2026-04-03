@@ -153,4 +153,34 @@ export async function scheduleRoutes(app: FastifyInstance) {
 
     return reply.send({ success: true, data: pref });
   });
+
+  app.delete('/preferences/:userId/:scheduleId', auth, async (request, reply) => {
+    const { userId, scheduleId } = request.params as any;
+    const actor = (request.user as any);
+
+    const existing = await prisma.userSchedulePreference.findUnique({
+      where: { userId_scheduleId: { userId, scheduleId } },
+    });
+
+    if (!existing) {
+      return reply.send({ success: true, data: { removed: false } });
+    }
+
+    await prisma.userSchedulePreference.delete({
+      where: { userId_scheduleId: { userId, scheduleId } },
+    });
+
+    await writeAuditLog({
+      actorType: 'admin',
+      actorId: actor.sub,
+      action: 'user.schedule_subscription.deleted',
+      entityType: 'user',
+      entityId: userId,
+      beforeState: { scheduleId, enabled: existing.enabled },
+      afterState: { scheduleId, removed: true },
+      ipAddress: request.ip,
+    });
+
+    return reply.send({ success: true, data: { removed: true } });
+  });
 }

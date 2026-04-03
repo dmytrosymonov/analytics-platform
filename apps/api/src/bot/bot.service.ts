@@ -305,6 +305,15 @@ async function getUserSchedulePrefs(userId: string) {
   return new Map(prefs.map(p => [p.scheduleId, p.enabled]));
 }
 
+async function getSubscribableSchedules(userId: string): Promise<ScheduleWithSourceSummary[]> {
+  const [sourceAccess, schedules] = await Promise.all([
+    getUserSourceAccess(userId),
+    getEnabledSchedules(),
+  ]);
+  const enabledSourceIds = new Set(sourceAccess.filter((source) => source.enabled).map((source) => source.id));
+  return schedules.filter((schedule) => enabledSourceIds.has(schedule.source.id));
+}
+
 async function getUserSourceAccess(userId: string) {
   const [sources, prefs] = await Promise.all([
     prisma.dataSource.findMany({
@@ -422,54 +431,31 @@ async function getSchedulesBySourceTypes(sourceTypes: string[]): Promise<Schedul
   });
 }
 
-// ── /reports — build inline keyboard showing current subscription state ────────
-async function buildReportsKeyboard(userId: string) {
-  const [sources, schedules, manualReports] = await Promise.all([
-    getUserSourceAccess(userId),
-    prisma.reportSchedule.findMany({
-      include: { source: { select: { id: true, name: true, type: true } } },
-      orderBy: [{ source: { name: 'asc' } }, { periodType: 'asc' }, { name: 'asc' }],
-    }),
-    getUserManualReportAccess(userId),
+async function buildSubscriptionsKeyboard(userId: string) {
+  const [schedules, prefs] = await Promise.all([
+    getSubscribableSchedules(userId),
+    getUserSchedulePrefs(userId),
   ]);
-  const prefs = await getUserSchedulePrefs(userId);
+  if (schedules.length === 0) {
+    return { text: 'Нет доступных расписаний. Сначала администратор должен открыть вам доступ к источнику отчётов.', keyboard: null };
+  }
   const periodLabel = (p: string) => p === 'daily' ? 'день' : p === 'weekly' ? 'неделя' : 'месяц';
-  const lines: string[] = [
-    '📋 *Доступные отчёты*',
-    '',
-    'Доступ управляется администратором из бекофиса.',
-  ];
-
-  const enabledSources = sources.filter((source) => source.enabled);
-  if (enabledSources.length > 0) {
-    lines.push('', '*Доступ к источникам:*');
-    for (const source of enabledSources) {
-      lines.push(`• ${source.name}`);
-      const sourceManualReports = manualReports.filter((report) => report.sourceType === String(source.type) && report.enabled);
-      for (const report of sourceManualReports) {
-        lines.push(`- ${report.label}`);
-      }
-    }
-  }
-
-  const subscribedSchedules = schedules.filter((schedule) => {
-    const sourceEnabled = enabledSources.some((source) => source.id === schedule.source.id);
-    return sourceEnabled && (prefs.get(schedule.id) ?? true);
+  const buttons = schedules.map((schedule) => {
+    const enabled = prefs.get(schedule.id) ?? false;
+    return Markup.button.callback(
+      `${enabled ? '✅' : '➕'} ${schedule.name} · ${schedule.source.name} (${periodLabel(schedule.periodType)})`,
+      `sub:${schedule.id}`,
+    );
   });
-  if (subscribedSchedules.length > 0) {
-    lines.push('', '*Подписки на регулярную рассылку:*');
-    for (const schedule of subscribedSchedules) {
-      lines.push(`• ${schedule.name} · ${schedule.source.name} (${periodLabel(schedule.periodType)})`);
-    }
-  }
 
-  if (enabledSources.length === 0) {
-    lines.push('', 'Сейчас для вас нет доступных отчётов.');
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
   }
 
   return {
-    text: lines.join('\n'),
-    keyboard: null,
+    text: '🔔 *Регулярные отчёты*\n\nВыберите отчёты, на которые хотите подписаться. Повторное нажатие отключит подписку.',
+    keyboard: Markup.inlineKeyboard(rows),
   };
 }
 
@@ -1486,15 +1472,48 @@ function registerHandlers(instance: Telegraf) {
   instance.command('settings', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return;
-    const { text } = await buildReportsKeyboard(user.id);
-    await ctx.reply(text, { parse_mode: 'Markdown' });
+    const { text, keyboard } = await buildSubscriptionsKeyboard(user.id);
+    if (!keyboard) return ctx.reply(text, { parse_mode: 'Markdown' });
+    await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
   });
 
-  // Callback: toggle schedule subscription
   instance.action(/^sub:(.+)$/, async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return ctx.answerCbQuery();
-    await ctx.answerCbQuery('Доступ к отчётам теперь настраивается администратором в бекофисе.');
+    const scheduleId = ctx.match[1];
+    const subscribableSchedules = await getSubscribableSchedules(user.id);
+    if (!subscribableSchedules.some((schedule) => schedule.id === scheduleId)) {
+      await ctx.answerCbQuery('Эта подписка вам недоступна.');
+      return;
+    }
+
+    const existing = await prisma.userSchedulePreference.findUnique({
+      where: { userId_scheduleId: { userId: user.id, scheduleId } },
+    });
+
+    if (existing?.enabled) {
+      await prisma.userSchedulePreference.delete({
+        where: { userId_scheduleId: { userId: user.id, scheduleId } },
+      });
+      const { text, keyboard } = await buildSubscriptionsKeyboard(user.id);
+      if (keyboard) {
+        await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+      }
+      await ctx.answerCbQuery('Подписка отключена');
+      return;
+    }
+
+    await prisma.userSchedulePreference.upsert({
+      where: { userId_scheduleId: { userId: user.id, scheduleId } },
+      create: { userId: user.id, scheduleId, enabled: true },
+      update: { enabled: true },
+    });
+
+    const { text, keyboard } = await buildSubscriptionsKeyboard(user.id);
+    if (keyboard) {
+      await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    }
+    await ctx.answerCbQuery('Подписка включена');
   });
 
   instance.action('reports:home', async (ctx) => {

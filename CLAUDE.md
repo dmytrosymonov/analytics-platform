@@ -172,6 +172,8 @@ Key models:
 - A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
 - Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
+- Regular schedule subscriptions are self-managed by end users in Telegram via `/settings`; users choose which enabled schedules they want to receive
+- Back office should not grant schedule subscriptions anymore; it should only display saved subscriptions and allow admins to remove them if needed
 - In the back-office Users access UI, `YouTrack` and `YouTrack Daily Progress` should be grouped visually under a single `YouTrack` section, while keeping their permissions separate inside that group
 - `/settings` is read-only for end users and should list currently available sources/reports plus active regular subscriptions; it must not let Telegram users grant themselves access or re-enable blocked report buttons
 - `Redmine` submenu should expose manual activity reports for rolling windows `24h`, `48h`, and `7 days`
@@ -290,11 +292,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T10:19:48Z
+- Generated at (UTC): 2026-04-03T10:37:58Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: c4bb537 (c4bb53768e52e4a46bac81308c8adc29b6f270e8)
-- Commit date: 2026-04-03T11:28:26+02:00
+- Commit: a27759a (a27759a1e20945d46cd5d8b92a2fb9371a25dd8b)
+- Commit date: 2026-04-03T12:19:49+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

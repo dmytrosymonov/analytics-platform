@@ -124,6 +124,16 @@ const PERIOD_COLORS: Record<string, string> = {
   monthly: 'bg-orange-50 border-orange-200 text-orange-700',
 };
 
+const SOURCE_GROUPS: Record<string, { key: string; label: string }> = {
+  youtrack: { key: 'youtrack', label: 'YouTrack' },
+  youtrack_progress: { key: 'youtrack', label: 'YouTrack' },
+};
+
+const SOURCE_VARIANT_LABELS: Record<string, string> = {
+  youtrack: 'Reports',
+  youtrack_progress: 'Daily Progress',
+};
+
 function UserPreferences({ userId }: { userId: string }) {
   const qc = useQueryClient();
 
@@ -156,10 +166,13 @@ function UserPreferences({ userId }: { userId: string }) {
     },
   });
 
-  const toggle = useMutation({
-    mutationFn: ({ scheduleId, enabled }: { scheduleId: string; enabled: boolean }) =>
-      authPost(`/api/v1/schedules/preferences/${userId}/${scheduleId}`, { enabled }, 'PATCH'),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['schedule-prefs', userId] }); toast.success('Updated'); },
+  const removeSubscription = useMutation({
+    mutationFn: (scheduleId: string) =>
+      authPost(`/api/v1/schedules/preferences/${userId}/${scheduleId}`, undefined, 'DELETE'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['schedule-prefs', userId] });
+      toast.success('Subscription removed');
+    },
   });
 
   const toggleManual = useMutation({
@@ -222,65 +235,77 @@ function UserPreferences({ userId }: { userId: string }) {
     return <p className="text-sm text-gray-400">No report access controls configured yet.</p>;
   }
 
+  const groupedSources = Object.values(bySource).reduce((acc, source) => {
+    const group = SOURCE_GROUPS[source.sourceType] || { key: source.sourceId, label: source.sourceName };
+    if (!acc[group.key]) acc[group.key] = { label: group.label, sources: [] as typeof source[] };
+    acc[group.key].sources.push(source);
+    return acc;
+  }, {} as Record<string, { label: string; sources: Array<(typeof bySource)[string]> }>);
+
   return (
     <div className="space-y-3">
       <p className="text-xs font-semibold text-gray-500 uppercase">Report Access</p>
       <p className="text-sm text-gray-500">
-        First enable access to the source/report type. Schedule chips below control only regular delivery subscriptions.
+        Source access and manual report access are managed here. Regular subscriptions are managed by users in Telegram and can only be removed from the back office.
       </p>
-      {Object.values(bySource).map(({ sourceId, sourceName, sourceType, enabled, schedules, manualReports }) => (
-        <div key={sourceId}>
-          <p className="text-xs text-gray-400 mb-1.5">{sourceName}</p>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <button
-              onClick={() => toggleSource.mutate({ sourceId, reportsEnabled: !enabled })}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
-              }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-current' : 'bg-gray-300'}`} />
-              {sourceName} Access
-            </button>
-            <span className="text-xs text-gray-400 self-center">
-              {sourceType === 'gto' ? 'Manual Sales + scheduled sales reports' : 'Manual generation + regular subscriptions'}
-            </span>
-          </div>
-          {manualReports.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {manualReports.map((report: any) => (
+      {Object.entries(groupedSources).map(([groupKey, group]) => (
+        <div key={groupKey} className="space-y-2">
+          <p className="text-xs text-gray-400 mb-1.5">{group.label}</p>
+          {group.sources.map(({ sourceId, sourceName, sourceType, enabled, schedules, manualReports }) => (
+            <div key={sourceId} className="rounded-lg border border-gray-100 p-3">
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <span className="text-xs font-medium text-gray-500">
+                  {SOURCE_VARIANT_LABELS[sourceType] || sourceName}
+                </span>
                 <button
-                  key={report.key}
-                  onClick={() => enabled && toggleManual.mutate({ reportKey: report.key, enabled: !report.enabled })}
-                  disabled={!enabled}
-                  title={report.description}
+                  onClick={() => toggleSource.mutate({ sourceId, reportsEnabled: !enabled })}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                    !enabled ? 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed' :
-                    report.enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
+                    enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
                   }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${report.enabled && enabled ? 'bg-current' : 'bg-gray-300'}`} />
-                  {report.label}
+                  <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-current' : 'bg-gray-300'}`} />
+                  Access
                 </button>
-              ))}
+                <span className="text-xs text-gray-400 self-center">
+                  {sourceType === 'gto' ? 'Manual Sales + scheduled sales reports' : 'Manual generation + regular subscriptions'}
+                </span>
+              </div>
+              {manualReports.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {manualReports.map((report: any) => (
+                    <button
+                      key={report.key}
+                      onClick={() => enabled && toggleManual.mutate({ reportKey: report.key, enabled: !report.enabled })}
+                      disabled={!enabled}
+                      title={report.description}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                        !enabled ? 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed' :
+                        report.enabled ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-gray-100 border-gray-200 text-gray-400'
+                      }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${report.enabled && enabled ? 'bg-current' : 'bg-gray-300'}`} />
+                      {report.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {schedules.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {schedules
+                    .filter((sch: any) => prefMap[sch.id])
+                    .map((sch: any) => (
+                      <button key={sch.id}
+                        onClick={() => removeSubscription.mutate(sch.id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${PERIOD_COLORS[sch.periodType]}`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                        {sch.name} ×
+                      </button>
+                    ))}
+                  {schedules.filter((sch: any) => prefMap[sch.id]).length === 0 && (
+                    <span className="text-xs text-gray-400">No active subscriptions</span>
+                  )}
+                </div>
+              )}
             </div>
-          )}
-          {schedules.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {schedules.map((sch: any) => {
-              const scheduleEnabled = prefMap[sch.id] ?? true;
-              return (
-                <button key={sch.id}
-                  onClick={() => enabled && toggle.mutate({ scheduleId: sch.id, enabled: !scheduleEnabled })}
-                  disabled={!enabled}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                    !enabled ? 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed' :
-                    scheduleEnabled ? PERIOD_COLORS[sch.periodType] : 'bg-gray-100 border-gray-200 text-gray-400'
-                  }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${scheduleEnabled && enabled ? 'bg-current' : 'bg-gray-300'}`} />
-                  {sch.name}
-                </button>
-              );
-            })}
-          </div>
-          )}
+          ))}
         </div>
       ))}
     </div>

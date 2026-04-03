@@ -37,10 +37,7 @@ export async function handleDeliverJob(job: Job) {
         status: 'approved',
         globalReportsEnabled: true,
         reportPreferences: { some: { sourceId, reportsEnabled: true } },
-        OR: [
-          { schedulePreferences: { none: { scheduleId } } },
-          { schedulePreferences: { some: { scheduleId, enabled: true } } },
-        ],
+        schedulePreferences: { some: { scheduleId, enabled: true } },
       },
     });
   } else {
