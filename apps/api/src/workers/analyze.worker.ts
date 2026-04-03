@@ -2,6 +2,7 @@ import { Job } from 'bullmq';
 import { prisma } from '../lib/prisma';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
+import { buildGtoCommentsPrompts } from '../lib/gto-comments-prompt';
 import { deliverQueue } from '../queue/queues';
 import { logger } from '../lib/logger';
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
@@ -155,14 +156,20 @@ export async function handleAnalyzeJob(job: Job) {
   const run = await prisma.reportRun.findUnique({ where: { id: runId } });
   const source = await prisma.dataSource.findUnique({ where: { id: sourceId } });
 
-  const rendered = await promptRegistry.renderPrompt(promptVersion, {
-    report_period_start: run!.periodStart.toISOString(),
-    report_period_end: run!.periodEnd.toISOString(),
-    source_name: source!.name,
-    normalized_metrics_json: JSON.stringify(result.normalizedData),
-    output_language: 'English',
-    audience_type: 'business',
-  });
+  const rendered = String(source?.type) === 'gto_comments'
+    ? buildGtoCommentsPrompts({
+        periodStart: run!.periodStart.toISOString(),
+        periodEnd: run!.periodEnd.toISOString(),
+        normalizedMetricsJson: JSON.stringify(result.normalizedData),
+      })
+    : await promptRegistry.renderPrompt(promptVersion, {
+        report_period_start: run!.periodStart.toISOString(),
+        report_period_end: run!.periodEnd.toISOString(),
+        source_name: source!.name,
+        normalized_metrics_json: JSON.stringify(result.normalizedData),
+        output_language: 'English',
+        audience_type: 'business',
+      });
 
   const llmResult = await llmService.analyze({
     systemPrompt: rendered.system,

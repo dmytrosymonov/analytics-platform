@@ -11,6 +11,7 @@ import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getS
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
+import { buildGtoCommentsPrompts } from '../lib/gto-comments-prompt';
 import {
   listManualReportAccessDefinitions,
   makeScheduleHoursReportKey,
@@ -687,14 +688,20 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
       },
     });
 
-    const rendered = await promptRegistry.renderPrompt(promptVersion, {
-      normalized_metrics_json: JSON.stringify(fetchResult.data.metrics),
-      report_period_start: periodStart.toISOString(),
-      report_period_end: periodEnd.toISOString(),
-      source_name: schedule.source.name,
-      output_language: 'Russian',
-      audience_type: 'business',
-    });
+    const rendered = String(schedule.source.type) === 'gto_comments'
+      ? buildGtoCommentsPrompts({
+          normalizedMetricsJson: JSON.stringify(fetchResult.data.metrics),
+          periodStart: periodStart.toISOString(),
+          periodEnd: periodEnd.toISOString(),
+        })
+      : await promptRegistry.renderPrompt(promptVersion, {
+          normalized_metrics_json: JSON.stringify(fetchResult.data.metrics),
+          report_period_start: periodStart.toISOString(),
+          report_period_end: periodEnd.toISOString(),
+          source_name: schedule.source.name,
+          output_language: 'Russian',
+          audience_type: 'business',
+        });
 
     const analysis = await llmService.analyze({
       systemPrompt: rendered.system,

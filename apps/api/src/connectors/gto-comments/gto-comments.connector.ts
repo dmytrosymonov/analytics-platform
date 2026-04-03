@@ -65,7 +65,7 @@ export class GTOCommentsConnector implements SourceConnector {
   async fetchData(
     credentials: Record<string, unknown>,
     settings: Record<string, string>,
-    _period: { start: Date; end: Date },
+    period: { start: Date; end: Date },
   ): Promise<ConnectorResult> {
     const { api_key, base_url } = credentials as any;
     const baseUrl      = (base_url || DEFAULT_BASE_URL).replace(/\/$/, '');
@@ -75,11 +75,6 @@ export class GTOCommentsConnector implements SourceConnector {
 
     const http = createHttpClient({ baseURL: baseUrl, params: { apikey: api_key }, timeout }, 'gto-comments');
     const sem  = new Semaphore(PARALLEL_REQUESTS);
-
-    // ── Date ranges ────────────────────────────────────────────────────────
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const yesterday = new Date(today.getTime() - 86400000);
 
     // ── fetchList (one page, sorted desc by created_at) ────────────────────
     const fetchList = async (dateFrom: Date, dateTo: Date): Promise<any[]> => {
@@ -193,17 +188,9 @@ export class GTOCommentsConnector implements SourceConnector {
       };
     };
 
-    // ── Fetch today and yesterday in parallel ──────────────────────────────
-    logger.info('GTO Comments: fetching order lists...');
-    const [todayOrders, yesterdayOrders] = await Promise.all([
-      fetchList(today,     new Date(today.getTime() + 86400000)),
-      fetchList(yesterday, today),
-    ]);
-
-    const [todayData, yesterdayData] = await Promise.all([
-      buildPeriodData(todayOrders,    'today'),
-      buildPeriodData(yesterdayOrders,'yesterday'),
-    ]);
+    logger.info({ periodStart: fmt(period.start), periodEnd: fmt(period.end) }, 'GTO Comments: fetching order lists...');
+    const requestedOrders = await fetchList(period.start, period.end);
+    const requestedData = await buildPeriodData(requestedOrders, 'requested_period');
 
     return {
       success: true,
@@ -211,17 +198,13 @@ export class GTOCommentsConnector implements SourceConnector {
         sourceId:    'gto_comments',
         sourceName:  'GTO Comments Analysis',
         fetchedAt:   new Date().toISOString(),
-        periodStart: fmt(yesterday),
-        periodEnd:   fmt(today),
+        periodStart: fmt(period.start),
+        periodEnd:   fmt(period.end),
         timezone:    settings['timezone'] || 'Europe/Kiev',
         metrics: {
-          today: {
-            period: { from: fmt(today), to: fmt(new Date(today.getTime() + 86400000)) },
-            ...todayData,
-          },
-          yesterday: {
-            period: { from: fmt(yesterday), to: fmt(today) },
-            ...yesterdayData,
+          requested_period: {
+            period: { from: fmt(period.start), to: fmt(period.end) },
+            ...requestedData,
           },
         },
       },
