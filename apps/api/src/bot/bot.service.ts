@@ -1655,23 +1655,34 @@ function formatPct(value: number): string {
   return `${Math.round(value || 0)}%`;
 }
 
+function getNetworkProductEmoji(key: string): string {
+  return {
+    package: '🏨',
+    hotel: '🏩',
+    flight: '✈️',
+    transfer: '🚐',
+    insurance: '🛡️',
+    other: '📦',
+  }[key] || '📦';
+}
+
 function formatNetworkProductStructureLines(products: any): string[] {
   const entries = Object.entries(products || {})
     .map(([key, value]: [string, any]) => ({ key, value }))
     .filter((entry) => entry.value?.orders > 0)
     .sort((a, b) => {
-      if ((b.value.orders || 0) !== (a.value.orders || 0)) return (b.value.orders || 0) - (a.value.orders || 0);
-      return (b.value.revenue_eur || 0) - (a.value.revenue_eur || 0);
+      if ((b.value.revenue_eur || 0) !== (a.value.revenue_eur || 0)) return (b.value.revenue_eur || 0) - (a.value.revenue_eur || 0);
+      return (b.value.orders || 0) - (a.value.orders || 0);
     });
 
-  return entries.map(({ value }: { key: string; value: any }) =>
-    `${value.label || 'Продукт'}: ${formatInt(value.orders)} зак / ${formatInt(value.tourists || 0)} тур / ${formatInt(value.revenue_eur || 0)} EUR / profit ${formatInt(value.profit_eur || 0)} EUR (${value.profit_pct || 0}%)`,
+  return entries.map(({ key, value }: { key: string; value: any }) =>
+    `${getNetworkProductEmoji(key)} ${value.label || 'Продукт'}: ${formatInt(value.orders)} зак / ${formatInt(value.tourists || 0)} тур / ${formatInt(value.revenue_eur || 0)} EUR / profit ${formatInt(value.profit_eur || 0)} EUR (${value.profit_pct || 0}%), ср. глубина ${value.avg_lead_days ?? '—'} дн.`,
   );
 }
 
 function formatNetworkTopProductLines(products: any[]): string[] {
   return (products || []).slice(0, 5).map((product: any) =>
-    `${product.label} — ${formatInt(product.orders)} зак (${formatInt(product.revenue_eur || 0)} EUR)`,
+    `${getNetworkProductEmoji(product.key)} ${product.label} — ${formatInt(product.orders)} зак (${formatInt(product.revenue_eur || 0)} EUR), ср. глубина ${product.avg_lead_days ?? '—'} дн.`,
   );
 }
 
@@ -1704,9 +1715,10 @@ function formatNetworkGeneralReport(metrics: any): string {
   for (const item of section.general.networks || []) {
     lines.push(
       '',
+      `========== ${item.label} ==========`,
       `${item.label} — заказы ${formatInt(item.orders_total)} (${formatPct(item.share_of_gto?.orders_pct || 0)} GTO), туристы ${formatInt(item.tourists || 0)} (${formatPct(item.share_of_gto?.tourists_pct || 0)} GTO), выручка ${formatInt(item.revenue_eur || 0)} EUR (${formatPct(item.share_of_gto?.revenue_pct || 0)} GTO), profit ${formatInt(item.profit_eur || 0)} EUR (${item.profit_pct || 0}%)`,
     );
-    const productLines = formatNetworkTopProductLines(item.top_products || []);
+    const productLines = formatNetworkTopProductLines(item.top_products_by_orders || []);
     if (productLines.length > 0) {
       lines.push('Топ продукты:', ...productLines);
     } else {
@@ -1747,7 +1759,7 @@ function formatSingleNetworkSalesReport(metrics: any, networkKey: GtoNetworkKey)
     lines.push('', '---🏆 ТОП 5 агентов по заказам---', ...topAgents);
   }
 
-  const productStructure = formatNetworkProductStructureLines(section.top_products || []);
+  const productStructure = formatNetworkProductStructureLines(section.top_products_by_revenue || []);
   if (productStructure.length > 0) {
     lines.push('', '---📦 Структура заказов и прибыли---', ...productStructure);
   }

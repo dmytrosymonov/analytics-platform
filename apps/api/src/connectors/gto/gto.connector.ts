@@ -801,12 +801,12 @@ export class GTOConnector implements SourceConnector {
     overallSales: ReturnType<GTOConnector['computeSalesSection']>,
   ) {
     const createProductBuckets = () => ({
-      package: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
-      hotel: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
-      flight: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
-      transfer: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
-      other: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
-      insurance: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      package: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
+      hotel: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
+      flight: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
+      transfer: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
+      other: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
+      insurance: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0, lead_days_sum: 0, lead_days_count: 0 },
     });
     const blankNetworkRecord = (definition: typeof GTO_NETWORK_DEFINITIONS[number]) => ({
       key: definition.key,
@@ -831,7 +831,8 @@ export class GTOConnector implements SourceConnector {
         main_products: Array<{ key: string; label: string; orders: number; pct: number }>;
       }>,
       product_breakdown: {} as Record<string, { orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number }>,
-      top_products: [] as Array<{ key: string; label: string; orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number }>,
+      top_products_by_orders: [] as Array<{ key: string; label: string; orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number; avg_lead_days: number | null }>,
+      top_products_by_revenue: [] as Array<{ key: string; label: string; orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number; avg_lead_days: number | null }>,
       data_available: false,
     });
 
@@ -885,6 +886,10 @@ export class GTOConnector implements SourceConnector {
         const productKey = metric.productType;
         products[productKey].orders++;
         products[productKey].tourists += metric.tourists;
+        if (typeof metric.leadDays === 'number' && Number.isFinite(metric.leadDays)) {
+          products[productKey].lead_days_sum += metric.leadDays;
+          products[productKey].lead_days_count += 1;
+        }
         if (metric.status === 'CNF') {
           products[productKey].revenue_eur += metric.priceEur;
           products[productKey].profit_eur += metric.profitEur;
@@ -892,6 +897,10 @@ export class GTOConnector implements SourceConnector {
         if (metric.isStandaloneInsurance) {
           products.insurance.orders++;
           products.insurance.tourists += metric.tourists;
+          if (typeof metric.leadDays === 'number' && Number.isFinite(metric.leadDays)) {
+            products.insurance.lead_days_sum += metric.leadDays;
+            products.insurance.lead_days_count += 1;
+          }
           if (metric.status === 'CNF') {
             products.insurance.revenue_eur += metric.priceEur;
             products.insurance.profit_eur += metric.profitEur;
@@ -960,16 +969,25 @@ export class GTOConnector implements SourceConnector {
             revenue_eur: r2(value.revenue_eur),
             profit_eur: r2(value.profit_eur),
             profit_pct: value.revenue_eur > 0 ? Math.round(value.profit_eur / value.revenue_eur * 100) : 0,
+            avg_lead_days: value.lead_days_count > 0 ? Math.round(value.lead_days_sum / value.lead_days_count) : null,
           },
         ]),
       );
 
-      const topProducts = Object.entries(productBreakdown)
+      const topProductsBase = Object.entries(productBreakdown)
         .map(([key, value]) => ({ key, label: PRODUCT_LABELS[key] || key, ...value }))
-        .filter((product) => product.orders > 0)
+        .filter((product) => product.orders > 0);
+
+      const topProductsByOrders = [...topProductsBase]
         .sort((a, b) => {
           if (b.orders !== a.orders) return b.orders - a.orders;
           return b.revenue_eur - a.revenue_eur;
+        });
+
+      const topProductsByRevenue = [...topProductsBase]
+        .sort((a, b) => {
+          if (b.revenue_eur !== a.revenue_eur) return b.revenue_eur - a.revenue_eur;
+          return b.orders - a.orders;
         });
 
       return {
@@ -992,7 +1010,8 @@ export class GTOConnector implements SourceConnector {
         top_destinations: topDestinations,
         top_agents_by_orders: topAgentsByOrders,
         product_breakdown: productBreakdown,
-        top_products: topProducts,
+        top_products_by_orders: topProductsByOrders,
+        top_products_by_revenue: topProductsByRevenue,
         share_of_gto: {
           orders_pct: totalOrders > 0 ? Math.round(scopedOrders.length / totalOrders * 100) : 0,
           tourists_pct: totalTourists > 0 ? Math.round(tourists / totalTourists * 100) : 0,
@@ -1021,7 +1040,7 @@ export class GTOConnector implements SourceConnector {
           profit_eur: network.financials.profit_eur,
           profit_pct: network.financials.profit_pct,
           share_of_gto: network.share_of_gto,
-          top_products: network.top_products.slice(0, 5),
+          top_products_by_orders: network.top_products_by_orders.slice(0, 5),
           data_available: network.data_available,
         })),
       },
