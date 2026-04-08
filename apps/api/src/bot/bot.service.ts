@@ -50,6 +50,11 @@ type BotSession =
       timezone: string;
       reportLabel: string;
       target: PeriodSelectionTarget;
+      displayedYear: number;
+      displayedMonth: number;
+      startYmd: string | null;
+      endYmd: string | null;
+      maxYmd: string;
     };
 
 const sessions = new Map<number, BotSession>();
@@ -177,6 +182,10 @@ function formatPeriodLabel(from?: string, to?: string): string {
   return from === to ? formatOne(from) : `${formatOne(from)} - ${formatOne(to)}`;
 }
 
+function compareYmd(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
 function shiftYmd(year: number, month: number, day: number, offsetDays: number) {
   const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays));
   return {
@@ -186,72 +195,126 @@ function shiftYmd(year: number, month: number, day: number, offsetDays: number) 
   };
 }
 
-function parseDateToken(input: string): { year: number; month: number; day: number } | null {
-  const value = input.trim();
-  let match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (match) {
-    const year = Number(match[1]);
-    const month = Number(match[2]);
-    const day = Number(match[3]);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return null;
-    return { year, month, day };
-  }
-
-  match = value.match(/^(\d{2})[./](\d{2})[./](\d{4})$/);
-  if (!match) return null;
-  const day = Number(match[1]);
-  const month = Number(match[2]);
-  const year = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return null;
+function parseYmd(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
   return { year, month, day };
 }
 
-function parseCustomPeriodInput(text: string, timezone: string): { periodStart: Date; periodEnd: Date; from: string; to: string } | { error: string } {
-  const normalized = text.trim().replace(/\s+/g, ' ');
-  const rangeMatch = normalized.match(/^(\d{2}[./]\d{2}[./]\d{4}|\d{4}-\d{2}-\d{2})(?:\s*(?:-|—|–)\s*(\d{2}[./]\d{2}[./]\d{4}|\d{4}-\d{2}-\d{2}))?$/);
-  if (!rangeMatch) {
-    return { error: 'Укажите одну дату или диапазон в формате `ДД.MM.ГГГГ - ДД.MM.ГГГГ`.' };
-  }
+function formatYmd(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
-  const start = parseDateToken(rangeMatch[1]);
-  const end = parseDateToken(rangeMatch[2] || rangeMatch[1]);
-  if (!start || !end) {
-    return { error: 'Не удалось распознать дату. Используйте формат `ДД.MM.ГГГГ - ДД.MM.ГГГГ` или `YYYY-MM-DD - YYYY-MM-DD`.' };
-  }
+function getTodayYmd(timezone: string): string {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: timezone });
+}
 
-  const startUtc = Date.UTC(start.year, start.month - 1, start.day);
-  const endUtc = Date.UTC(end.year, end.month - 1, end.day);
-  if (endUtc < startUtc) {
-    return { error: 'Дата окончания не может быть раньше даты начала.' };
-  }
+function shiftCalendarMonth(year: number, month: number, offset: number) {
+  const shifted = new Date(Date.UTC(year, month - 1 + offset, 1));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+  };
+}
 
-  const inclusiveDays = Math.round((endUtc - startUtc) / 86400000) + 1;
-  if (inclusiveDays > MAX_CUSTOM_PERIOD_DAYS) {
-    return { error: `Период слишком длинный. Сейчас поддерживается максимум ${MAX_CUSTOM_PERIOD_DAYS} день(дней).` };
-  }
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
 
+function normalizeCalendarPeriod(
+  timezone: string,
+  startYmd: string,
+  endYmd?: string | null,
+): { periodStart: Date; periodEnd: Date; from: string; to: string } {
+  const from = startYmd;
+  const to = endYmd || startYmd;
+  const start = parseYmd(from);
+  const end = parseYmd(to);
   const nextDay = shiftYmd(end.year, end.month, end.day, 1);
   return {
     periodStart: zonedDateTimeToUtc(timezone, start.year, start.month, start.day),
     periodEnd: zonedDateTimeToUtc(timezone, nextDay.year, nextDay.month, nextDay.day),
-    from: `${String(start.year).padStart(4, '0')}-${String(start.month).padStart(2, '0')}-${String(start.day).padStart(2, '0')}`,
-    to: `${String(end.year).padStart(4, '0')}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`,
+    from,
+    to,
   };
 }
 
-function buildCustomPeriodPrompt(reportLabel: string): string {
+const CALENDAR_MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const CALENDAR_WEEKDAYS_RU = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+
+function buildCalendarPrompt(session: Extract<BotSession, { step: 'waiting_custom_period' }>): string {
+  const selectedFrom = session.startYmd ? formatPeriodLabel(session.startYmd, session.startYmd) : '—';
+  const selectedTo = session.endYmd ? formatPeriodLabel(session.endYmd, session.endYmd) : '—';
+  const effectiveTo = session.endYmd || session.startYmd;
+  const rangeLabel = session.startYmd ? formatPeriodLabel(session.startYmd, effectiveTo || session.startYmd) : '—';
+  const helper = !session.startYmd
+    ? 'Выберите дату начала.'
+    : !session.endYmd
+      ? 'Теперь выберите дату окончания или нажмите Apply для одного дня.'
+      : 'Период выбран. Нажмите Apply, чтобы сгенерировать отчёт.';
+
   return (
-    `📅 *${reportLabel}*\n\n` +
-    `Отправьте период одним сообщением.\n` +
-    `Форматы:\n` +
-    `• \`08.04.2026 - 10.04.2026\`\n` +
-    `• \`2026-04-08 - 2026-04-10\`\n` +
-    `• \`08.04.2026\` для одного дня\n\n` +
-    `Максимальная длина периода: ${MAX_CUSTOM_PERIOD_DAYS} день(дней).\n` +
-    `Напишите \`cancel\`, чтобы отменить.`
+    `📅 *${session.reportLabel}*\n\n` +
+    `${helper}\n\n` +
+    `Начало: ${selectedFrom}\n` +
+    `Конец: ${selectedTo}\n` +
+    `Период: ${rangeLabel}\n\n` +
+    `Максимальная длина периода: ${MAX_CUSTOM_PERIOD_DAYS} день(дней).`
   );
+}
+
+function buildCalendarKeyboard(session: Extract<BotSession, { step: 'waiting_custom_period' }>) {
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  const monthTitle = `${CALENDAR_MONTHS_RU[session.displayedMonth - 1]} ${session.displayedYear}`;
+  rows.push([
+    Markup.button.callback('‹', 'cal:prev'),
+    Markup.button.callback(monthTitle, 'cal:noop'),
+    Markup.button.callback('›', 'cal:next'),
+  ]);
+  rows.push(CALENDAR_WEEKDAYS_RU.map((label) => Markup.button.callback(label, 'cal:noop')));
+
+  const firstDayWeekday = (new Date(Date.UTC(session.displayedYear, session.displayedMonth - 1, 1)).getUTCDay() + 6) % 7;
+  const daysInMonth = getDaysInMonth(session.displayedYear, session.displayedMonth);
+  const cells: Array<{ text: string; callback: string }> = [];
+
+  for (let i = 0; i < firstDayWeekday; i++) {
+    cells.push({ text: ' ', callback: 'cal:noop' });
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ymd = formatYmd(session.displayedYear, session.displayedMonth, day);
+    const disabled = compareYmd(ymd, session.maxYmd) > 0;
+    const inRange = session.startYmd && (session.endYmd || session.startYmd)
+      ? compareYmd(ymd, session.startYmd) >= 0 && compareYmd(ymd, session.endYmd || session.startYmd) <= 0
+      : false;
+
+    let text = String(day);
+    if (session.startYmd === ymd && (session.endYmd || session.startYmd) === ymd) text = `🟢${day}`;
+    else if (session.startYmd === ymd) text = `🟢${day}`;
+    else if (session.endYmd === ymd) text = `🔵${day}`;
+    else if (inRange) text = `·${day}`;
+    if (disabled) text = `·${day}`;
+
+    cells.push({ text, callback: disabled ? 'cal:noop' : `cal:pick:${ymd}` });
+  }
+
+  while (cells.length % 7 !== 0) {
+    cells.push({ text: ' ', callback: 'cal:noop' });
+  }
+
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(cells.slice(i, i + 7).map((cell) => Markup.button.callback(cell.text, cell.callback)));
+  }
+
+  const actionRow: ReturnType<typeof Markup.button.callback>[] = [
+    Markup.button.callback('Reset', 'cal:reset'),
+  ];
+  if (session.startYmd) {
+    actionRow.push(Markup.button.callback('Apply', 'cal:apply'));
+  }
+  rows.push(actionRow);
+  rows.push([Markup.button.callback('Cancel', 'cal:cancel')]);
+
+  return Markup.inlineKeyboard(rows);
 }
 
 function formatSummerSalesOutlook(metrics: any): string {
@@ -2096,19 +2159,138 @@ async function beginCustomPeriodSelection(
   reportLabel: string,
   target: PeriodSelectionTarget,
 ) {
+  const maxYmd = getTodayYmd(timezone);
+  const today = parseYmd(maxYmd);
   sessions.set(ctx.from!.id, {
     step: 'waiting_custom_period',
     timezone,
     reportLabel,
     target,
+    displayedYear: today.year,
+    displayedMonth: today.month,
+    startYmd: null,
+    endYmd: null,
+    maxYmd,
   });
 
+  const session = sessions.get(ctx.from!.id);
+  if (!session || session.step !== 'waiting_custom_period') return;
+
   await ctx.editMessageText(
-    buildCustomPeriodPrompt(reportLabel),
-    { parse_mode: 'Markdown' },
+    buildCalendarPrompt(session),
+    { parse_mode: 'Markdown', ...buildCalendarKeyboard(session) },
   ).catch(async () => {
-    await ctx.reply(buildCustomPeriodPrompt(reportLabel), { parse_mode: 'Markdown' });
+    await ctx.reply(buildCalendarPrompt(session), { parse_mode: 'Markdown', ...buildCalendarKeyboard(session) });
   });
+}
+
+async function renderCustomPeriodCalendar(ctx: any, session: Extract<BotSession, { step: 'waiting_custom_period' }>) {
+  await ctx.editMessageText(
+    buildCalendarPrompt(session),
+    { parse_mode: 'Markdown', ...buildCalendarKeyboard(session) } as any,
+  ).catch(() => {});
+}
+
+async function executeCustomPeriodSelection(
+  ctx: any,
+  userId: string,
+  session: Extract<BotSession, { step: 'waiting_custom_period' }>,
+) {
+  if (!session.startYmd) {
+    await ctx.answerCbQuery('Сначала выберите дату.');
+    return;
+  }
+
+  const period = normalizeCalendarPeriod(session.timezone, session.startYmd, session.endYmd);
+  const startUtc = Date.UTC(parseYmd(period.from).year, parseYmd(period.from).month - 1, parseYmd(period.from).day);
+  const endUtc = Date.UTC(parseYmd(period.to).year, parseYmd(period.to).month - 1, parseYmd(period.to).day);
+  const inclusiveDays = Math.round((endUtc - startUtc) / 86400000) + 1;
+  if (inclusiveDays > MAX_CUSTOM_PERIOD_DAYS) {
+    await ctx.answerCbQuery(`Максимум ${MAX_CUSTOM_PERIOD_DAYS} дней`);
+    return;
+  }
+
+  sessions.delete(ctx.from!.id);
+  const label = formatPeriodLabel(period.from, period.to);
+  await ctx.editMessageText(`⏳ Готовлю *${session.reportLabel}* за период *${label}*...`, { parse_mode: 'Markdown' }).catch(() => {});
+
+  try {
+    if (session.target.kind === 'sales') {
+      if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
+        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const result = await runGtoSalesPeriodReport(period.periodStart, period.periodEnd);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+      return;
+    }
+
+    if (session.target.kind === 'payments') {
+      if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
+        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const result = await runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+      return;
+    }
+
+    if (session.target.kind === 'agents') {
+      if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
+        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const result = await runGtoAgentActivityReport({
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+      });
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+      return;
+    }
+
+    if (!(await hasManualReportAccess(userId, session.target.accessKey))) {
+      throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
+
+    const result = await runAnalysisForPeriod(session.target.scheduleId, period.periodStart, period.periodEnd);
+    const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+    await prisma.sentMessage.create({
+      data: {
+        resultId: result.resultId,
+        userId,
+        status: 'sent',
+        telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+        sentAt: new Date(),
+      },
+    }).catch(() => {});
+  } catch (err: any) {
+    logger.error({ err, session }, 'Custom period generation failed');
+    await ctx.reply(`❌ Ошибка: ${err.message}`);
+  }
 }
 
 // ── Register all handlers ─────────────────────────────────────────────────────
@@ -2529,6 +2711,59 @@ function registerHandlers(instance: Telegraf) {
     });
   });
 
+  instance.action(/^cal:(prev|next|reset|apply|cancel|noop)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = sessions.get(ctx.from!.id);
+    if (!session || session.step !== 'waiting_custom_period') return;
+
+    if (ctx.match[1] === 'noop') return;
+    if (ctx.match[1] === 'cancel') {
+      sessions.delete(ctx.from!.id);
+      await ctx.editMessageText('Ок, отменил выбор периода.').catch(() => {});
+      return;
+    }
+    if (ctx.match[1] === 'reset') {
+      session.startYmd = null;
+      session.endYmd = null;
+      await renderCustomPeriodCalendar(ctx, session);
+      return;
+    }
+    if (ctx.match[1] === 'apply') {
+      const user = await requireApproved(ctx);
+      if (!user) return;
+      await executeCustomPeriodSelection(ctx, user.id, session);
+      return;
+    }
+
+    const shifted = shiftCalendarMonth(session.displayedYear, session.displayedMonth, ctx.match[1] === 'prev' ? -1 : 1);
+    const displayedFirstYmd = formatYmd(shifted.year, shifted.month, 1);
+    if (compareYmd(displayedFirstYmd, session.maxYmd) > 0) return;
+    session.displayedYear = shifted.year;
+    session.displayedMonth = shifted.month;
+    await renderCustomPeriodCalendar(ctx, session);
+  });
+
+  instance.action(/^cal:pick:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const session = sessions.get(ctx.from!.id);
+    if (!session || session.step !== 'waiting_custom_period') return;
+
+    const pickedYmd = ctx.match[1];
+    if (compareYmd(pickedYmd, session.maxYmd) > 0) return;
+
+    if (!session.startYmd || (session.startYmd && session.endYmd)) {
+      session.startYmd = pickedYmd;
+      session.endYmd = null;
+    } else if (compareYmd(pickedYmd, session.startYmd) < 0) {
+      session.endYmd = session.startYmd;
+      session.startYmd = pickedYmd;
+    } else {
+      session.endYmd = pickedYmd;
+    }
+
+    await renderCustomPeriodCalendar(ctx, session);
+  });
+
   // Callback: open separate summer sales outlook from Sales submenu
   instance.action('gen:sales:summer', async (ctx) => {
     await ctx.answerCbQuery();
@@ -2891,94 +3126,7 @@ function registerHandlers(instance: Telegraf) {
       return;
     }
 
-    const parsed = parseCustomPeriodInput(text, session.timezone);
-    if ('error' in parsed) {
-      await ctx.reply(`${parsed.error}\n\n${buildCustomPeriodPrompt(session.reportLabel)}`, { parse_mode: 'Markdown' });
-      return;
-    }
-
-    sessions.delete(ctx.from!.id);
-    const label = formatPeriodLabel(parsed.from, parsed.to);
-    const waitMsg = await ctx.reply(`⏳ Готовлю *${session.reportLabel}* за период *${label}*...`, { parse_mode: 'Markdown' });
-
-    try {
-      if (session.target.kind === 'sales') {
-        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
-          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
-        }
-        const result = await runGtoSalesPeriodReport(parsed.periodStart, parsed.periodEnd);
-        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
-        await prisma.sentMessage.create({
-          data: {
-            resultId: result.resultId,
-            userId: user.id,
-            status: 'sent',
-            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
-            sentAt: new Date(),
-          },
-        }).catch(() => {});
-        return;
-      }
-
-      if (session.target.kind === 'payments') {
-        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
-          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
-        }
-        const result = await runGtoPaymentsReportForPeriod(parsed.periodStart, parsed.periodEnd);
-        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
-        await prisma.sentMessage.create({
-          data: {
-            resultId: result.resultId,
-            userId: user.id,
-            status: 'sent',
-            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
-            sentAt: new Date(),
-          },
-        }).catch(() => {});
-        return;
-      }
-
-      if (session.target.kind === 'agents') {
-        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
-          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
-        }
-        const result = await runGtoAgentActivityReport({
-          periodStart: parsed.periodStart,
-          periodEnd: parsed.periodEnd,
-        });
-        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
-        await prisma.sentMessage.create({
-          data: {
-            resultId: result.resultId,
-            userId: user.id,
-            status: 'sent',
-            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
-            sentAt: new Date(),
-          },
-        }).catch(() => {});
-        return;
-      }
-
-      if (!(await hasManualReportAccess(user.id, session.target.accessKey))) {
-        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
-      }
-      const result = await runAnalysisForPeriod(session.target.scheduleId, parsed.periodStart, parsed.periodEnd);
-      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
-      await prisma.sentMessage.create({
-        data: {
-          resultId: result.resultId,
-          userId: user.id,
-          status: 'sent',
-          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
-          sentAt: new Date(),
-        },
-      }).catch(() => {});
-    } catch (err: any) {
-      logger.error({ err, session }, 'Custom period generation failed');
-      await ctx.reply(`❌ Ошибка: ${err.message}`);
-    } finally {
-      await ctx.telegram.deleteMessage(ctx.chat!.id, waitMsg.message_id).catch(() => {});
-    }
+    await ctx.reply('Выберите даты кнопками в календаре выше. Текстом вводить период больше не нужно.');
   });
 
   instance.catch((err) => {

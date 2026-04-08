@@ -168,7 +168,7 @@ Key models:
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu, but only shows sections and buttons explicitly allowed for that user by admin-side access settings in the back office
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, and `Summer`
-- Telegram report menus should also offer `Custom Period` actions directly in-chat for supported manual reports, so the user can enter a one-off date range without leaving Telegram
+- Telegram report menus should also offer `Custom Period` actions directly in-chat for supported manual reports, using inline calendar buttons inside Telegram
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
 - A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
@@ -185,7 +185,7 @@ Key models:
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - `Sales` submenu should also expose `Payments Yesterday` and `Payments Today`
 - `Sales` submenu should also expose `Agents 7 Days`, a dedicated GTO agent-activity report for the last 7 completed business days
-- Custom Telegram periods should be entered as a single message in `DD.MM.YYYY - DD.MM.YYYY`, `YYYY-MM-DD - YYYY-MM-DD`, or a single-date form for one day
+- Custom Telegram periods should be chosen with inline calendar buttons: first click selects the start date, second click selects the end date, and `Apply` confirms the range; a single selected day may also be applied as a one-day report
 - Custom Telegram periods are limited to 31 calendar days to avoid heavy ad-hoc loads
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
