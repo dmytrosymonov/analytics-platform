@@ -184,7 +184,7 @@ function getZonedParts(date: Date, timezone: string) {
   };
 }
 
-function zonedDateTimeToUtc(timezone: string, year: number, month: number, day: number, hour = 0, minute = 0, second = 0) {
+export function zonedDateTimeToUtc(timezone: string, year: number, month: number, day: number, hour = 0, minute = 0, second = 0) {
   const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second);
   const zoned = getZonedParts(new Date(utcGuess), timezone);
   const zonedAsUtc = Date.UTC(zoned.year, zoned.month - 1, zoned.day, zoned.hour, zoned.minute, zoned.second);

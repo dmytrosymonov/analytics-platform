@@ -2521,10 +2521,10 @@ function registerHandlers(instance: Telegraf) {
     }
 
     const timezone = await getSourceTimezone(schedule.source.id);
-    await beginCustomPeriodSelection(ctx, timezone, `${schedule.source.name}: произвольный период`, {
+    await beginCustomPeriodSelection(ctx, timezone, `${schedule.name}: произвольный период`, {
       kind: 'schedule',
       scheduleId,
-      scheduleName: schedule.source.name,
+      scheduleName: schedule.name,
       accessKey,
     });
   });

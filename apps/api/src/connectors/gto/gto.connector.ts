@@ -165,6 +165,8 @@ export class GTOConnector implements SourceConnector {
     // GTO /orders_list treats date_to as inclusive.
     // Anchor all report windows to the last day included in the requested run.
     const reportDayStr   = shiftDateString(formatTzDate(period.end), -1);
+    const requestedFromStr = formatTzDate(period.start);
+    const requestedToStr = shiftDateString(formatTzDate(period.end), -1);
     const dailyFromStr   = reportDayStr;
     const dailyToStr     = reportDayStr;
     const last7dStr      = shiftDateString(reportDayStr, -7);
@@ -250,6 +252,7 @@ export class GTOConnector implements SourceConnector {
       ordersUpcoming,
       ordersPrevUpcoming,
       ordersUpcoming30d,
+      ordersRequestedPeriod,
       ordersJune,
       ordersJuly,
       ordersAugust,
@@ -266,6 +269,8 @@ export class GTOConnector implements SourceConnector {
       fetchList('/orders_list', { date_from: prevUpcomingFrom, date_to: prevUpcomingTo, sort_by: 'date_start', status: 'CNF' }),
       // Section 3b — upcoming 30 days (confirmed only)
       fetchList('/orders_list', { date_from: reportDayStr, date_to: next30dStr, sort_by: 'date_start', status: 'CNF' }),
+      // Exact requested period by created_at for custom Telegram reports.
+      fetchList('/orders_list', { date_from: requestedFromStr, date_to: requestedToStr, sort_by: 'created_at' }),
       // Section 4 — summer months by date_start (confirmed only)
       fetchList('/orders_list', { date_from: `${year}-06-01`, date_to: `${year}-06-30`, sort_by: 'date_start', status: 'CNF' }),
       fetchList('/orders_list', { date_from: `${year}-07-01`, date_to: `${year}-07-31`, sort_by: 'date_start', status: 'CNF' }),
@@ -287,6 +292,7 @@ export class GTOConnector implements SourceConnector {
     addIds(ordersUpcoming, MAX_DETAIL_ORDERS);
     addIds(ordersPrevUpcoming, MAX_DETAIL_ORDERS);
     addIds(ordersUpcoming30d, MAX_DETAIL_ORDERS);
+    addIds(ordersRequestedPeriod, Infinity);
     addIds(ordersPrev7d, MAX_DETAIL_ORDERS);
     // Agent activity and per-agent product mix need complete 7-day detail coverage.
     addIds(ordersLast7d, Infinity);
@@ -308,7 +314,9 @@ export class GTOConnector implements SourceConnector {
     const s1     = this.computeSalesSection(ordersYesterday, detailMap, rates);
     const s2     = this.computeSalesSection(ordersLast7d, detailMap, rates);
     const s2prev = this.computeSalesSection(ordersPrev7d, detailMap, rates);
+    const s0     = this.computeSalesSection(ordersRequestedPeriod, detailMap, rates);
     const s5     = this.computeAgentActivitySection(ordersLast7d, detailMap, rates);
+    const s5requested = this.computeAgentActivitySection(ordersRequestedPeriod, detailMap, rates);
     const s3     = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
     const s3prev = this.computeUpcomingSection(ordersPrevUpcoming, detailMap, rates);
     const s3b    = this.computeUpcomingSection(ordersUpcoming30d, detailMap, rates);
@@ -361,6 +369,10 @@ export class GTOConnector implements SourceConnector {
               period: { from: dailyFromStr, to: dailyToStr },
               ...s1,
             },
+            section0_requested_period_sales: {
+              period: { from: requestedFromStr, to: requestedToStr },
+              ...s0,
+            },
             section2_last_7_days: {
               period: { from: last7dStr, to: reportDayStr },
               ...s2,
@@ -385,6 +397,10 @@ export class GTOConnector implements SourceConnector {
             section5_agent_activity: {
               period: { from: last7dStr, to: reportDayStr },
               ...s5,
+            },
+            section5_requested_period_agent_activity: {
+              period: { from: requestedFromStr, to: requestedToStr },
+              ...s5requested,
             },
             section3_upcoming_7days: {
               period: { from: reportDayStr, to: next7dStr },

@@ -168,12 +168,15 @@ Key models:
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu, but only shows sections and buttons explicitly allowed for that user by admin-side access settings in the back office
 - `Sales` submenu currently includes `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, and `Summer`
+- Telegram report menus should also offer `Custom Period` actions directly in-chat for supported manual reports, so the user can enter a one-off date range without leaving Telegram
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
 - A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
 - Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
 - Regular schedule subscriptions are self-managed by end users in Telegram via `/settings`; users choose which enabled schedules they want to receive
+- The Telegram admin whose chat ID matches system setting `telegram.admin_chat_id` should also use `/settings` as an admin console entry point inside the bot
+- Admin `/settings` in Telegram should expose pending registration requests and the user list, with inline actions for approving, blocking, deleting users, and toggling global report delivery
 - Back office should not grant schedule subscriptions anymore; it should only display saved subscriptions and allow admins to remove them if needed
 - In the back-office Users access UI, `YouTrack` and `YouTrack Daily Progress` should be grouped visually under a single `YouTrack` section, while keeping their permissions separate inside that group
 - `/settings` should let end users opt into or out of regular schedule subscriptions, but it must not let Telegram users grant themselves source access or re-enable blocked manual report buttons
@@ -182,11 +185,14 @@ Key models:
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - `Sales` submenu should also expose `Payments Yesterday` and `Payments Today`
 - `Sales` submenu should also expose `Agents 7 Days`, a dedicated GTO agent-activity report for the last 7 completed business days
+- Custom Telegram periods should be entered as a single message in `DD.MM.YYYY - DD.MM.YYYY`, `YYYY-MM-DD - YYYY-MM-DD`, or a single-date form for one day
+- Custom Telegram periods are limited to 31 calendar days to avoid heavy ad-hoc loads
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 - Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+- New Telegram `/start` registration requests must notify the configured admin chat and include inline moderation actions directly in the notification message
 
 ## GTO Date Windows
 
@@ -211,6 +217,7 @@ Key models:
 - Telegram GTO payments reports should present `Payments Today` and `Payments Yesterday` separately, with separate incoming (`type=in`) and outgoing (`type=out`) sections and grouping by `payment_form`
 - Telegram GTO `Agents 7 Days` report should show the number of unique active agents for the period and the top agents by revenue with their main products
 - GTO agent activity should exclude cancelled (`CNX`) orders and test agent `GTO for Test-Goodwin`; product mix should be derived from order details and revenue should be shown in EUR
+- For custom Telegram GTO periods, the connector should expose exact requested-period sales and agent-activity sections in metrics, rather than only windows anchored to the run end date
 - GTO Comments reports must use the actual requested run period (`daily` / `weekly` / `monthly` or manual equivalent) from `report_period_start` to `report_period_end`; they must not be hardcoded to only `today` and `yesterday`
 
 ---
@@ -296,11 +303,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-08T09:48:44Z
+- Generated at (UTC): 2026-04-08T10:13:12Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 3d71482 (3d7148205f6ba82fc00fe878fa12f8c84696a3d9)
-- Commit date: 2026-04-08T11:34:58+02:00
+- Commit: 878777a (878777a1976bca201cceb56c3df9e171086928ba)
+- Commit date: 2026-04-08T12:12:39+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
