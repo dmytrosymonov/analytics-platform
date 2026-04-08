@@ -43,7 +43,10 @@ export default function DashboardPage() {
               <div key={run.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
                 <div>
                   <p className="text-sm font-medium">{new Date(run.periodStart).toLocaleDateString()}</p>
-                  <p className="text-xs text-gray-500">{run.triggerType}</p>
+                  <p className="text-xs text-gray-500">
+                    {run.triggerType}
+                    {run.initiator?.label ? ` · ${run.initiator.label}` : ''}
+                  </p>
                 </div>
                 <StatusBadge status={run.status} />
               </div>

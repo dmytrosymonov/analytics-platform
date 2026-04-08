@@ -203,6 +203,7 @@ Key models:
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 - Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+- `report_runs` should record who initiated a manual run: admin-side launches keep the admin user, and Telegram manual launches should keep the Telegram user so the back office can show the initiator in Report Runs
 - New Telegram `/start` registration requests must notify the configured admin chat and include inline moderation actions directly in the notification message
 
 ## GTO Date Windows

@@ -104,6 +104,7 @@ model User {
   manualReportAccess   UserManualReportAccess[]
   schedulePreferences  UserSchedulePreference[]
   sentMessages         SentMessage[]
+  triggeredReportRuns  ReportRun[] @relation("TriggeredByTelegramUser")
 
   @@map("users")
 }
@@ -265,14 +266,16 @@ model ReportRun {
   status       RunStatus   @default(pending)
   triggerType  TriggerType @default(scheduled) @map("trigger_type")
   triggeredBy  String?     @map("triggered_by")
+  triggeredByTelegramUserId String? @map("triggered_by_telegram_user_id")
   startedAt    DateTime?   @map("started_at")
   completedAt  DateTime?   @map("completed_at")
   errorSummary String?     @map("error_summary")
   createdAt    DateTime    @default(now()) @map("created_at")
 
-  triggeredByUser AdminUser?   @relation(fields: [triggeredBy], references: [id])
-  jobs            ReportJob[]
-  results         ReportResult[]
+  triggeredByUser         AdminUser? @relation(fields: [triggeredBy], references: [id])
+  triggeredByTelegramUser User?      @relation("TriggeredByTelegramUser", fields: [triggeredByTelegramUserId], references: [id])
+  jobs                    ReportJob[]
+  results                 ReportResult[]
 
   @@map("report_runs")
 }

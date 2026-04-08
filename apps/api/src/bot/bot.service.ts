@@ -65,6 +65,7 @@ type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { so
 type ManualReportAccessState = ReturnType<typeof listManualReportAccessDefinitions>[number] & { enabled: boolean };
 type AdminManageableUser = Prisma.UserGetPayload<{}>;
 type AdminUserFilter = 'pending' | 'approved' | 'blocked' | 'deleted' | 'all';
+type ManualRunInitiator = { telegramUserId?: string };
 const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
   findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
   findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
@@ -496,6 +497,23 @@ function formatDateTime(value: Date): string {
 
 function escapeMarkdown(value: string): string {
   return value.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+async function createManualReportRun(
+  data: { scheduleId?: string; periodStart: Date; periodEnd: Date; status?: 'pending' | 'running' | 'full_success' | 'partial_success' | 'full_failure'; startedAt?: Date },
+  initiator?: ManualRunInitiator,
+) {
+  return prisma.reportRun.create({
+    data: {
+      scheduleId: data.scheduleId,
+      periodStart: data.periodStart,
+      periodEnd: data.periodEnd,
+      status: data.status || 'running',
+      triggerType: 'manual',
+      startedAt: data.startedAt || new Date(),
+      triggeredByTelegramUserId: initiator?.telegramUserId,
+    },
+  });
 }
 
 async function requireApproved(ctx: any): Promise<{ id: string; telegramId: bigint } | null> {
@@ -1073,6 +1091,7 @@ async function buildRedmineReportsMenu(userId: string) {
 async function runStoredAnalysis(
   scheduleId: string,
   periodOverride?: { periodStart: Date; periodEnd: Date },
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await prisma.reportSchedule.findUnique({
     where: { id: scheduleId },
@@ -1090,16 +1109,7 @@ async function runStoredAnalysis(
 
   const timezone = await getSourceTimezone(schedule.source.id);
   const { periodStart, periodEnd } = periodOverride || computePeriod(schedule.periodType as any, timezone);
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId, periodStart, periodEnd }, initiator);
 
   const connector = connectorRegistry.get(schedule.source.type);
   const promptVersion = await promptRegistry.getActivePrompt(schedule.source.id);
@@ -1256,16 +1266,17 @@ async function buildAskKeyboard() {
 }
 
 // ── Core: fetch connector data + run LLM analysis ────────────────────────────
-async function runAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
-  return runStoredAnalysis(scheduleId);
+async function runAnalysis(scheduleId: string, initiator?: ManualRunInitiator): Promise<{ runId: string; resultId: string; message: string }> {
+  return runStoredAnalysis(scheduleId, undefined, initiator);
 }
 
 async function runAnalysisForPeriod(
   scheduleId: string,
   periodStart: Date,
   periodEnd: Date,
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
-  return runStoredAnalysis(scheduleId, { periodStart, periodEnd });
+  return runStoredAnalysis(scheduleId, { periodStart, periodEnd }, initiator);
 }
 
 async function resolvePresetPeriod(sourceId: string, preset: 'today' | 'yesterday' | 'last7'): Promise<{ periodStart: Date; periodEnd: Date }> {
@@ -1282,7 +1293,7 @@ async function resolveRollingDaysPeriod(sourceId: string, days: number): Promise
   return { periodStart, periodEnd };
 }
 
-async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promise<{ runId: string; resultId: string; message: string }> {
+async function runRollingHoursAnalysis(scheduleId: string, hours: number, initiator?: ManualRunInitiator): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await prisma.reportSchedule.findUnique({
     where: { id: scheduleId },
     include: { source: true },
@@ -1298,16 +1309,7 @@ async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promi
   settingRows.forEach(s => { settings[s.key] = s.value; });
 
   const { periodStart, periodEnd } = computeRollingHoursPeriod(hours);
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId, periodStart, periodEnd }, initiator);
 
   const connector = connectorRegistry.get(schedule.source.type);
   const promptVersion = await promptRegistry.getActivePrompt(schedule.source.id);
@@ -1453,6 +1455,7 @@ async function runSummerSalesOutlook(): Promise<string> {
 
 async function runGtoAgentActivityReport(
   periodOverride?: { periodStart: Date; periodEnd: Date },
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
@@ -1467,16 +1470,7 @@ async function runGtoAgentActivityReport(
 
   const timezone = await getSourceTimezone(schedule.source.id);
   const { periodStart, periodEnd } = periodOverride || computePeriod('daily' as any, timezone);
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId: schedule.id, periodStart, periodEnd }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -1540,6 +1534,7 @@ async function runGtoNetworkSalesReport(
   networkKey: 'general' | GtoNetworkKey,
   periodStart: Date,
   periodEnd: Date,
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
@@ -1552,16 +1547,7 @@ async function runGtoNetworkSalesReport(
   const settings: Record<string, string> = {};
   settingRows.forEach((s) => { settings[s.key] = s.value; });
 
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId: schedule.id, periodStart, periodEnd }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -1993,7 +1979,7 @@ function summarizePayments(rows: PaymentRow[]) {
   };
 }
 
-async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runId: string; resultId: string; message: string }> {
+async function runGtoPaymentsReport(mode: 'today' | 'yesterday', initiator?: ManualRunInitiator): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
 
@@ -2002,16 +1988,11 @@ async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runI
   const dateStr = period.periodStart.toLocaleDateString('sv-SE', { timeZone: timezone });
   const periodLabel = formatPeriodLabel(dateStr, dateStr);
 
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({
+    scheduleId: schedule.id,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+  }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -2083,6 +2064,7 @@ async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runI
 async function runGtoPaymentsReportForPeriod(
   periodStart: Date,
   periodEnd: Date,
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
@@ -2092,16 +2074,7 @@ async function runGtoPaymentsReportForPeriod(
   const toDate = new Date(periodEnd.getTime() - 1).toLocaleDateString('sv-SE', { timeZone: timezone });
   const periodLabel = formatPeriodLabel(fromDate, toDate);
 
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId: schedule.id, periodStart, periodEnd }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -2169,11 +2142,12 @@ async function runGtoPaymentsReportForPeriod(
 
 async function runGtoPaymentsPresetReport(
   preset: 'last7',
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
   const period = await resolvePresetPeriod(schedule.source.id, preset);
-  return runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd);
+  return runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd, initiator);
 }
 
 function formatGtoTodayReport(metrics: any): string {
@@ -2271,7 +2245,7 @@ function formatGtoSalesPeriodReport(metrics: any): string {
   return lines.join('\n').trim();
 }
 
-async function runGtoTodayReport(): Promise<{ runId: string; resultId: string; message: string }> {
+async function runGtoTodayReport(initiator?: ManualRunInitiator): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
 
@@ -2285,16 +2259,7 @@ async function runGtoTodayReport(): Promise<{ runId: string; resultId: string; m
 
   const timezone = await getSourceTimezone(schedule.source.id);
   const { periodStart, periodEnd } = computeCurrentDayPeriod(timezone);
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId: schedule.id, periodStart, periodEnd }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -2357,6 +2322,7 @@ async function runGtoTodayReport(): Promise<{ runId: string; resultId: string; m
 async function runGtoSalesPeriodReport(
   periodStart: Date,
   periodEnd: Date,
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
@@ -2369,16 +2335,7 @@ async function runGtoSalesPeriodReport(
   const settings: Record<string, string> = {};
   settingRows.forEach((s) => { settings[s.key] = s.value; });
 
-  const run = await prisma.reportRun.create({
-    data: {
-      scheduleId: schedule.id,
-      periodStart,
-      periodEnd,
-      status: 'running',
-      triggerType: 'manual',
-      startedAt: new Date(),
-    },
-  });
+  const run = await createManualReportRun({ scheduleId: schedule.id, periodStart, periodEnd }, initiator);
 
   try {
     await prisma.reportJob.create({
@@ -2439,11 +2396,12 @@ async function runGtoSalesPeriodReport(
 
 async function runGtoSalesPresetReport(
   preset: 'last7',
+  initiator?: ManualRunInitiator,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
   const period = await resolvePresetPeriod(schedule.source.id, preset);
-  return runGtoSalesPeriodReport(period.periodStart, period.periodEnd);
+  return runGtoSalesPeriodReport(period.periodStart, period.periodEnd, initiator);
 }
 
 // ── Core: fetch data + answer a free-form question via LLM ───────────────────
@@ -2544,7 +2502,7 @@ async function executeCustomPeriodSelection(
       if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
         throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
       }
-      const result = await runGtoSalesPeriodReport(period.periodStart, period.periodEnd);
+      const result = await runGtoSalesPeriodReport(period.periodStart, period.periodEnd, { telegramUserId: userId });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -2562,7 +2520,7 @@ async function executeCustomPeriodSelection(
       if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
         throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
       }
-      const result = await runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd);
+      const result = await runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd, { telegramUserId: userId });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -2583,7 +2541,7 @@ async function executeCustomPeriodSelection(
       const result = await runGtoAgentActivityReport({
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
-      });
+      }, { telegramUserId: userId });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -2605,6 +2563,7 @@ async function executeCustomPeriodSelection(
         session.target.networkKey,
         period.periodStart,
         period.periodEnd,
+        { telegramUserId: userId },
       );
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
@@ -2623,7 +2582,7 @@ async function executeCustomPeriodSelection(
       throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
     }
 
-    const result = await runAnalysisForPeriod(session.target.scheduleId, period.periodStart, period.periodEnd);
+    const result = await runAnalysisForPeriod(session.target.scheduleId, period.periodStart, period.periodEnd, { telegramUserId: userId });
     const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
     await prisma.sentMessage.create({
       data: {
@@ -3210,7 +3169,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoTodayReport();
+      const result = await runGtoTodayReport({ telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3242,7 +3201,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoSalesPresetReport('last7');
+      const result = await runGtoSalesPresetReport('last7', { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3279,7 +3238,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoNetworkSalesReport(networkKey, period.periodStart, period.periodEnd);
+      const result = await runGtoNetworkSalesReport(networkKey, period.periodStart, period.periodEnd, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3308,7 +3267,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoAgentActivityReport();
+      const result = await runGtoAgentActivityReport(undefined, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3341,7 +3300,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoAgentActivityReport(period);
+      const result = await runGtoAgentActivityReport(period, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3374,7 +3333,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoAgentActivityReport(period);
+      const result = await runGtoAgentActivityReport(period, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3403,7 +3362,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoPaymentsReport('today');
+      const result = await runGtoPaymentsReport('today', { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3435,7 +3394,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoPaymentsPresetReport('last7');
+      const result = await runGtoPaymentsPresetReport('last7', { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3464,7 +3423,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runGtoPaymentsReport('yesterday');
+      const result = await runGtoPaymentsReport('yesterday', { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3495,7 +3454,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runAnalysis(schedule.id);
+      const result = await runAnalysis(schedule.id, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3545,7 +3504,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runAnalysis(scheduleId);
+      const result = await runAnalysis(scheduleId, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3589,7 +3548,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runAnalysisForPeriod(scheduleId, period.periodStart, period.periodEnd);
+      const result = await runAnalysisForPeriod(scheduleId, period.periodStart, period.periodEnd, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3631,7 +3590,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runRollingHoursAnalysis(scheduleId, hours);
+      const result = await runRollingHoursAnalysis(scheduleId, hours, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {
@@ -3673,7 +3632,7 @@ function registerHandlers(instance: Telegraf) {
     ).catch(() => {});
 
     try {
-      const result = await runRollingHoursAnalysis(scheduleId, hours);
+      const result = await runRollingHoursAnalysis(scheduleId, hours, { telegramUserId: user.id });
       const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
       await prisma.sentMessage.create({
         data: {

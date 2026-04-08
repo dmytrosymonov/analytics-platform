@@ -3,6 +3,39 @@ import { z } from 'zod';
 import { prisma } from '../../lib/prisma';
 import { fetchQueue } from '../../queue/queues';
 
+function serializeInitiator(run: any) {
+  if (run.triggeredByUser) {
+    return {
+      type: 'admin',
+      id: run.triggeredByUser.id,
+      label: run.triggeredByUser.name || run.triggeredByUser.email,
+      email: run.triggeredByUser.email,
+    };
+  }
+  if (run.triggeredByTelegramUser) {
+    const name = [run.triggeredByTelegramUser.firstName, run.triggeredByTelegramUser.lastName].filter(Boolean).join(' ').trim();
+    return {
+      type: 'telegram',
+      id: run.triggeredByTelegramUser.id,
+      label: name || (run.triggeredByTelegramUser.username ? `@${run.triggeredByTelegramUser.username}` : run.triggeredByTelegramUser.telegramId?.toString()),
+      username: run.triggeredByTelegramUser.username,
+      telegramId: run.triggeredByTelegramUser.telegramId?.toString(),
+    };
+  }
+  if (run.triggerType === 'scheduled') {
+    return { type: 'system', label: 'Scheduler' };
+  }
+  return run.triggerType === 'manual' ? { type: 'unknown', label: 'Manual / unknown' } : null;
+}
+
+function serializeRun(run: any) {
+  return {
+    ...run,
+    initiator: serializeInitiator(run),
+    triggeredByTelegramUserId: run.triggeredByTelegramUserId || null,
+  };
+}
+
 export async function reportRoutes(app: FastifyInstance) {
   const auth = { onRequest: [(app as any).authenticate] };
 
@@ -13,21 +46,36 @@ export async function reportRoutes(app: FastifyInstance) {
     const where = q.status ? { status: q.status as any } : {};
 
     const [runs, total] = await Promise.all([
-      prisma.reportRun.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' }, include: { jobs: true } }),
+      prisma.reportRun.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          jobs: true,
+          triggeredByUser: { select: { id: true, name: true, email: true } },
+          triggeredByTelegramUser: { select: { id: true, firstName: true, lastName: true, username: true, telegramId: true } },
+        },
+      }),
       prisma.reportRun.count({ where }),
     ]);
 
-    return reply.send({ success: true, data: runs, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    return reply.send({ success: true, data: runs.map(serializeRun), meta: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   });
 
   app.get('/runs/:id', auth, async (request, reply) => {
     const { id } = request.params as any;
     const run = await prisma.reportRun.findUnique({
       where: { id },
-      include: { jobs: { include: { source: true } }, results: { include: { source: true } } },
+      include: {
+        jobs: { include: { source: true } },
+        results: { include: { source: true } },
+        triggeredByUser: { select: { id: true, name: true, email: true } },
+        triggeredByTelegramUser: { select: { id: true, firstName: true, lastName: true, username: true, telegramId: true } },
+      },
     });
     if (!run) return reply.status(404).send({ success: false, error: { message: 'Run not found' } });
-    return reply.send({ success: true, data: run });
+    return reply.send({ success: true, data: serializeRun(run) });
   });
 
   app.post('/runs', auth, async (request, reply) => {

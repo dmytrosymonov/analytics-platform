@@ -45,13 +45,13 @@ export default function ReportsPage() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {['Period', 'Status', 'Trigger', 'Started', 'Completed', 'Jobs'].map(h => (
+                {['Period', 'Status', 'Trigger', 'Who', 'Started', 'Completed', 'Jobs'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {runs.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No runs yet. Click "Trigger Run Now" to start.</td></tr>}
+              {runs.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No runs yet. Click "Trigger Run Now" to start.</td></tr>}
               {runs.map((run: any) => (
                 <tr key={run.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm">
@@ -61,6 +61,7 @@ export default function ReportsPage() {
                   </td>
                   <td className="px-4 py-3"><RunStatusBadge status={run.status} /></td>
                   <td className="px-4 py-3 text-sm text-gray-600">{run.triggerType}</td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{formatInitiator(run.initiator)}</td>
                   <td className="px-4 py-3 text-sm text-gray-600">{run.startedAt ? new Date(run.startedAt).toLocaleTimeString() : '—'}</td>
                   <td className="px-4 py-3 text-sm text-gray-600">{run.completedAt ? new Date(run.completedAt).toLocaleTimeString() : '—'}</td>
                   <td className="px-4 py-3">
@@ -81,6 +82,16 @@ export default function ReportsPage() {
       </div>
     </div>
   );
+}
+
+function formatInitiator(initiator: any) {
+  if (!initiator) return '—';
+  if (initiator.type === 'admin') return initiator.label || initiator.email || 'Admin';
+  if (initiator.type === 'telegram') {
+    if (initiator.username) return `Telegram @${initiator.username}`;
+    return initiator.label ? `Telegram ${initiator.label}` : 'Telegram user';
+  }
+  return initiator.label || '—';
 }
 
 function RunStatusBadge({ status }: { status: string }) {
