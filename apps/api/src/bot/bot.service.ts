@@ -958,9 +958,9 @@ async function buildOrdersCommentsMenu(userId: string) {
   if (allowedSchedules.length === 0) return null;
   const preferred = allowedSchedules.find((schedule) => schedule.periodType === 'daily') || allowedSchedules[0];
   const rows: ReturnType<typeof Markup.button.callback>[][] = [
-    [Markup.button.callback('Today', `gen:comments_period:${preferred.id}:today`)],
-    [Markup.button.callback('Yesterday', `gen:comments_period:${preferred.id}:yesterday`)],
-    [Markup.button.callback('Last 7 days', `gen:comments_period:${preferred.id}:last7`)],
+    [Markup.button.callback('Today', `gcp:${preferred.id}:t`)],
+    [Markup.button.callback('Yesterday', `gcp:${preferred.id}:y`)],
+    [Markup.button.callback('Last 7 days', `gcp:${preferred.id}:7`)],
     [Markup.button.callback('Custom period', `custom:schedule:${preferred.id}`)],
     [Markup.button.callback('← Back', 'reports:orders')],
   ];
@@ -3530,13 +3530,14 @@ function registerHandlers(instance: Telegraf) {
     }
   });
 
-  instance.action(/^gen:comments_period:([^:]+):(today|yesterday|last7)$/, async (ctx) => {
+  instance.action(/^gcp:([^:]+):(t|y|7)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
 
     const scheduleId = ctx.match[1];
-    const preset = ctx.match[2] as 'today' | 'yesterday' | 'last7';
+    const presetMap = { t: 'today', y: 'yesterday', '7': 'last7' } as const;
+    const preset = presetMap[ctx.match[2] as keyof typeof presetMap];
     const schedule = await prisma.reportSchedule.findUnique({
       where: { id: scheduleId },
       include: { source: { select: { id: true, name: true, type: true } } },
