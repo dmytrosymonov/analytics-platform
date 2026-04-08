@@ -437,6 +437,15 @@ async function replySafe(ctx: any, text: string, extra: Record<string, unknown> 
   return lastMessage;
 }
 
+async function editOrReply(ctx: any, text: string, extra: Record<string, unknown> = {}) {
+  try {
+    return await ctx.editMessageText(text, extra as any);
+  } catch (err: any) {
+    logger.warn({ err: err?.message, callbackQueryId: ctx.callbackQuery?.id }, 'Telegram edit failed, falling back to reply');
+    return replySafe(ctx, text, extra);
+  }
+}
+
 // ── DB helpers ────────────────────────────────────────────────────────────────
 async function getUser(telegramId: number) {
   return prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
@@ -2895,7 +2904,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildTopReportsMenu(user.id);
     if (!keyboard) return ctx.reply('Сейчас для вас нет доступных отчётов. Обратитесь к администратору.');
-    await ctx.editMessageText('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('reports:orders', async (ctx) => {
@@ -2904,7 +2913,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersReportsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Orders.');
-    await ctx.editMessageText('📦 *Orders*\n\nВыберите категорию:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '📦 *Orders*\n\nВыберите категорию:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('orders:sales', async (ctx) => {
@@ -2913,7 +2922,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersSalesMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Sales.');
-    await ctx.editMessageText('📈 *Orders / Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '📈 *Orders / Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('orders:comments', async (ctx) => {
@@ -2922,7 +2931,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersCommentsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Comments.');
-    await ctx.editMessageText('💬 *Orders / Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '💬 *Orders / Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('orders:payments', async (ctx) => {
@@ -2931,7 +2940,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersPaymentsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Payments.');
-    await ctx.editMessageText('💳 *Orders / Payments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '💳 *Orders / Payments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('orders:agents', async (ctx) => {
@@ -2940,7 +2949,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersAgentsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Agents activity.');
-    await ctx.editMessageText('🧑‍💼 *Orders / Agents activity*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '🧑‍💼 *Orders / Agents activity*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action('orders:networks', async (ctx) => {
@@ -2949,7 +2958,7 @@ function registerHandlers(instance: Telegraf) {
     await ctx.answerCbQuery();
     const keyboard = await buildOrdersNetworksMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Network sales.');
-    await ctx.editMessageText('🌐 *Orders / Network sales*\n\nВыберите сеть или общий отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await editOrReply(ctx, '🌐 *Orders / Network sales*\n\nВыберите сеть или общий отчёт:', { parse_mode: 'Markdown', ...keyboard });
   });
 
   instance.action(/^orders:network:(general|poikhaly_z_namy|tours_tickets|na_kanikuly|kho|hottur)$/, async (ctx) => {
