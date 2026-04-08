@@ -27,8 +27,8 @@ export const MANUAL_REPORT_ACCESS_DEFINITIONS: ManualReportAccessDefinition[] = 
     key: 'sales.agents',
     category: 'sales',
     sourceType: 'gto',
-    label: 'Agents 7 Days',
-    description: 'GTO agent activity for the last 7 completed business days.',
+    label: 'Agents activity',
+    description: 'GTO agent activity reports for preset and custom Telegram periods.',
   },
   {
     key: 'sales.payments_yesterday',
@@ -55,14 +55,14 @@ export const MANUAL_REPORT_ACCESS_DEFINITIONS: ManualReportAccessDefinition[] = 
     key: 'redmine.hours.24',
     category: 'redmine',
     sourceType: 'redmine',
-    label: '24h',
+    label: '24 hours',
     description: 'Redmine activity report for the last 24 hours.',
   },
   {
     key: 'redmine.hours.48',
     category: 'redmine',
     sourceType: 'redmine',
-    label: '48h',
+    label: '48 hours',
     description: 'Redmine activity report for the last 48 hours.',
   },
   {
@@ -107,12 +107,13 @@ export function listManualReportAccessDefinitions(schedules: ScheduleAccessLike[
     }
 
     if (sourceType === 'youtrack_progress') {
-      for (const hours of [24, 48, 72]) {
+      for (const hours of [24, 48, 168]) {
+        const label = hours === 168 ? '7 days' : `${hours}h`;
         dynamic.push({
           key: makeScheduleHoursReportKey(schedule.id, hours),
           category: 'youtrack',
           sourceType,
-          label: `${schedule.name} · ${hours}h`,
+          label: `${schedule.name} · ${label}`,
           description: `Manual YouTrack Daily Progress report for the last ${hours} hours.`,
         });
       }

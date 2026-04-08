@@ -841,14 +841,14 @@ async function buildTopReportsMenu(userId: string) {
   ]);
 
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  if (hasGto && manualReports.some((report) => report.sourceType === 'gto' && report.enabled)) {
-    rows.push([Markup.button.callback('Sales', 'reports:sales')]);
-  }
-  if (hasComments && commentsSchedules.length > 0) {
-    rows.push([Markup.button.callback('Comments', 'reports:comments')]);
+  if ((hasGto || hasComments) && (
+    manualReports.some((report) => report.sourceType === 'gto' && report.enabled)
+    || commentsSchedules.length > 0
+  )) {
+    rows.push([Markup.button.callback('Orders', 'reports:orders')]);
   }
   if (hasRedmine && redmineSchedules.length > 0) {
-    rows.push([Markup.button.callback('Redmine', 'reports:redmine')]);
+    rows.push([Markup.button.callback('Redmine tickets', 'reports:redmine')]);
   }
   if (hasYoutrack && youtrackSchedules.length > 0) {
     rows.push([Markup.button.callback('Youtrack', 'reports:youtrack')]);
@@ -858,49 +858,61 @@ async function buildTopReportsMenu(userId: string) {
   return Markup.inlineKeyboard(rows);
 }
 
-async function buildSalesReportsMenu(userId: string) {
+async function buildOrdersReportsMenu(userId: string) {
+  const [hasGto, hasComments, reports, commentSchedules] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    hasSourceAccess(userId, ['gto_comments']),
+    getUserManualReportAccess(userId),
+    getManualSchedulesBySourceTypes(['gto_comments']),
+  ]);
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  const hasSales = hasGto && reports.some((report) => ['sales.yesterday', 'sales.today', 'sales.summer'].includes(report.key) && report.enabled);
+  const hasPayments = hasGto && reports.some((report) => ['sales.payments_yesterday', 'sales.payments_today'].includes(report.key) && report.enabled);
+  const hasAgents = hasGto && reports.some((report) => report.key === 'sales.agents' && report.enabled);
+  const hasCommentsMenu = hasComments && commentSchedules.length > 0
+    && commentSchedules.some((schedule) => reports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled));
+
+  if (hasSales) rows.push([Markup.button.callback('Sales', 'orders:sales')]);
+  if (hasCommentsMenu) rows.push([Markup.button.callback('Comments', 'orders:comments')]);
+  if (hasPayments) rows.push([Markup.button.callback('Payments', 'orders:payments')]);
+  if (hasAgents) rows.push([Markup.button.callback('Agents activity', 'orders:agents')]);
+  if (rows.length === 0) return null;
+  rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function buildOrdersSalesMenu(userId: string) {
   const [allowed, reports] = await Promise.all([
     hasSourceAccess(userId, ['gto']),
     getUserManualReportAccess(userId),
   ]);
   if (!allowed) return null;
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  const hasSalesAccess = reports.some((report) => ['sales.yesterday', 'sales.today'].includes(report.key) && report.enabled);
-  const hasPaymentsAccess = reports.some((report) => ['sales.payments_yesterday', 'sales.payments_today'].includes(report.key) && report.enabled);
-  if (reports.find((report) => report.key === 'sales.yesterday')?.enabled) {
-    rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
-  }
   if (reports.find((report) => report.key === 'sales.today')?.enabled) {
     rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
   }
+  if (reports.find((report) => report.key === 'sales.yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
+  }
+  const hasSalesAccess = reports.some((report) => ['sales.yesterday', 'sales.today'].includes(report.key) && report.enabled);
   if (hasSalesAccess) {
-    rows.push([Markup.button.callback('📅 Sales Period', 'custom:sales:sales')]);
-  }
-  if (reports.find((report) => report.key === 'sales.agents')?.enabled) {
-    rows.push([Markup.button.callback('Agents 7 Days', 'gen:sales:agents')]);
-    rows.push([Markup.button.callback('📅 Agents Period', 'custom:sales:agents')]);
-  }
-  if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
-    rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
-  }
-  if (reports.find((report) => report.key === 'sales.payments_today')?.enabled) {
-    rows.push([Markup.button.callback('Payments Today', 'gen:sales:payments_today')]);
-  }
-  if (hasPaymentsAccess) {
-    rows.push([Markup.button.callback('📅 Payments Period', 'custom:sales:payments')]);
+    rows.push([Markup.button.callback('Last 7 days', 'gen:sales:last7')]);
   }
   if (reports.find((report) => report.key === 'sales.summer')?.enabled) {
     rows.push([Markup.button.callback('Summer', 'gen:sales:summer')]);
   }
+  if (hasSalesAccess) {
+    rows.push([Markup.button.callback('Custom period', 'custom:sales:sales')]);
+  }
   if (rows.length === 0) return null;
-  rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  rows.push([Markup.button.callback('← Back', 'reports:orders')]);
   return Markup.inlineKeyboard(rows);
 }
 
-async function buildScheduleCategoryMenu(userId: string, sourceTypes: string[], prefix: string) {
+async function buildOrdersCommentsMenu(userId: string) {
   const [allowed, schedules, manualReports] = await Promise.all([
-    hasSourceAccess(userId, sourceTypes),
-    getManualSchedulesBySourceTypes(sourceTypes),
+    hasSourceAccess(userId, ['gto_comments']),
+    getManualSchedulesBySourceTypes(['gto_comments']),
     getUserManualReportAccess(userId),
   ]);
   if (!allowed) return null;
@@ -908,15 +920,53 @@ async function buildScheduleCategoryMenu(userId: string, sourceTypes: string[], 
     manualReports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled),
   );
   if (allowedSchedules.length === 0) return null;
+  const preferred = allowedSchedules.find((schedule) => schedule.periodType === 'daily') || allowedSchedules[0];
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [Markup.button.callback('Today', `gen:comments_period:${preferred.id}:today`)],
+    [Markup.button.callback('Yesterday', `gen:comments_period:${preferred.id}:yesterday`)],
+    [Markup.button.callback('Last 7 days', `gen:comments_period:${preferred.id}:last7`)],
+    [Markup.button.callback('Custom period', `custom:schedule:${preferred.id}`)],
+    [Markup.button.callback('← Back', 'reports:orders')],
+  ];
+  return Markup.inlineKeyboard(rows);
+}
 
+async function buildOrdersPaymentsMenu(userId: string) {
+  const [allowed, reports] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    getUserManualReportAccess(userId),
+  ]);
+  if (!allowed) return null;
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (const schedule of allowedSchedules) {
-    rows.push([
-      Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:${prefix}:${schedule.id}`),
-      Markup.button.callback('📅 Period', `custom:schedule:${schedule.id}`),
-    ]);
+  if (reports.find((report) => report.key === 'sales.payments_today')?.enabled) {
+    rows.push([Markup.button.callback('Today', 'gen:sales:payments_today')]);
   }
-  rows.push([Markup.button.callback('← Back', 'reports:home')]);
+  if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
+    rows.push([Markup.button.callback('Yesterday', 'gen:sales:payments_yesterday')]);
+  }
+  if (reports.some((report) => ['sales.payments_yesterday', 'sales.payments_today'].includes(report.key) && report.enabled)) {
+    rows.push([Markup.button.callback('Last 7 days', 'gen:sales:payments_last7')]);
+    rows.push([Markup.button.callback('Custom period', 'custom:sales:payments')]);
+  }
+  if (rows.length === 0) return null;
+  rows.push([Markup.button.callback('← Back', 'reports:orders')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function buildOrdersAgentsMenu(userId: string) {
+  const [allowed, reports] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    getUserManualReportAccess(userId),
+  ]);
+  if (!allowed) return null;
+  if (!reports.find((report) => report.key === 'sales.agents')?.enabled) return null;
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [Markup.button.callback('Today', 'gen:sales:agents_today')],
+    [Markup.button.callback('Yesterday', 'gen:sales:agents_yesterday')],
+    [Markup.button.callback('Last 7 days', 'gen:sales:agents')],
+    [Markup.button.callback('Custom period', 'custom:sales:agents')],
+    [Markup.button.callback('← Back', 'reports:orders')],
+  ];
   return Markup.inlineKeyboard(rows);
 }
 
@@ -929,24 +979,20 @@ async function buildYoutrackReportsMenu(userId: string) {
   if (!allowed) return null;
   if (schedules.length === 0) return null;
 
+  const preferredProgress =
+    schedules.find((schedule) => String(schedule.source.type) === 'youtrack_progress')
+    || schedules.find((schedule) => String(schedule.source.type) === 'youtrack')
+    || schedules[0];
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  for (const schedule of schedules) {
-    if (manualReports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled)) {
-      rows.push([
-        Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`),
-        Markup.button.callback('📅 Period', `custom:schedule:${schedule.id}`),
-      ]);
-    }
-    if (String(schedule.source.type) === 'youtrack_progress') {
-      const hourButtons = [24, 48, 72]
-        .filter((hours) => manualReports.some((report) => report.key === makeScheduleHoursReportKey(schedule.id, hours) && report.enabled))
-        .map((hours) => Markup.button.callback(`${hours}h`, `gen:youtrack_hours:${schedule.id}:${hours}`));
-      if (hourButtons.length > 0) {
-        rows.push(hourButtons);
-      }
-    }
-  }
+  const preferredKeys = [24, 48, 168]
+    .filter((hours) => manualReports.some((report) => report.key === makeScheduleHoursReportKey(preferredProgress.id, hours) && report.enabled));
 
+  if (preferredKeys.includes(24)) rows.push([Markup.button.callback('24 hours', `gen:youtrack_hours:${preferredProgress.id}:24`)]);
+  if (preferredKeys.includes(48)) rows.push([Markup.button.callback('48 hours', `gen:youtrack_hours:${preferredProgress.id}:48`)]);
+  if (preferredKeys.includes(168)) rows.push([Markup.button.callback('7 days', `gen:youtrack_hours:${preferredProgress.id}:168`)]);
+  if (manualReports.some((report) => report.key === makeScheduleRunReportKey(preferredProgress.id) && report.enabled)) {
+    rows.push([Markup.button.callback('Custom period', `custom:schedule:${preferredProgress.id}`)]);
+  }
   if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
@@ -966,16 +1012,18 @@ async function buildRedmineReportsMenu(userId: string) {
     schedules.find(schedule => schedule.periodType === 'weekly') ||
     schedules[0];
 
-  const topRow = [24, 48]
-    .filter((hours) => manualReports.some((report) => report.key === `redmine.hours.${hours}` && report.enabled))
-    .map((hours) => Markup.button.callback(`${hours}h`, `gen:redmine_hours:${preferredSchedule.id}:${hours}`));
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-  if (topRow.length > 0) rows.push(topRow);
+  if (manualReports.some((report) => report.key === 'redmine.hours.24' && report.enabled)) {
+    rows.push([Markup.button.callback('24 hours', `gen:redmine_hours:${preferredSchedule.id}:24`)]);
+  }
+  if (manualReports.some((report) => report.key === 'redmine.hours.48' && report.enabled)) {
+    rows.push([Markup.button.callback('48 hours', `gen:redmine_hours:${preferredSchedule.id}:48`)]);
+  }
   if (manualReports.some((report) => report.key === 'redmine.hours.168' && report.enabled)) {
     rows.push([Markup.button.callback('7 days', `gen:redmine_hours:${preferredSchedule.id}:168`)]);
   }
   if (manualReports.some((report) => ['redmine.hours.24', 'redmine.hours.48', 'redmine.hours.168'].includes(report.key) && report.enabled)) {
-    rows.push([Markup.button.callback('📅 Custom Period', `custom:schedule:${preferredSchedule.id}`)]);
+    rows.push([Markup.button.callback('Custom period', `custom:schedule:${preferredSchedule.id}`)]);
   }
   if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
@@ -1179,6 +1227,13 @@ async function runAnalysisForPeriod(
   periodEnd: Date,
 ): Promise<{ runId: string; resultId: string; message: string }> {
   return runStoredAnalysis(scheduleId, { periodStart, periodEnd });
+}
+
+async function resolvePresetPeriod(sourceId: string, preset: 'today' | 'yesterday' | 'last7'): Promise<{ periodStart: Date; periodEnd: Date }> {
+  const timezone = await getSourceTimezone(sourceId);
+  if (preset === 'today') return computeCurrentDayPeriod(timezone);
+  if (preset === 'yesterday') return computePeriod('daily', timezone);
+  return computePeriod('weekly', timezone);
 }
 
 async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promise<{ runId: string; resultId: string; message: string }> {
@@ -1860,6 +1915,15 @@ async function runGtoPaymentsReportForPeriod(
   }
 }
 
+async function runGtoPaymentsPresetReport(
+  preset: 'last7',
+): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+  const period = await resolvePresetPeriod(schedule.source.id, preset);
+  return runGtoPaymentsReportForPeriod(period.periodStart, period.periodEnd);
+}
+
 function formatGtoTodayReport(metrics: any): string {
   const section = metrics?.computed?.section1_yesterday;
   const snapshot = section?.non_cancelled_snapshot;
@@ -2119,6 +2183,15 @@ async function runGtoSalesPeriodReport(
     }).catch(() => {});
     throw err;
   }
+}
+
+async function runGtoSalesPresetReport(
+  preset: 'last7',
+): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+  const period = await resolvePresetPeriod(schedule.source.id, preset);
+  return runGtoSalesPeriodReport(period.periodStart, period.periodEnd);
 }
 
 // ── Core: fetch data + answer a free-form question via LLM ───────────────────
@@ -2592,22 +2665,49 @@ function registerHandlers(instance: Telegraf) {
     await ctx.editMessageText('📊 *Отчёты*\n\nВыберите раздел:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
-  instance.action('reports:sales', async (ctx) => {
+  instance.action('reports:orders', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildSalesReportsMenu(user.id);
-    if (!keyboard) return ctx.reply('Нет доступных отчётов Sales.');
-    await ctx.editMessageText('📊 *Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    const keyboard = await buildOrdersReportsMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Orders.');
+    await ctx.editMessageText('📦 *Orders*\n\nВыберите категорию:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
-  instance.action('reports:comments', async (ctx) => {
+  instance.action('orders:sales', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return ctx.answerCbQuery();
     await ctx.answerCbQuery();
-    const keyboard = await buildScheduleCategoryMenu(user.id, ['gto_comments'], 'comments');
+    const keyboard = await buildOrdersSalesMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Sales.');
+    await ctx.editMessageText('📈 *Orders / Sales*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('orders:comments', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const keyboard = await buildOrdersCommentsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Comments.');
-    await ctx.editMessageText('💬 *Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+    await ctx.editMessageText('💬 *Orders / Comments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('orders:payments', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const keyboard = await buildOrdersPaymentsMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Payments.');
+    await ctx.editMessageText('💳 *Orders / Payments*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('orders:agents', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const keyboard = await buildOrdersAgentsMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Agents activity.');
+    await ctx.editMessageText('🧑‍💼 *Orders / Agents activity*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
   instance.action('reports:redmine', async (ctx) => {
@@ -2814,6 +2914,38 @@ function registerHandlers(instance: Telegraf) {
     }
   });
 
+  instance.action('gen:sales:last7', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await hasAnyManualReportAccess(user.id, ['sales.yesterday', 'sales.today']))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
+    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Sales Last 7 Days*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoSalesPresetReport('last7');
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Last 7 days sales report failed');
+      await ctx.reply(`❌ Ошибка генерации 7-day sales-отчёта: ${err.message}`);
+    }
+  });
+
   instance.action('gen:sales:agents', async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
@@ -2843,6 +2975,72 @@ function registerHandlers(instance: Telegraf) {
     }
   });
 
+  instance.action('gen:sales:agents_today', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.agents'))) return;
+
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+    const period = await resolvePresetPeriod(schedule.source.id, 'today');
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Agent Activity Today*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoAgentActivityReport(period);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Today agent activity report failed');
+      await ctx.reply(`❌ Ошибка генерации today-отчёта по агентам: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:agents_yesterday', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.agents'))) return;
+
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+    const period = await resolvePresetPeriod(schedule.source.id, 'yesterday');
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Agent Activity Yesterday*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoAgentActivityReport(period);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Yesterday agent activity report failed');
+      await ctx.reply(`❌ Ошибка генерации yesterday-отчёта по агентам: ${err.message}`);
+    }
+  });
+
   instance.action('gen:sales:payments_today', async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
@@ -2869,6 +3067,38 @@ function registerHandlers(instance: Telegraf) {
     } catch (err: any) {
       logger.error({ err }, 'Today payments report failed');
       await ctx.reply(`❌ Ошибка генерации today-отчёта по оплатам: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:payments_last7', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await hasAnyManualReportAccess(user.id, ['sales.payments_yesterday', 'sales.payments_today']))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
+    if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Payments Last 7 Days*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoPaymentsPresetReport('last7');
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Last 7 days payments report failed');
+      await ctx.reply(`❌ Ошибка генерации 7-day отчёта по оплатам: ${err.message}`);
     }
   });
 
@@ -2982,7 +3212,51 @@ function registerHandlers(instance: Telegraf) {
     }
   });
 
-  instance.action(/^gen:youtrack_hours:([^:]+):(24|48|72)$/, async (ctx) => {
+  instance.action(/^gen:comments_period:([^:]+):(today|yesterday|last7)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    const scheduleId = ctx.match[1];
+    const preset = ctx.match[2] as 'today' | 'yesterday' | 'last7';
+    const schedule = await prisma.reportSchedule.findUnique({
+      where: { id: scheduleId },
+      include: { source: { select: { id: true, name: true, type: true } } },
+    });
+    if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (!(await ensureScheduleSourceAccess(ctx, user.id, scheduleId))) return;
+    if (!(await hasManualReportAccess(user.id, makeScheduleRunReportKey(scheduleId)))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
+    if (String(schedule.source.type) !== 'gto_comments') return ctx.reply('Этот режим доступен только для Comments.');
+
+    const label = preset === 'last7' ? 'Last 7 days' : preset === 'today' ? 'Today' : 'Yesterday';
+    const period = await resolvePresetPeriod(schedule.source.id, preset);
+
+    await ctx.editMessageText(
+      `⏳ Генерирую отчёт *${schedule.source.name}* за период *${label}*...\nЭто может занять 1–2 минуты.`,
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runAnalysisForPeriod(scheduleId, period.periodStart, period.periodEnd);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err, scheduleId, preset }, 'On-demand comments preset analysis failed');
+      await ctx.reply(`❌ Ошибка генерации: ${err.message}`);
+    }
+  });
+
+  instance.action(/^gen:youtrack_hours:([^:]+):(24|48|168)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
@@ -3000,8 +3274,9 @@ function registerHandlers(instance: Telegraf) {
     }
     if (String(schedule.source.type) !== 'youtrack_progress') return ctx.reply('Этот режим доступен только для YouTrack Daily Progress.');
 
+    const label = hours === 168 ? '7 days' : `${hours} hours`;
     await ctx.editMessageText(
-      `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${hours}h*...\nЭто может занять 1–2 минуты.`,
+      `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${label}*...\nЭто может занять 1–2 минуты.`,
       { parse_mode: 'Markdown' },
     ).catch(() => {});
 
@@ -3041,7 +3316,7 @@ function registerHandlers(instance: Telegraf) {
     }
     if (String(schedule.source.type) !== 'redmine') return ctx.reply('Этот режим доступен только для Redmine.');
 
-    const label = hours === 168 ? '7 days' : `${hours}h`;
+    const label = hours === 168 ? '7 days' : `${hours} hours`;
     await ctx.editMessageText(
       `⏳ Генерирую отчёт *${schedule.source.name}* за последние *${label}*...\nЭто может занять 1–2 минуты.`,
       { parse_mode: 'Markdown' },
