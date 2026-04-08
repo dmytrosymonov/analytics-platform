@@ -24,6 +24,13 @@ export const MANUAL_REPORT_ACCESS_DEFINITIONS: ManualReportAccessDefinition[] = 
     description: 'GTO same-day sales snapshot for the current business date.',
   },
   {
+    key: 'sales.agents',
+    category: 'sales',
+    sourceType: 'gto',
+    label: 'Agents 7 Days',
+    description: 'GTO agent activity for the last 7 completed business days.',
+  },
+  {
     key: 'sales.payments_yesterday',
     category: 'sales',
     sourceType: 'gto',

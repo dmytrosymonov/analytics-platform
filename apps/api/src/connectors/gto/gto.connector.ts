@@ -288,7 +288,8 @@ export class GTOConnector implements SourceConnector {
     addIds(ordersPrevUpcoming, MAX_DETAIL_ORDERS);
     addIds(ordersUpcoming30d, MAX_DETAIL_ORDERS);
     addIds(ordersPrev7d, MAX_DETAIL_ORDERS);
-    addIds(ordersLast7d, MAX_DETAIL_ORDERS);
+    // Agent activity and per-agent product mix need complete 7-day detail coverage.
+    addIds(ordersLast7d, Infinity);
     addIds(ordersJune, MAX_DETAIL_ORDERS);
     addIds(ordersJuly, MAX_DETAIL_ORDERS);
     addIds(ordersAugust, MAX_DETAIL_ORDERS);
@@ -307,6 +308,7 @@ export class GTOConnector implements SourceConnector {
     const s1     = this.computeSalesSection(ordersYesterday, detailMap, rates);
     const s2     = this.computeSalesSection(ordersLast7d, detailMap, rates);
     const s2prev = this.computeSalesSection(ordersPrev7d, detailMap, rates);
+    const s5     = this.computeAgentActivitySection(ordersLast7d, detailMap, rates);
     const s3     = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
     const s3prev = this.computeUpcomingSection(ordersPrevUpcoming, detailMap, rates);
     const s3b    = this.computeUpcomingSection(ordersUpcoming30d, detailMap, rates);
@@ -379,6 +381,10 @@ export class GTOConnector implements SourceConnector {
                   : null,
                 tourists_delta:        s2.tourists - s2prev.tourists,
               },
+            },
+            section5_agent_activity: {
+              period: { from: last7dStr, to: reportDayStr },
+              ...s5,
             },
             section3_upcoming_7days: {
               period: { from: reportDayStr, to: next7dStr },
@@ -649,6 +655,88 @@ export class GTOConnector implements SourceConnector {
       .sort((a, b) => b[1].orders - a[1].orders)
       .slice(0, n)
       .map(([name, d]) => ({ name, orders: d.orders, cost_eur: r2(d.cost) }));
+  }
+
+  private computeAgentActivitySection(
+    orders: any[],
+    detailMap: Map<number, any>,
+    rates: CurrencyRates | null,
+  ) {
+    const productLabels: Record<string, string> = {
+      package: 'Пакет',
+      hotel: 'Отель',
+      flight: 'Перелёт',
+      transfer: 'Трансферы',
+      insurance: 'Страховки',
+      other: 'Другое',
+    };
+    const filteredOrders = orders.filter((o) => {
+      const detail = detailMap.get(o.order_id);
+      const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
+      return !this.isIgnoredAgent(agentName);
+    });
+    const activeOrders = filteredOrders.filter((o) => o.status !== 'CNX');
+    const uniqueAgentNames = new Set<string>();
+    const agents: Record<string, {
+      orders: number;
+      tourists: number;
+      revenue: number;
+      products: Record<string, number>;
+    }> = {};
+    let activeOrdersWithDetail = 0;
+
+    for (const order of activeOrders) {
+      const detail = detailMap.get(order.order_id);
+      const fallbackAgentName = this.normalizeAgentName(detail?.agent_name || order.company_name || '');
+      if (fallbackAgentName) uniqueAgentNames.add(fallbackAgentName);
+
+      const metric = this.extractOrder(order, detail, rates);
+      if (!metric || !metric.agentName) continue;
+
+      activeOrdersWithDetail++;
+      if (!agents[metric.agentName]) {
+        agents[metric.agentName] = { orders: 0, tourists: 0, revenue: 0, products: {} };
+      }
+
+      agents[metric.agentName].orders++;
+      agents[metric.agentName].tourists += metric.tourists;
+      agents[metric.agentName].revenue += metric.priceEur;
+      agents[metric.agentName].products[metric.productType] = (agents[metric.agentName].products[metric.productType] || 0) + 1;
+      if (metric.isStandaloneInsurance) {
+        agents[metric.agentName].products.insurance = (agents[metric.agentName].products.insurance || 0) + 1;
+      }
+    }
+
+    const topAgentsByRevenue = Object.entries(agents)
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .slice(0, 10)
+      .map(([name, stats]) => ({
+        name,
+        orders: stats.orders,
+        tourists: stats.tourists,
+        revenue_eur: r2(stats.revenue),
+        main_products: Object.entries(stats.products)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([key, ordersCount]) => ({
+            key,
+            label: productLabels[key] || key,
+            orders: ordersCount,
+            pct: stats.orders > 0 ? Math.round(ordersCount / stats.orders * 100) : 0,
+          })),
+      }));
+
+    return {
+      unique_active_agents: uniqueAgentNames.size,
+      active_orders_total: activeOrders.length,
+      active_orders_with_detail: activeOrdersWithDetail,
+      detail_coverage_pct: activeOrders.length > 0 ? Math.round(activeOrdersWithDetail / activeOrders.length * 100) : 100,
+      detail_coverage_note: activeOrdersWithDetail < activeOrders.length
+        ? `⚠️ Детали загружены для ${activeOrdersWithDetail} из ${activeOrders.length} активных заявок`
+        : `✅ Детали загружены для всех ${activeOrders.length} активных заявок`,
+      top_agents_by_revenue: topAgentsByRevenue,
+      data_available: activeOrders.length > 0,
+    };
   }
 
   // ── Section 1 & 2: Sales stats ────────────────────────────────────────────

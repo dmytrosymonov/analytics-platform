@@ -153,6 +153,12 @@ function formatInt(value: number): string {
   return Math.round(value).toLocaleString('ru-RU').replace(/\u00a0/g, ' ');
 }
 
+function formatPeriodLabel(from?: string, to?: string): string {
+  if (!from || !to) return '—';
+  const formatOne = (value: string) => value.split('-').reverse().join('/');
+  return from === to ? formatOne(from) : `${formatOne(from)} - ${formatOne(to)}`;
+}
+
 function formatSummerSalesOutlook(metrics: any): string {
   const section = metrics?.computed?.section4_summer;
   if (!section) throw new Error('Летние данные недоступны');
@@ -501,6 +507,9 @@ async function buildSalesReportsMenu(userId: string) {
   }
   if (reports.find((report) => report.key === 'sales.today')?.enabled) {
     rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
+  }
+  if (reports.find((report) => report.key === 'sales.agents')?.enabled) {
+    rows.push([Markup.button.callback('Agents 7 Days', 'gen:sales:agents')]);
   }
   if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
     rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
@@ -946,6 +955,87 @@ async function runSummerSalesOutlook(): Promise<string> {
   return formatSummerSalesOutlook(result.data.metrics);
 }
 
+async function runGtoAgentActivityReport(): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach((s) => { settings[s.key] = s.value; });
+
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const { periodStart, periodEnd } = computePeriod('daily' as any, timezone);
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const connector = connectorRegistry.get(schedule.source.type);
+    const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');
+
+    const message = formatGtoAgentActivityReport(result.data.metrics);
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: result.data.metrics as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: result.data.metrics as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Agent activity report generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 function formatTopDestinationLines(destinations: any[]): string[] {
   return destinations.slice(0, 3).map(d => `${d.flag || ''}${d.country} ${formatInt(d.orders)} зак / ${formatInt(d.tourists)} тур`.trim());
 }
@@ -969,6 +1059,46 @@ function formatSupplierLines(suppliers: any[]): string[] {
 
 function formatNegativeMarginLines(orders: any[]): string[] {
   return orders.map(o => `#${o.order_id} — GMV ${formatInt(o.revenue_eur)} EUR, себест. ${formatInt(o.cost_eur)} EUR, маржа ${o.profit_pct}%`);
+}
+
+function formatAgentMainProducts(products: any[]): string {
+  if (!Array.isArray(products) || products.length === 0) return '—';
+  return products.map((product) => `${product.label} (${formatInt(product.orders)}; ${product.pct}%)`).join(', ');
+}
+
+function formatGtoAgentActivityReport(metrics: any): string {
+  const section = metrics?.computed?.section5_agent_activity;
+  if (!section) throw new Error('Данные отчёта по агентам недоступны');
+
+  const lines: string[] = [
+    '👥 Активность агентов GTO',
+    `Период: ${formatPeriodLabel(section.period?.from, section.period?.to)}`,
+    '',
+    `Активных агентов: ${formatInt(section.unique_active_agents || 0)}`,
+    `Активных заявок: ${formatInt(section.active_orders_total || 0)}`,
+    section.detail_coverage_note || `Покрытие деталей: ${section.detail_coverage_pct || 0}%`,
+    '',
+    'Все денежные показатели приведены к EUR.',
+  ];
+
+  const topAgents = Array.isArray(section.top_agents_by_revenue) ? section.top_agents_by_revenue.slice(0, 5) : [];
+  if (topAgents.length > 0) {
+    lines.push('', '---🏆 ТОП агентов по выручке---');
+    for (const [index, agent] of topAgents.entries()) {
+      lines.push(
+        `${index + 1}. ${agent.name}`,
+        `Выручка: ${formatInt(agent.revenue_eur)} EUR`,
+        `Заявок: ${formatInt(agent.orders)}, туристов: ${formatInt(agent.tourists)}`,
+        `Основные продукты: ${formatAgentMainProducts(agent.main_products)}`,
+        '',
+      );
+    }
+    while (lines[lines.length - 1] === '') lines.pop();
+  } else {
+    lines.push('', 'За выбранный период активных агентов не найдено.');
+  }
+
+  return lines.join('\n').trim();
 }
 
 type PaymentDirection = 'in' | 'out';
@@ -1608,6 +1738,35 @@ function registerHandlers(instance: Telegraf) {
     } catch (err: any) {
       logger.error({ err }, 'Today sales report failed');
       await ctx.reply(`❌ Ошибка генерации today-отчёта: ${err.message}`);
+    }
+  });
+
+  instance.action('gen:sales:agents', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.agents'))) return;
+
+    await ctx.editMessageText(
+      '⏳ Готовлю *Agent Activity Report*...\nЭто может занять до минуты.',
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoAgentActivityReport();
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err }, 'Agent activity report failed');
+      await ctx.reply(`❌ Ошибка генерации отчёта по агентам: ${err.message}`);
     }
   });
 

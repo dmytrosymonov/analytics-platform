@@ -1,6 +1,6 @@
 # Analytics Platform — Project Documentation
 
-> **Updated:** 2026-04-03
+> **Updated:** 2026-04-08
 > **Owner:** Dmytro Symonov
 > **Production:** https://dsym.goodwin-soft.com/analytics-platform
 
@@ -167,10 +167,10 @@ Key models:
 
 - Telegram command menu should expose only two top-level entries: `reports` and `settings`
 - `/reports` opens a nested report-generation menu, but only shows sections and buttons explicitly allowed for that user by admin-side access settings in the back office
-- `Sales` submenu currently includes `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, and `Summer`
+- `Sales` submenu currently includes `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, and `Summer`
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles
-- A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
+- A source that is allowed for a user may also expose finer per-user manual report permissions for individual Telegram actions built on that source (for example GTO `Yesterday`, `Today`, `Agents 7 Days`, `Payments Yesterday`, `Payments Today`, `Summer`, Redmine rolling windows, YouTrack manual runs, and YouTrack Daily Progress rolling windows)
 - Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
 - Regular schedule subscriptions are self-managed by end users in Telegram via `/settings`; users choose which enabled schedules they want to receive
@@ -181,6 +181,7 @@ Key models:
 - Redmine rolling-window buttons are manual-only and should use the current moment minus the selected window, not calendar-day boundaries
 - `Today` is a same-day GTO sales snapshot for the current business date, not yesterday
 - `Sales` submenu should also expose `Payments Yesterday` and `Payments Today`
+- `Sales` submenu should also expose `Agents 7 Days`, a dedicated GTO agent-activity report for the last 7 completed business days
 - Daily GTO sales report no longer includes the seasonal `☀️ Лето` block in the delivered Telegram message
 - Summer season overview is exposed from the Telegram `Sales` submenu as a dedicated action button: `Summer`
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
@@ -208,6 +209,8 @@ Key models:
 - Telegram GTO `Продукты` blocks should include separate lines for `Трансферы` and `Страховки`, but only for standalone orders where that is the only active product in the order
 - GTO payments reports should use `/payments_list` with exact business-date filters and convert all amounts to EUR
 - Telegram GTO payments reports should present `Payments Today` and `Payments Yesterday` separately, with separate incoming (`type=in`) and outgoing (`type=out`) sections and grouping by `payment_form`
+- Telegram GTO `Agents 7 Days` report should show the number of unique active agents for the period and the top agents by revenue with their main products
+- GTO agent activity should exclude cancelled (`CNX`) orders and test agent `GTO for Test-Goodwin`; product mix should be derived from order details and revenue should be shown in EUR
 - GTO Comments reports must use the actual requested run period (`daily` / `weekly` / `monthly` or manual equivalent) from `report_period_start` to `report_period_end`; they must not be hardcoded to only `today` and `yesterday`
 
 ---
@@ -293,11 +296,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-03T10:49:35Z
+- Generated at (UTC): 2026-04-08T09:48:44Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 20e8c0e (20e8c0eb555c6ed48105a10f710e2677e2ec32b9)
-- Commit date: 2026-04-03T12:37:58+02:00
+- Commit: 3d71482 (3d7148205f6ba82fc00fe878fa12f8c84696a3d9)
+- Commit date: 2026-04-08T11:34:58+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
