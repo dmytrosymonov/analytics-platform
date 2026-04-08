@@ -174,6 +174,8 @@ Key models:
 - Individual manual-report permissions are a second layer under the source-level access: the source must be enabled first, then specific manual report buttons may be enabled or disabled per user
 - Per-schedule user preferences are secondary and control only regular delivery/subscription behavior for schedules tied to an already-allowed source
 - Regular schedule subscriptions are self-managed by end users in Telegram via `/settings`; users choose which enabled schedules they want to receive
+- The Telegram admin whose chat ID matches system setting `telegram.admin_chat_id` should also use `/settings` as an admin console entry point inside the bot
+- Admin `/settings` in Telegram should expose pending registration requests and the user list, with inline actions for approving, blocking, deleting users, and toggling global report delivery
 - Back office should not grant schedule subscriptions anymore; it should only display saved subscriptions and allow admins to remove them if needed
 - In the back-office Users access UI, `YouTrack` and `YouTrack Daily Progress` should be grouped visually under a single `YouTrack` section, while keeping their permissions separate inside that group
 - `/settings` should let end users opt into or out of regular schedule subscriptions, but it must not let Telegram users grant themselves source access or re-enable blocked manual report buttons
@@ -187,6 +189,7 @@ Key models:
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 - Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+- New Telegram `/start` registration requests must notify the configured admin chat and include inline moderation actions directly in the notification message
 
 ## GTO Date Windows
 

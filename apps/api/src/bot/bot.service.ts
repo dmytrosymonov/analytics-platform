@@ -7,7 +7,7 @@ import { decrypt } from '../lib/encryption';
 import { connectorRegistry } from '../connectors/registry';
 import { llmService } from '../llm/llm.service';
 import { promptRegistry } from '../llm/prompt-registry.service';
-import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone } from '../scheduler/scheduler.service';
+import { computeCurrentDayPeriod, computePeriod, computeRollingHoursPeriod, getSourceTimezone, zonedDateTimeToUtc } from '../scheduler/scheduler.service';
 import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-format';
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
@@ -33,19 +33,37 @@ export const bot = new Proxy({} as Telegraf, {
 });
 
 // ── Session state for multi-step /ask flow (in-memory, ok for internal tool) ─
-interface AskSession {
-  step: 'waiting_question';
-  sourceId: string;
-  sourceName: string;
-}
-const sessions = new Map<number, AskSession>();
+type PeriodSelectionTarget =
+  | { kind: 'sales'; accessKeys: string[] }
+  | { kind: 'payments'; accessKeys: string[] }
+  | { kind: 'agents'; accessKeys: string[] }
+  | { kind: 'schedule'; scheduleId: string; scheduleName: string; accessKey: string };
+
+type BotSession =
+  | {
+      step: 'waiting_question';
+      sourceId: string;
+      sourceName: string;
+    }
+  | {
+      step: 'waiting_custom_period';
+      timezone: string;
+      reportLabel: string;
+      target: PeriodSelectionTarget;
+    };
+
+const sessions = new Map<number, BotSession>();
 type ScheduleWithSource = Prisma.ReportScheduleGetPayload<{ include: { source: true } }>;
 type ScheduleWithSourceSummary = Prisma.ReportScheduleGetPayload<{ include: { source: { select: { id: true; name: true; type: true } } } }>;
 type ManualReportAccessState = ReturnType<typeof listManualReportAccessDefinitions>[number] & { enabled: boolean };
+type AdminManageableUser = Prisma.UserGetPayload<{}>;
+type AdminUserFilter = 'pending' | 'approved' | 'blocked' | 'deleted' | 'all';
 const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
   findMany: (args: unknown) => Promise<Array<{ reportKey: string; enabled: boolean }>>;
   findUnique: (args: unknown) => Promise<{ reportKey: string; enabled: boolean } | null>;
 };
+const ADMIN_USER_PAGE_SIZE = 8;
+const MAX_CUSTOM_PERIOD_DAYS = 31;
 
 function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -157,6 +175,83 @@ function formatPeriodLabel(from?: string, to?: string): string {
   if (!from || !to) return '—';
   const formatOne = (value: string) => value.split('-').reverse().join('/');
   return from === to ? formatOne(from) : `${formatOne(from)} - ${formatOne(to)}`;
+}
+
+function shiftYmd(year: number, month: number, day: number, offsetDays: number) {
+  const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+  };
+}
+
+function parseDateToken(input: string): { year: number; month: number; day: number } | null {
+  const value = input.trim();
+  let match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return null;
+    return { year, month, day };
+  }
+
+  match = value.match(/^(\d{2})[./](\d{2})[./](\d{4})$/);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return null;
+  return { year, month, day };
+}
+
+function parseCustomPeriodInput(text: string, timezone: string): { periodStart: Date; periodEnd: Date; from: string; to: string } | { error: string } {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  const rangeMatch = normalized.match(/^(\d{2}[./]\d{2}[./]\d{4}|\d{4}-\d{2}-\d{2})(?:\s*(?:-|—|–)\s*(\d{2}[./]\d{2}[./]\d{4}|\d{4}-\d{2}-\d{2}))?$/);
+  if (!rangeMatch) {
+    return { error: 'Укажите одну дату или диапазон в формате `ДД.MM.ГГГГ - ДД.MM.ГГГГ`.' };
+  }
+
+  const start = parseDateToken(rangeMatch[1]);
+  const end = parseDateToken(rangeMatch[2] || rangeMatch[1]);
+  if (!start || !end) {
+    return { error: 'Не удалось распознать дату. Используйте формат `ДД.MM.ГГГГ - ДД.MM.ГГГГ` или `YYYY-MM-DD - YYYY-MM-DD`.' };
+  }
+
+  const startUtc = Date.UTC(start.year, start.month - 1, start.day);
+  const endUtc = Date.UTC(end.year, end.month - 1, end.day);
+  if (endUtc < startUtc) {
+    return { error: 'Дата окончания не может быть раньше даты начала.' };
+  }
+
+  const inclusiveDays = Math.round((endUtc - startUtc) / 86400000) + 1;
+  if (inclusiveDays > MAX_CUSTOM_PERIOD_DAYS) {
+    return { error: `Период слишком длинный. Сейчас поддерживается максимум ${MAX_CUSTOM_PERIOD_DAYS} день(дней).` };
+  }
+
+  const nextDay = shiftYmd(end.year, end.month, end.day, 1);
+  return {
+    periodStart: zonedDateTimeToUtc(timezone, start.year, start.month, start.day),
+    periodEnd: zonedDateTimeToUtc(timezone, nextDay.year, nextDay.month, nextDay.day),
+    from: `${String(start.year).padStart(4, '0')}-${String(start.month).padStart(2, '0')}-${String(start.day).padStart(2, '0')}`,
+    to: `${String(end.year).padStart(4, '0')}-${String(end.month).padStart(2, '0')}-${String(end.day).padStart(2, '0')}`,
+  };
+}
+
+function buildCustomPeriodPrompt(reportLabel: string): string {
+  return (
+    `📅 *${reportLabel}*\n\n` +
+    `Отправьте период одним сообщением.\n` +
+    `Форматы:\n` +
+    `• \`08.04.2026 - 10.04.2026\`\n` +
+    `• \`2026-04-08 - 2026-04-10\`\n` +
+    `• \`08.04.2026\` для одного дня\n\n` +
+    `Максимальная длина периода: ${MAX_CUSTOM_PERIOD_DAYS} день(дней).\n` +
+    `Напишите \`cancel\`, чтобы отменить.`
+  );
 }
 
 function formatSummerSalesOutlook(metrics: any): string {
@@ -276,6 +371,63 @@ async function getUser(telegramId: number) {
   return prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
 }
 
+async function getTelegramAdminChatId(): Promise<string | null> {
+  return (
+    (await prisma.systemSetting.findUnique({ where: { key: 'telegram.admin_chat_id' } }))?.value
+    || process.env.TELEGRAM_ADMIN_CHAT_ID
+    || null
+  );
+}
+
+async function isTelegramAdmin(telegramId: number): Promise<boolean> {
+  const adminChatId = await getTelegramAdminChatId();
+  return !!adminChatId && adminChatId === String(telegramId);
+}
+
+function formatUserStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: '⏳ Ожидает подтверждения',
+    approved: '✅ Подтверждён',
+    blocked: '🚫 Заблокирован',
+    deleted: '❌ Удалён',
+  };
+  return labels[status] || status;
+}
+
+function formatUserStatusIcon(status: string): string {
+  const icons: Record<string, string> = {
+    pending: '⏳',
+    approved: '✅',
+    blocked: '🚫',
+    deleted: '❌',
+  };
+  return icons[status] || '👤';
+}
+
+function formatUserDisplayName(user: Pick<AdminManageableUser, 'firstName' | 'lastName' | 'username' | 'telegramId'>): string {
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+  if (fullName) return fullName;
+  if (user.username) return `@${user.username}`;
+  return `ID ${String(user.telegramId)}`;
+}
+
+function formatUserShortLabel(user: AdminManageableUser): string {
+  const base = `${formatUserStatusIcon(user.status)} ${formatUserDisplayName(user)}`;
+  return base.length > 48 ? `${base.slice(0, 45)}...` : base;
+}
+
+function formatDateTime(value: Date): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Europe/Kyiv',
+  }).format(value);
+}
+
+function escapeMarkdown(value: string): string {
+  return value.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
 async function requireApproved(ctx: any): Promise<{ id: string; telegramId: bigint } | null> {
   const user = await getUser(ctx.from!.id);
   if (!user) {
@@ -364,6 +516,13 @@ async function hasManualReportAccess(userId: string, reportKey: string): Promise
     where: { userId_reportKey: { userId, reportKey } },
   });
   return pref?.enabled ?? true;
+}
+
+async function hasAnyManualReportAccess(userId: string, reportKeys: string[]): Promise<boolean> {
+  for (const reportKey of reportKeys) {
+    if (await hasManualReportAccess(userId, reportKey)) return true;
+  }
+  return false;
 }
 
 async function getManualSchedulesBySourceTypes(sourceTypes: string[]): Promise<ScheduleWithSourceSummary[]> {
@@ -465,6 +624,147 @@ async function buildSubscriptionsKeyboard(userId: string) {
   };
 }
 
+async function buildSettingsHome(userId?: string | null) {
+  const pendingCount = await prisma.user.count({ where: { status: 'pending' } });
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [Markup.button.callback(`🆕 Заявки${pendingCount ? ` (${pendingCount})` : ''}`, 'admin:users:pending:0')],
+    [Markup.button.callback('👥 Все пользователи', 'admin:users:all:0')],
+  ];
+
+  if (userId) {
+    rows.push([Markup.button.callback('🔔 Мои подписки', 'settings:subscriptions')]);
+  }
+
+  return {
+    text:
+      '⚙️ *Настройки администратора*\n\n' +
+      'Здесь можно просматривать заявки и управлять пользователями прямо из Telegram.',
+    keyboard: Markup.inlineKeyboard(rows),
+  };
+}
+
+async function buildAdminUsersKeyboard(filter: AdminUserFilter, page: number) {
+  const normalizedPage = Math.max(0, page);
+  const where = filter === 'all' ? {} : { status: filter as any };
+  const [users, total, pendingCount, approvedCount, blockedCount, deletedCount] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }],
+      skip: normalizedPage * ADMIN_USER_PAGE_SIZE,
+      take: ADMIN_USER_PAGE_SIZE,
+    }),
+    prisma.user.count({ where }),
+    prisma.user.count({ where: { status: 'pending' } }),
+    prisma.user.count({ where: { status: 'approved' } }),
+    prisma.user.count({ where: { status: 'blocked' } }),
+    prisma.user.count({ where: { status: 'deleted' } }),
+  ]);
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [
+      Markup.button.callback(`🆕 Pending (${pendingCount})`, 'admin:users:pending:0'),
+      Markup.button.callback(`👥 All (${pendingCount + approvedCount + blockedCount + deletedCount})`, 'admin:users:all:0'),
+    ],
+  ];
+
+  if (users.length > 0) {
+    for (const user of users) {
+      rows.push([
+        Markup.button.callback(
+          formatUserShortLabel(user),
+          `admin:user:${user.id}:${filter}:${normalizedPage}`,
+        ),
+      ]);
+    }
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / ADMIN_USER_PAGE_SIZE));
+  if (totalPages > 1) {
+    const paginationRow: ReturnType<typeof Markup.button.callback>[] = [];
+    if (normalizedPage > 0) {
+      paginationRow.push(Markup.button.callback('← Prev', `admin:users:${filter}:${normalizedPage - 1}`));
+    }
+    if (normalizedPage + 1 < totalPages) {
+      paginationRow.push(Markup.button.callback('Next →', `admin:users:${filter}:${normalizedPage + 1}`));
+    }
+    if (paginationRow.length > 0) rows.push(paginationRow);
+  }
+
+  rows.push([Markup.button.callback('← В настройки', 'settings:home')]);
+
+  const filterTitle = filter === 'all' ? 'Все пользователи' : `Пользователи: ${formatUserStatusLabel(filter)}`;
+  const listText =
+    users.length === 0
+      ? 'Список пуст.'
+      : users.map((user) => `${formatUserStatusIcon(user.status)} ${escapeMarkdown(formatUserDisplayName(user))}`).join('\n');
+
+  return {
+    text:
+      `👥 *${filterTitle}*\n\n` +
+      `Показано: ${users.length} из ${total}. Страница ${normalizedPage + 1}/${totalPages}.\n\n` +
+      listText,
+    keyboard: Markup.inlineKeyboard(rows),
+  };
+}
+
+async function buildAdminUserDetailsKeyboard(user: AdminManageableUser, filter: AdminUserFilter, page: number) {
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+
+  if (user.status === 'pending') {
+    rows.push([
+      Markup.button.callback('✅ Одобрить', `admin:user_status:${user.id}:approved:${filter}:${page}`),
+      Markup.button.callback('🗑 Удалить', `admin:user_status:${user.id}:deleted:${filter}:${page}`),
+    ]);
+  } else if (user.status === 'approved') {
+    rows.push([
+      Markup.button.callback('🚫 Заблокировать', `admin:user_status:${user.id}:blocked:${filter}:${page}`),
+      Markup.button.callback('🗑 Удалить', `admin:user_status:${user.id}:deleted:${filter}:${page}`),
+    ]);
+  } else if (user.status === 'blocked') {
+    rows.push([
+      Markup.button.callback('✅ Разблокировать', `admin:user_status:${user.id}:approved:${filter}:${page}`),
+      Markup.button.callback('🗑 Удалить', `admin:user_status:${user.id}:deleted:${filter}:${page}`),
+    ]);
+  }
+
+  if (user.status !== 'deleted') {
+    rows.push([
+      Markup.button.callback(
+        user.globalReportsEnabled ? '🔕 Выключить отчёты' : '🔔 Включить отчёты',
+        `admin:user_reports:${user.id}:${user.globalReportsEnabled ? 'off' : 'on'}:${filter}:${page}`,
+      ),
+    ]);
+  }
+
+  rows.push([Markup.button.callback('← К списку', `admin:users:${filter}:${page}`)]);
+
+  const usernameLine = user.username ? `@${user.username}` : '—';
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || '—';
+
+  return {
+    text:
+      `👤 *${escapeMarkdown(formatUserDisplayName(user))}*\n\n` +
+      `Статус: ${formatUserStatusLabel(user.status)}\n` +
+      `Username: ${escapeMarkdown(usernameLine)}\n` +
+      `Имя: ${escapeMarkdown(fullName)}\n` +
+      `Telegram ID: \`${String(user.telegramId)}\`\n` +
+      `Регулярные отчёты: ${user.globalReportsEnabled ? '✅ Включены' : '❌ Выключены'}\n` +
+      `Создан: ${formatDateTime(user.createdAt)}`,
+    keyboard: Markup.inlineKeyboard(rows),
+  };
+}
+
+async function renderAdminUserDetails(ctx: any, userId: string, filter: AdminUserFilter, page: number) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    await ctx.editMessageText('Пользователь не найден.', { ...Markup.inlineKeyboard([[Markup.button.callback('← К списку', `admin:users:${filter}:${page}`)]]) } as any).catch(() => {});
+    return;
+  }
+
+  const { text, keyboard } = await buildAdminUserDetailsKeyboard(user, filter, page);
+  await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+}
+
 async function buildTopReportsMenu(userId: string) {
   const [hasGto, hasComments, hasRedmine, hasYoutrack, manualReports, commentsSchedules, redmineSchedules, youtrackSchedules] = await Promise.all([
     hasSourceAccess(userId, ['gto']),
@@ -502,20 +802,29 @@ async function buildSalesReportsMenu(userId: string) {
   ]);
   if (!allowed) return null;
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  const hasSalesAccess = reports.some((report) => ['sales.yesterday', 'sales.today'].includes(report.key) && report.enabled);
+  const hasPaymentsAccess = reports.some((report) => ['sales.payments_yesterday', 'sales.payments_today'].includes(report.key) && report.enabled);
   if (reports.find((report) => report.key === 'sales.yesterday')?.enabled) {
     rows.push([Markup.button.callback('Yesterday', 'gen:sales:daily')]);
   }
   if (reports.find((report) => report.key === 'sales.today')?.enabled) {
     rows.push([Markup.button.callback('Today', 'gen:sales:today')]);
   }
+  if (hasSalesAccess) {
+    rows.push([Markup.button.callback('📅 Sales Period', 'custom:sales:sales')]);
+  }
   if (reports.find((report) => report.key === 'sales.agents')?.enabled) {
     rows.push([Markup.button.callback('Agents 7 Days', 'gen:sales:agents')]);
+    rows.push([Markup.button.callback('📅 Agents Period', 'custom:sales:agents')]);
   }
   if (reports.find((report) => report.key === 'sales.payments_yesterday')?.enabled) {
     rows.push([Markup.button.callback('Payments Yesterday', 'gen:sales:payments_yesterday')]);
   }
   if (reports.find((report) => report.key === 'sales.payments_today')?.enabled) {
     rows.push([Markup.button.callback('Payments Today', 'gen:sales:payments_today')]);
+  }
+  if (hasPaymentsAccess) {
+    rows.push([Markup.button.callback('📅 Payments Period', 'custom:sales:payments')]);
   }
   if (reports.find((report) => report.key === 'sales.summer')?.enabled) {
     rows.push([Markup.button.callback('Summer', 'gen:sales:summer')]);
@@ -537,7 +846,13 @@ async function buildScheduleCategoryMenu(userId: string, sourceTypes: string[], 
   );
   if (allowedSchedules.length === 0) return null;
 
-  const rows = allowedSchedules.map(s => [Markup.button.callback(`${s.name} · ${s.source.name}`, `gen:${prefix}:${s.id}`)]);
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+  for (const schedule of allowedSchedules) {
+    rows.push([
+      Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:${prefix}:${schedule.id}`),
+      Markup.button.callback('📅 Period', `custom:schedule:${schedule.id}`),
+    ]);
+  }
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
 }
@@ -554,7 +869,10 @@ async function buildYoutrackReportsMenu(userId: string) {
   const rows: ReturnType<typeof Markup.button.callback>[][] = [];
   for (const schedule of schedules) {
     if (manualReports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled)) {
-      rows.push([Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`)]);
+      rows.push([
+        Markup.button.callback(`${schedule.name} · ${schedule.source.name}`, `gen:youtrack:${schedule.id}`),
+        Markup.button.callback('📅 Period', `custom:schedule:${schedule.id}`),
+      ]);
     }
     if (String(schedule.source.type) === 'youtrack_progress') {
       const hourButtons = [24, 48, 72]
@@ -593,13 +911,19 @@ async function buildRedmineReportsMenu(userId: string) {
   if (manualReports.some((report) => report.key === 'redmine.hours.168' && report.enabled)) {
     rows.push([Markup.button.callback('7 days', `gen:redmine_hours:${preferredSchedule.id}:168`)]);
   }
+  if (manualReports.some((report) => ['redmine.hours.24', 'redmine.hours.48', 'redmine.hours.168'].includes(report.key) && report.enabled)) {
+    rows.push([Markup.button.callback('📅 Custom Period', `custom:schedule:${preferredSchedule.id}`)]);
+  }
   if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
 
   return Markup.inlineKeyboard(rows);
 }
 
-async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
+async function runStoredAnalysis(
+  scheduleId: string,
+  periodOverride?: { periodStart: Date; periodEnd: Date },
+): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await prisma.reportSchedule.findUnique({
     where: { id: scheduleId },
     include: { source: true },
@@ -615,7 +939,7 @@ async function runStoredAnalysis(scheduleId: string): Promise<{ runId: string; r
   settingRows.forEach(s => { settings[s.key] = s.value; });
 
   const timezone = await getSourceTimezone(schedule.source.id);
-  const { periodStart, periodEnd } = computePeriod(schedule.periodType as any, timezone);
+  const { periodStart, periodEnd } = periodOverride || computePeriod(schedule.periodType as any, timezone);
   const run = await prisma.reportRun.create({
     data: {
       scheduleId,
@@ -784,6 +1108,14 @@ async function buildAskKeyboard() {
 // ── Core: fetch connector data + run LLM analysis ────────────────────────────
 async function runAnalysis(scheduleId: string): Promise<{ runId: string; resultId: string; message: string }> {
   return runStoredAnalysis(scheduleId);
+}
+
+async function runAnalysisForPeriod(
+  scheduleId: string,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ runId: string; resultId: string; message: string }> {
+  return runStoredAnalysis(scheduleId, { periodStart, periodEnd });
 }
 
 async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promise<{ runId: string; resultId: string; message: string }> {
@@ -955,7 +1287,9 @@ async function runSummerSalesOutlook(): Promise<string> {
   return formatSummerSalesOutlook(result.data.metrics);
 }
 
-async function runGtoAgentActivityReport(): Promise<{ runId: string; resultId: string; message: string }> {
+async function runGtoAgentActivityReport(
+  periodOverride?: { periodStart: Date; periodEnd: Date },
+): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
   if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
 
@@ -968,7 +1302,7 @@ async function runGtoAgentActivityReport(): Promise<{ runId: string; resultId: s
   settingRows.forEach((s) => { settings[s.key] = s.value; });
 
   const timezone = await getSourceTimezone(schedule.source.id);
-  const { periodStart, periodEnd } = computePeriod('daily' as any, timezone);
+  const { periodStart, periodEnd } = periodOverride || computePeriod('daily' as any, timezone);
   const run = await prisma.reportRun.create({
     data: {
       scheduleId: schedule.id,
@@ -996,7 +1330,9 @@ async function runGtoAgentActivityReport(): Promise<{ runId: string; resultId: s
     const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
     if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');
 
-    const message = formatGtoAgentActivityReport(result.data.metrics);
+    const message = periodOverride
+      ? formatGtoAgentActivityPeriodReport(result.data.metrics)
+      : formatGtoAgentActivityReport(result.data.metrics);
     const storedResult = await prisma.reportResult.upsert({
       where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
       create: {
@@ -1101,6 +1437,39 @@ function formatGtoAgentActivityReport(metrics: any): string {
   return lines.join('\n').trim();
 }
 
+function formatGtoAgentActivityPeriodReport(metrics: any): string {
+  const section = metrics?.computed?.section5_requested_period_agent_activity;
+  if (!section) throw new Error('Данные отчёта по агентам за период недоступны');
+
+  const lines: string[] = [
+    '👥 Активность агентов GTO',
+    `Период: ${formatPeriodLabel(section.period?.from, section.period?.to)}`,
+    '',
+    `Активных агентов: ${formatInt(section.unique_active_agents || 0)}`,
+    `Активных заявок: ${formatInt(section.active_orders_total || 0)}`,
+    section.detail_coverage_note || `Покрытие деталей: ${section.detail_coverage_pct || 0}%`,
+    '',
+    'Все денежные показатели приведены к EUR.',
+  ];
+
+  const topAgents = Array.isArray(section.top_agents_by_revenue) ? section.top_agents_by_revenue.slice(0, 5) : [];
+  if (topAgents.length > 0) {
+    lines.push('', '---🏆 ТОП агентов по выручке---');
+    for (const [index, agent] of topAgents.entries()) {
+      lines.push(
+        `${index + 1}. ${agent.name}`,
+        `Выручка: ${formatInt(agent.revenue_eur)} EUR`,
+        `Заявок: ${formatInt(agent.orders)}, туристов: ${formatInt(agent.tourists)}`,
+        `Основные продукты: ${formatAgentMainProducts(agent.main_products)}`,
+        '',
+      );
+    }
+    while (lines[lines.length - 1] === '') lines.pop();
+  }
+
+  return lines.join('\n').trim();
+}
+
 type PaymentDirection = 'in' | 'out';
 
 type PaymentRow = {
@@ -1189,6 +1558,10 @@ async function getGtoPaymentsBaseConfig(sourceId: string) {
 }
 
 async function fetchGtoPaymentsForDate(sourceId: string, dateStr: string, type: PaymentDirection): Promise<PaymentRow[]> {
+  return fetchGtoPaymentsForPeriod(sourceId, dateStr, dateStr, type);
+}
+
+async function fetchGtoPaymentsForPeriod(sourceId: string, fromDate: string, toDate: string, type: PaymentDirection): Promise<PaymentRow[]> {
   const { client, rates } = await getGtoPaymentsBaseConfig(sourceId);
   const rows: PaymentRow[] = [];
   const perPage = 1000;
@@ -1198,8 +1571,8 @@ async function fetchGtoPaymentsForDate(sourceId: string, dateStr: string, type: 
     const resp = await client.get('/payments_list', {
       params: {
         type,
-        date_from: dateStr,
-        date_to: dateStr,
+        date_from: fromDate,
+        date_to: toDate,
         per_page: perPage,
         page,
       },
@@ -1216,7 +1589,7 @@ async function fetchGtoPaymentsForDate(sourceId: string, dateStr: string, type: 
         order_id: String(item?.order_id || ''),
         amount_eur: CurrencyService.toEur(amount, currency, rates),
         payment_form: String(item?.payment_form || 'Unknown'),
-        date: String(item?.date || dateStr),
+        date: String(item?.date || fromDate),
         received_from: String(item?.received_from || '').trim(),
         is_revoked: Boolean(item?.is_revoked),
       });
@@ -1257,7 +1630,7 @@ async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runI
   const timezone = await getSourceTimezone(schedule.source.id);
   const period = mode === 'today' ? computeCurrentDayPeriod(timezone) : computePeriod('daily', timezone);
   const dateStr = period.periodStart.toLocaleDateString('sv-SE', { timeZone: timezone });
-  const periodLabel = dateStr.split('-').reverse().join('/');
+  const periodLabel = formatPeriodLabel(dateStr, dateStr);
 
   const run = await prisma.reportRun.create({
     data: {
@@ -1337,6 +1710,93 @@ async function runGtoPaymentsReport(mode: 'today' | 'yesterday'): Promise<{ runI
   }
 }
 
+async function runGtoPaymentsReportForPeriod(
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const timezone = await getSourceTimezone(schedule.source.id);
+  const fromDate = periodStart.toLocaleDateString('sv-SE', { timeZone: timezone });
+  const toDate = new Date(periodEnd.getTime() - 1).toLocaleDateString('sv-SE', { timeZone: timezone });
+  const periodLabel = formatPeriodLabel(fromDate, toDate);
+
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const [incomingRows, outgoingRows] = await Promise.all([
+      fetchGtoPaymentsForPeriod(schedule.source.id, fromDate, toDate, 'in'),
+      fetchGtoPaymentsForPeriod(schedule.source.id, fromDate, toDate, 'out'),
+    ]);
+
+    const normalizedData = {
+      payments: {
+        period: { from: fromDate, to: toDate },
+        incoming: summarizePayments(incomingRows),
+        outgoing: summarizePayments(outgoingRows),
+      },
+    };
+
+    const message = formatGtoPaymentsReport('💳 Отчёт по оплатам GTO', periodLabel, normalizedData.payments);
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: normalizedData as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: normalizedData as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Payments custom period generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 function formatGtoTodayReport(metrics: any): string {
   const section = metrics?.computed?.section1_yesterday;
   const snapshot = section?.non_cancelled_snapshot;
@@ -1384,6 +1844,49 @@ function formatGtoTodayReport(metrics: any): string {
 
   lines.push('', `🔴 Отрицательная маржа (${formatInt(snapshot.negative_margin_count || 0)} заказов):`);
   const negativeLines = formatNegativeMarginLines(snapshot.negative_margin_orders || []);
+  if (negativeLines.length > 0) lines.push(...negativeLines);
+
+  return lines.join('\n').trim();
+}
+
+function formatGtoSalesPeriodReport(metrics: any): string {
+  const section = metrics?.computed?.section0_requested_period_sales;
+  if (!section) throw new Error('Данные отчёта по продажам за период недоступны');
+
+  const topAgent = section.top_agents_by_orders?.[0];
+  const mostExpensive = section.most_expensive_order;
+  const lines: string[] = [
+    '📊 Отчёт по продажам GTO',
+    `Период: ${formatPeriodLabel(section.period?.from, section.period?.to)}`,
+    '',
+    `📦 Заявок: ${formatInt(section.orders.total)} (✅${formatInt(section.orders.confirmed)} подтв, ❌${formatInt(section.orders.cancelled)} отмен, ⚠️${formatInt(section.orders.pending)} pending)`,
+    `Туристов: ${formatInt(section.tourists || 0)}`,
+    '',
+    `💶 Выручка по CNF: ${formatInt(section.financials?.revenue_eur || 0)} EUR`,
+    `Прибыль по CNF: ${formatInt(section.financials?.profit_eur || 0)} EUR (${section.financials?.profit_pct || 0}%)`,
+    `💼 Средний чек по CNF: ${formatInt(section.financials?.avg_order_eur || 0)} EUR`,
+    'Все денежные показатели приведены к EUR.',
+    '',
+    '---🌍 Направления---',
+    ...formatTopDestinationLines(section.top_destinations || []),
+    '',
+    '---📦 Продукты---',
+    ...formatProductLines(section.product_breakdown || {}),
+  ];
+
+  const startMonthLines = formatTourStartMonthLines(section.tour_start_months || []);
+  if (startMonthLines.length > 0) {
+    lines.push('', '---🗓 Старт туров---', ...startMonthLines);
+  }
+  if (topAgent) {
+    lines.push('', `👥 Топ агент: ${topAgent.name} — ${formatInt(topAgent.orders)} зак, ${formatInt(topAgent.tourists)} тур`);
+  }
+  if (mostExpensive) {
+    lines.push('', `💎 Самый дорогой заказ: #${mostExpensive.order_id} — ${formatInt(mostExpensive.price_eur)} EUR`);
+  }
+
+  lines.push('', `🔴 Отрицательная маржа (${formatInt(section.negative_margin_count || 0)} заказов):`);
+  const negativeLines = formatNegativeMarginLines(section.negative_margin_orders || []);
   if (negativeLines.length > 0) lines.push(...negativeLines);
 
   return lines.join('\n').trim();
@@ -1472,6 +1975,89 @@ async function runGtoTodayReport(): Promise<{ runId: string; resultId: string; m
   }
 }
 
+async function runGtoSalesPeriodReport(
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach((s) => { settings[s.key] = s.value; });
+
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const connector = connectorRegistry.get(schedule.source.type);
+    const fetchResult = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!fetchResult.success || !fetchResult.data) {
+      throw new Error(fetchResult.error?.message || 'Ошибка получения данных');
+    }
+
+    const message = formatGtoSalesPeriodReport(fetchResult.data.metrics);
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: fetchResult.data.metrics as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Sales custom period generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 // ── Core: fetch data + answer a free-form question via LLM ───────────────────
 async function runFreeQuery(sourceId: string, question: string): Promise<string> {
   const source = await prisma.dataSource.findUnique({ where: { id: sourceId } });
@@ -1502,6 +2088,27 @@ async function runFreeQuery(sourceId: string, question: string): Promise<string>
     `Data from ${source.name} (last 7 days):\n\`\`\`json\n${dataStr.slice(0, 8000)}\n\`\`\`\n\nQuestion: ${question}`;
 
   return llmService.chat(systemPrompt, userPrompt);
+}
+
+async function beginCustomPeriodSelection(
+  ctx: any,
+  timezone: string,
+  reportLabel: string,
+  target: PeriodSelectionTarget,
+) {
+  sessions.set(ctx.from!.id, {
+    step: 'waiting_custom_period',
+    timezone,
+    reportLabel,
+    target,
+  });
+
+  await ctx.editMessageText(
+    buildCustomPeriodPrompt(reportLabel),
+    { parse_mode: 'Markdown' },
+  ).catch(async () => {
+    await ctx.reply(buildCustomPeriodPrompt(reportLabel), { parse_mode: 'Markdown' });
+  });
 }
 
 // ── Register all handlers ─────────────────────────────────────────────────────
@@ -1536,12 +2143,24 @@ function registerHandlers(instance: Telegraf) {
 
         await writeAuditLog({ actorType: 'bot', action: 'user.registered', entityType: 'user', entityId: user.id });
 
-        const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+        const adminChatId = await getTelegramAdminChatId();
         if (adminChatId) {
-          await instance.telegram.sendMessage(
-            adminChatId,
-            `👤 *Новый запрос на подписку*\nИмя: ${from.first_name || ''} ${from.last_name || ''}\nUsername: @${from.username || 'нет'}\nTelegram ID: \`${from.id}\`\n\nПодтвердите в панели администратора.`,
-            { parse_mode: 'Markdown' },
+          await sendTelegramMessageSafe(
+            Number(adminChatId),
+            `👤 *Новая заявка на регистрацию*\n` +
+            `Имя: ${(from.first_name || '').trim()} ${(from.last_name || '').trim()}\n` +
+            `Username: @${from.username || 'нет'}\n` +
+            `Telegram ID: \`${from.id}\`\n\n` +
+            `Можно обработать заявку прямо здесь, в Telegram.`,
+            {
+              reply_markup: Markup.inlineKeyboard([
+                [
+                  Markup.button.callback('✅ Одобрить', `admin:user_status:${user.id}:approved:pending:0`),
+                  Markup.button.callback('🚫 Заблокировать', `admin:user_status:${user.id}:blocked:pending:0`),
+                ],
+                [Markup.button.callback('👥 Открыть список заявок', 'admin:users:pending:0')],
+              ]).reply_markup,
+            },
           ).catch(() => {});
         }
       }
@@ -1600,11 +2219,147 @@ function registerHandlers(instance: Telegraf) {
   });
 
   instance.command('settings', async (ctx) => {
+    const [isAdmin, user] = await Promise.all([
+      isTelegramAdmin(ctx.from!.id),
+      getUser(ctx.from!.id),
+    ]);
+
+    if (isAdmin) {
+      const { text, keyboard } = await buildSettingsHome(user?.status === 'approved' ? user.id : null);
+      return ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+    }
+
+    const approvedUser = await requireApproved(ctx);
+    if (!approvedUser) return;
+    const { text, keyboard } = await buildSubscriptionsKeyboard(approvedUser.id);
+    if (!keyboard) return ctx.reply(text, { parse_mode: 'Markdown' });
+    await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+  });
+
+  instance.action('settings:home', async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await isTelegramAdmin(ctx.from!.id))) return;
+    const user = await getUser(ctx.from!.id);
+    const { text, keyboard } = await buildSettingsHome(user?.status === 'approved' ? user.id : null);
+    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action('settings:subscriptions', async (ctx) => {
+    await ctx.answerCbQuery();
     const user = await requireApproved(ctx);
     if (!user) return;
     const { text, keyboard } = await buildSubscriptionsKeyboard(user.id);
-    if (!keyboard) return ctx.reply(text, { parse_mode: 'Markdown' });
-    await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+    if (!keyboard) {
+      await ctx.editMessageText(text, { parse_mode: 'Markdown' } as any).catch(() => {});
+      return;
+    }
+    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action(/^admin:users:(pending|approved|blocked|deleted|all):(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await isTelegramAdmin(ctx.from!.id))) return;
+    const filter = ctx.match[1] as AdminUserFilter;
+    const page = Number(ctx.match[2]);
+    const { text, keyboard } = await buildAdminUsersKeyboard(filter, page);
+    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action(/^admin:user:([^:]+):(pending|approved|blocked|deleted|all):(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!(await isTelegramAdmin(ctx.from!.id))) return;
+    const userId = ctx.match[1];
+    const filter = ctx.match[2] as AdminUserFilter;
+    const page = Number(ctx.match[3]);
+    await renderAdminUserDetails(ctx, userId, filter, page);
+  });
+
+  instance.action(/^admin:user_status:([^:]+):(approved|blocked|deleted):(pending|approved|blocked|deleted|all):(\d+)$/, async (ctx) => {
+    if (!(await isTelegramAdmin(ctx.from!.id))) {
+      await ctx.answerCbQuery('Недостаточно прав.');
+      return;
+    }
+
+    const userId = ctx.match[1];
+    const nextStatus = ctx.match[2] as 'approved' | 'blocked' | 'deleted';
+    const filter = ctx.match[3] as AdminUserFilter;
+    const page = Number(ctx.match[4]);
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user) {
+      await ctx.answerCbQuery('Пользователь не найден.');
+      return;
+    }
+
+    const allowedTransitions: Record<string, string[]> = {
+      pending: ['approved', 'deleted', 'blocked'],
+      approved: ['blocked', 'deleted'],
+      blocked: ['approved', 'deleted'],
+      deleted: [],
+    };
+    if (!(allowedTransitions[user.status] || []).includes(nextStatus)) {
+      await ctx.answerCbQuery('Недопустимый переход статуса.');
+      return;
+    }
+
+    const updated = await prisma.user.update({ where: { id: userId }, data: { status: nextStatus as any } });
+    await writeAuditLog({
+      actorType: 'bot',
+      action: `user.${nextStatus}.via_telegram`,
+      entityType: 'user',
+      entityId: userId,
+      beforeState: { status: user.status },
+      afterState: { status: nextStatus, adminTelegramId: String(ctx.from!.id) },
+    });
+
+    const messages: Record<string, string> = {
+      approved: '✅ Ваш аккаунт одобрен. Теперь доступны /reports, /settings и /ask.',
+      blocked: '🚫 Ваша заявка отклонена или аккаунт заблокирован. При необходимости свяжитесь с администратором.',
+      deleted: '❌ Ваша заявка была отклонена. При необходимости свяжитесь с администратором и отправьте /start повторно.',
+    };
+    await sendTelegramMessageSafe(Number(updated.telegramId), messages[nextStatus]).catch(() => {});
+
+    await ctx.answerCbQuery(`Статус: ${formatUserStatusLabel(nextStatus)}`);
+    await renderAdminUserDetails(ctx, userId, filter, page);
+  });
+
+  instance.action(/^admin:user_reports:([^:]+):(on|off):(pending|approved|blocked|deleted|all):(\d+)$/, async (ctx) => {
+    if (!(await isTelegramAdmin(ctx.from!.id))) {
+      await ctx.answerCbQuery('Недостаточно прав.');
+      return;
+    }
+
+    const userId = ctx.match[1];
+    const mode = ctx.match[2];
+    const filter = ctx.match[3] as AdminUserFilter;
+    const page = Number(ctx.match[4]);
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user) {
+      await ctx.answerCbQuery('Пользователь не найден.');
+      return;
+    }
+
+    const globalReportsEnabled = mode === 'on';
+    await prisma.user.update({ where: { id: userId }, data: { globalReportsEnabled } });
+    await writeAuditLog({
+      actorType: 'bot',
+      action: 'user.reports.updated.via_telegram',
+      entityType: 'user',
+      entityId: userId,
+      beforeState: { globalReportsEnabled: user.globalReportsEnabled },
+      afterState: { globalReportsEnabled, adminTelegramId: String(ctx.from!.id) },
+    });
+
+    await sendTelegramMessageSafe(
+      Number(user.telegramId),
+      globalReportsEnabled
+        ? '🔔 Администратор включил для вас регулярные отчёты.'
+        : '🔕 Администратор отключил для вас регулярные отчёты.',
+    ).catch(() => {});
+
+    await ctx.answerCbQuery(globalReportsEnabled ? 'Отчёты включены' : 'Отчёты выключены');
+    await renderAdminUserDetails(ctx, userId, filter, page);
   });
 
   instance.action(/^sub:(.+)$/, async (ctx) => {
@@ -1689,6 +2444,89 @@ function registerHandlers(instance: Telegraf) {
     const keyboard = await buildYoutrackReportsMenu(user.id);
     if (!keyboard) return ctx.reply('Нет доступных отчётов Youtrack.');
     await ctx.editMessageText('🎯 *Youtrack*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action(/^custom:sales:(sales|payments|agents)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    const mode = ctx.match[1];
+    if (mode === 'sales') {
+      if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+      if (!(await hasAnyManualReportAccess(user.id, ['sales.yesterday', 'sales.today']))) {
+        return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+      if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+      const timezone = await getSourceTimezone(schedule.source.id);
+      await beginCustomPeriodSelection(ctx, timezone, 'GTO Sales: произвольный период', {
+        kind: 'sales',
+        accessKeys: ['sales.yesterday', 'sales.today'],
+      });
+      return;
+    }
+
+    if (mode === 'payments') {
+      if (!(await ensureSourceAccess(ctx, user.id, ['gto']))) return;
+      if (!(await hasAnyManualReportAccess(user.id, ['sales.payments_yesterday', 'sales.payments_today']))) {
+        return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+      if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+      const timezone = await getSourceTimezone(schedule.source.id);
+      await beginCustomPeriodSelection(ctx, timezone, 'GTO Payments: произвольный период', {
+        kind: 'payments',
+        accessKeys: ['sales.payments_yesterday', 'sales.payments_today'],
+      });
+      return;
+    }
+
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], 'sales.agents'))) return;
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+    const timezone = await getSourceTimezone(schedule.source.id);
+    await beginCustomPeriodSelection(ctx, timezone, 'GTO Agents: произвольный период', {
+      kind: 'agents',
+      accessKeys: ['sales.agents'],
+    });
+  });
+
+  instance.action(/^custom:schedule:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+
+    const scheduleId = ctx.match[1];
+    const schedule = await prisma.reportSchedule.findUnique({
+      where: { id: scheduleId },
+      include: { source: { select: { name: true, type: true, id: true } } },
+    });
+    if (!schedule) return ctx.reply('Расписание не найдено.');
+    if (!(await ensureScheduleSourceAccess(ctx, user.id, scheduleId))) return;
+
+    let accessKey = makeScheduleRunReportKey(scheduleId);
+    if (String(schedule.source.type) === 'redmine') {
+      const candidateKeys = ['redmine.hours.24', 'redmine.hours.48', 'redmine.hours.168'];
+      accessKey = '';
+      for (const key of candidateKeys) {
+        if (await hasManualReportAccess(user.id, key)) {
+          accessKey = key;
+          break;
+        }
+      }
+      if (!accessKey) return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    } else if (!(await hasManualReportAccess(user.id, accessKey))) {
+      return ctx.reply('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+    }
+
+    const timezone = await getSourceTimezone(schedule.source.id);
+    await beginCustomPeriodSelection(ctx, timezone, `${schedule.source.name}: произвольный период`, {
+      kind: 'schedule',
+      scheduleId,
+      scheduleName: schedule.source.name,
+      accessKey,
+    });
   });
 
   // Callback: open separate summer sales outlook from Sales submenu
@@ -2027,18 +2865,116 @@ function registerHandlers(instance: Telegraf) {
     const session = sessions.get(ctx.from!.id);
     if (!session) return; // no active session
 
-    sessions.delete(ctx.from!.id);
-
     const user = await requireApproved(ctx);
     if (!user) return;
 
-    const waitMsg = await ctx.reply(`🔍 Ищу ответ в данных *${session.sourceName}*...`, { parse_mode: 'Markdown' });
+    if (text.trim().toLowerCase() === 'cancel' || text.trim().toLowerCase() === 'отмена') {
+      sessions.delete(ctx.from!.id);
+      await ctx.reply('Ок, отменил выбор периода.');
+      return;
+    }
+
+    if (session.step === 'waiting_question') {
+      const questionSession = session;
+      sessions.delete(ctx.from!.id);
+      const waitMsg = await ctx.reply(`🔍 Ищу ответ в данных *${questionSession.sourceName}*...`, { parse_mode: 'Markdown' });
+
+      try {
+        const answer = await runFreeQuery(questionSession.sourceId, text);
+        await replySafe(ctx, answer, { disable_web_page_preview: true });
+      } catch (err: any) {
+        logger.error({ err, sourceId: questionSession.sourceId }, 'Free query failed');
+        await ctx.reply(`❌ Ошибка: ${err.message}`);
+      } finally {
+        await ctx.telegram.deleteMessage(ctx.chat!.id, waitMsg.message_id).catch(() => {});
+      }
+      return;
+    }
+
+    const parsed = parseCustomPeriodInput(text, session.timezone);
+    if ('error' in parsed) {
+      await ctx.reply(`${parsed.error}\n\n${buildCustomPeriodPrompt(session.reportLabel)}`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    sessions.delete(ctx.from!.id);
+    const label = formatPeriodLabel(parsed.from, parsed.to);
+    const waitMsg = await ctx.reply(`⏳ Готовлю *${session.reportLabel}* за период *${label}*...`, { parse_mode: 'Markdown' });
 
     try {
-      const answer = await runFreeQuery(session.sourceId, text);
-      await replySafe(ctx, answer, { disable_web_page_preview: true });
+      if (session.target.kind === 'sales') {
+        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
+          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+        }
+        const result = await runGtoSalesPeriodReport(parsed.periodStart, parsed.periodEnd);
+        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+        await prisma.sentMessage.create({
+          data: {
+            resultId: result.resultId,
+            userId: user.id,
+            status: 'sent',
+            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+            sentAt: new Date(),
+          },
+        }).catch(() => {});
+        return;
+      }
+
+      if (session.target.kind === 'payments') {
+        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
+          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+        }
+        const result = await runGtoPaymentsReportForPeriod(parsed.periodStart, parsed.periodEnd);
+        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+        await prisma.sentMessage.create({
+          data: {
+            resultId: result.resultId,
+            userId: user.id,
+            status: 'sent',
+            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+            sentAt: new Date(),
+          },
+        }).catch(() => {});
+        return;
+      }
+
+      if (session.target.kind === 'agents') {
+        if (!(await hasAnyManualReportAccess(user.id, session.target.accessKeys))) {
+          throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+        }
+        const result = await runGtoAgentActivityReport({
+          periodStart: parsed.periodStart,
+          periodEnd: parsed.periodEnd,
+        });
+        const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+        await prisma.sentMessage.create({
+          data: {
+            resultId: result.resultId,
+            userId: user.id,
+            status: 'sent',
+            telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+            sentAt: new Date(),
+          },
+        }).catch(() => {});
+        return;
+      }
+
+      if (!(await hasManualReportAccess(user.id, session.target.accessKey))) {
+        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const result = await runAnalysisForPeriod(session.target.scheduleId, parsed.periodStart, parsed.periodEnd);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
     } catch (err: any) {
-      logger.error({ err, sourceId: session.sourceId }, 'Free query failed');
+      logger.error({ err, session }, 'Custom period generation failed');
       await ctx.reply(`❌ Ошибка: ${err.message}`);
     } finally {
       await ctx.telegram.deleteMessage(ctx.chat!.id, waitMsg.message_id).catch(() => {});
