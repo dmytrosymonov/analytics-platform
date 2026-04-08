@@ -76,6 +76,24 @@ const COUNTRY_EMOJI: Record<string, string> = {
 };
 const countryEmoji = (name: string) => COUNTRY_EMOJI[name] ?? '';
 const RU_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const PRODUCT_LABELS: Record<string, string> = {
+  package: 'Пакет',
+  hotel: 'Отель',
+  flight: 'Перелёт',
+  transfer: 'Трансферы',
+  insurance: 'Страховки',
+  other: 'Другое',
+};
+
+export const GTO_NETWORK_DEFINITIONS = [
+  { key: 'poikhaly_z_namy', label: 'Поїхали з нами', matchers: ['поїхали з нами'] },
+  { key: 'tours_tickets', label: 'TOURS&TICKETS', matchers: ['tours&tickets'] },
+  { key: 'na_kanikuly', label: 'На канікули', matchers: ['на канікули'] },
+  { key: 'kho', label: 'ХО', matchers: ['хо'] },
+  { key: 'hottur', label: 'Хоттур', matchers: ['хоттур'] },
+] as const;
+
+export type GtoNetworkKey = typeof GTO_NETWORK_DEFINITIONS[number]['key'];
 
 function shiftDateString(dateStr: string, offsetDays: number): string {
   const [year, month, day] = dateStr.split('-').map(Number);
@@ -93,6 +111,25 @@ export class GTOConnector implements SourceConnector {
 
   private normalizeAgentName(name: string) {
     return (name || '').replace(/\s*\[.*?\]/g, '').trim();
+  }
+
+  private extractBracketLabels(name: string): string[] {
+    return [...String(name || '').matchAll(/\[([^\]]+)\]/g)]
+      .map((match) => (match[1] || '').trim())
+      .filter(Boolean);
+  }
+
+  private detectAgentNetwork(name: string): { key: GtoNetworkKey; label: string; rawLabel: string } | null {
+    const labels = this.extractBracketLabels(name);
+    for (const rawLabel of labels) {
+      const normalized = rawLabel.toLocaleLowerCase('uk-UA');
+      for (const definition of GTO_NETWORK_DEFINITIONS) {
+        if (definition.matchers.some((matcher) => normalized.includes(matcher))) {
+          return { key: definition.key, label: definition.label, rawLabel };
+        }
+      }
+    }
+    return null;
   }
 
   private isIgnoredAgent(name: string) {
@@ -317,6 +354,7 @@ export class GTOConnector implements SourceConnector {
     const s0     = this.computeSalesSection(ordersRequestedPeriod, detailMap, rates);
     const s5     = this.computeAgentActivitySection(ordersLast7d, detailMap, rates);
     const s5requested = this.computeAgentActivitySection(ordersRequestedPeriod, detailMap, rates);
+    const s6requested = this.computeNetworkSalesSection(ordersRequestedPeriod, detailMap, rates, s0);
     const s3     = this.computeUpcomingSection(ordersUpcoming, detailMap, rates);
     const s3prev = this.computeUpcomingSection(ordersPrevUpcoming, detailMap, rates);
     const s3b    = this.computeUpcomingSection(ordersUpcoming30d, detailMap, rates);
@@ -401,6 +439,10 @@ export class GTOConnector implements SourceConnector {
             section5_requested_period_agent_activity: {
               period: { from: requestedFromStr, to: requestedToStr },
               ...s5requested,
+            },
+            section6_requested_period_network_sales: {
+              period: { from: requestedFromStr, to: requestedToStr },
+              ...s6requested,
             },
             section3_upcoming_7days: {
               period: { from: reportDayStr, to: next7dStr },
@@ -627,6 +669,7 @@ export class GTOConnector implements SourceConnector {
     // Agent (strip bracketed suffixes like "[Поїхали з нами]", "[Клуб Датур]")
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
     const agentName = this.normalizeAgentName(rawAgent);
+    const network = this.detectAgentNetwork(rawAgent);
     const startDate = detail.date_start || orderSummary?.date_start || null;
     const createdAt = detail.created_at || orderSummary?.created_at || null;
     const leadDays = this.salesLeadDays(createdAt, startDate);
@@ -643,7 +686,11 @@ export class GTOConnector implements SourceConnector {
       productType,
       hasInsurance,
       isStandaloneInsurance,
+      rawAgentName: rawAgent,
       agentName,
+      networkKey: network?.key || null,
+      networkLabel: network?.label || null,
+      networkLabelRaw: network?.rawLabel || null,
       startDate,
       createdAt,
       leadDays,
@@ -678,14 +725,6 @@ export class GTOConnector implements SourceConnector {
     detailMap: Map<number, any>,
     rates: CurrencyRates | null,
   ) {
-    const productLabels: Record<string, string> = {
-      package: 'Пакет',
-      hotel: 'Отель',
-      flight: 'Перелёт',
-      transfer: 'Трансферы',
-      insurance: 'Страховки',
-      other: 'Другое',
-    };
     const filteredOrders = orders.filter((o) => {
       const detail = detailMap.get(o.order_id);
       const agentName = this.normalizeAgentName(detail?.agent_name || o.company_name || '');
@@ -736,7 +775,7 @@ export class GTOConnector implements SourceConnector {
           .slice(0, 3)
           .map(([key, ordersCount]) => ({
             key,
-            label: productLabels[key] || key,
+            label: PRODUCT_LABELS[key] || key,
             orders: ordersCount,
             pct: stats.orders > 0 ? Math.round(ordersCount / stats.orders * 100) : 0,
           })),
@@ -752,6 +791,242 @@ export class GTOConnector implements SourceConnector {
         : `✅ Детали загружены для всех ${activeOrders.length} активных заявок`,
       top_agents_by_revenue: topAgentsByRevenue,
       data_available: activeOrders.length > 0,
+    };
+  }
+
+  private computeNetworkSalesSection(
+    orders: any[],
+    detailMap: Map<number, any>,
+    rates: CurrencyRates | null,
+    overallSales: ReturnType<GTOConnector['computeSalesSection']>,
+  ) {
+    const createProductBuckets = () => ({
+      package: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      hotel: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      flight: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      transfer: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      other: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+      insurance: { orders: 0, tourists: 0, revenue_eur: 0, profit_eur: 0 },
+    });
+    const blankNetworkRecord = (definition: typeof GTO_NETWORK_DEFINITIONS[number]) => ({
+      key: definition.key,
+      label: definition.label,
+      matched_labels: [] as string[],
+      orders: { total: 0, confirmed: 0, cancelled: 0, pending: 0 },
+      tourists: 0,
+      financials: {
+        revenue_eur: 0,
+        cost_eur: 0,
+        profit_eur: 0,
+        profit_pct: 0,
+        avg_order_eur: 0,
+      },
+      top_destinations: [] as Array<{ country: string; flag: string; orders: number; tourists: number; pct: number }>,
+      top_agents_by_orders: [] as Array<{
+        name: string;
+        orders: number;
+        tourists: number;
+        revenue_eur: number;
+        profit_eur: number;
+        main_products: Array<{ key: string; label: string; orders: number; pct: number }>;
+      }>,
+      product_breakdown: {} as Record<string, { orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number }>,
+      top_products: [] as Array<{ key: string; label: string; orders: number; tourists: number; revenue_eur: number; profit_eur: number; profit_pct: number }>,
+      data_available: false,
+    });
+
+    const networkOrders = new Map<GtoNetworkKey, any[]>();
+    for (const definition of GTO_NETWORK_DEFINITIONS) {
+      networkOrders.set(definition.key, []);
+    }
+
+    for (const order of orders) {
+      const detail = detailMap.get(order.order_id);
+      const rawAgent = detail?.agent_name || order.company_name || '';
+      const normalizedAgent = this.normalizeAgentName(rawAgent);
+      if (this.isIgnoredAgent(normalizedAgent)) continue;
+      const network = this.detectAgentNetwork(rawAgent);
+      if (!network) continue;
+      networkOrders.get(network.key)?.push(order);
+    }
+
+    const totalOrders = overallSales.orders?.total || 0;
+    const totalTourists = overallSales.tourists || 0;
+    const totalRevenue = overallSales.financials?.revenue_eur || 0;
+
+    const networks = GTO_NETWORK_DEFINITIONS.map((definition) => {
+      const scopedOrders = networkOrders.get(definition.key) || [];
+      const withDetails = scopedOrders
+        .map((order) => this.extractOrder(order, detailMap.get(order.order_id), rates))
+        .filter((metric): metric is NonNullable<typeof metric> => Boolean(metric));
+
+      const confirmed = scopedOrders.filter((order) => order.status === 'CNF');
+      const cancelled = scopedOrders.filter((order) => order.status === 'CNX');
+      const pending = scopedOrders.filter((order) => !['CNF', 'CNX'].includes(order.status));
+      const destinations: Record<string, { orders: number; tourists: number }> = {};
+      const agents: Record<string, { orders: number; tourists: number; revenue: number; profit: number; products: Record<string, number> }> = {};
+      const products = createProductBuckets();
+      const matchedLabels = new Set<string>();
+      let tourists = 0;
+      let revenueEur = 0;
+      let costEur = 0;
+      let profitEur = 0;
+
+      for (const metric of withDetails) {
+        tourists += metric.tourists;
+        if (metric.networkLabelRaw) matchedLabels.add(metric.networkLabelRaw);
+
+        for (const country of metric.countries) {
+          if (!destinations[country]) destinations[country] = { orders: 0, tourists: 0 };
+          destinations[country].orders++;
+          destinations[country].tourists += metric.tourists;
+        }
+
+        const productKey = metric.productType;
+        products[productKey].orders++;
+        products[productKey].tourists += metric.tourists;
+        if (metric.status === 'CNF') {
+          products[productKey].revenue_eur += metric.priceEur;
+          products[productKey].profit_eur += metric.profitEur;
+        }
+        if (metric.isStandaloneInsurance) {
+          products.insurance.orders++;
+          products.insurance.tourists += metric.tourists;
+          if (metric.status === 'CNF') {
+            products.insurance.revenue_eur += metric.priceEur;
+            products.insurance.profit_eur += metric.profitEur;
+          }
+        }
+
+        if (!metric.agentName) continue;
+        if (!agents[metric.agentName]) {
+          agents[metric.agentName] = { orders: 0, tourists: 0, revenue: 0, profit: 0, products: {} };
+        }
+        agents[metric.agentName].orders++;
+        agents[metric.agentName].tourists += metric.tourists;
+        agents[metric.agentName].products[productKey] = (agents[metric.agentName].products[productKey] || 0) + 1;
+        if (metric.isStandaloneInsurance) {
+          agents[metric.agentName].products.insurance = (agents[metric.agentName].products.insurance || 0) + 1;
+        }
+        if (metric.status === 'CNF') {
+          agents[metric.agentName].revenue += metric.priceEur;
+          agents[metric.agentName].profit += metric.profitEur;
+          revenueEur += metric.priceEur;
+          costEur += metric.costEur;
+          profitEur += metric.profitEur;
+        }
+      }
+
+      const topDestinations = Object.entries(destinations)
+        .sort((a, b) => b[1].tourists - a[1].tourists)
+        .slice(0, 5)
+        .map(([country, data]) => ({
+          country,
+          flag: countryEmoji(country),
+          orders: data.orders,
+          tourists: data.tourists,
+          pct: tourists > 0 ? Math.round(data.tourists / tourists * 100) : 0,
+        }));
+
+      const topAgentsByOrders = Object.entries(agents)
+        .sort((a, b) => {
+          if (b[1].orders !== a[1].orders) return b[1].orders - a[1].orders;
+          return b[1].revenue - a[1].revenue;
+        })
+        .slice(0, 5)
+        .map(([name, stats]) => ({
+          name,
+          orders: stats.orders,
+          tourists: stats.tourists,
+          revenue_eur: r2(stats.revenue),
+          profit_eur: r2(stats.profit),
+          main_products: Object.entries(stats.products)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([key, ordersCount]) => ({
+              key,
+              label: PRODUCT_LABELS[key] || key,
+              orders: ordersCount,
+              pct: stats.orders > 0 ? Math.round(ordersCount / stats.orders * 100) : 0,
+            })),
+        }));
+
+      const productBreakdown = Object.fromEntries(
+        Object.entries(products).map(([key, value]) => [
+          key,
+          {
+            orders: value.orders,
+            tourists: value.tourists,
+            revenue_eur: r2(value.revenue_eur),
+            profit_eur: r2(value.profit_eur),
+            profit_pct: value.revenue_eur > 0 ? Math.round(value.profit_eur / value.revenue_eur * 100) : 0,
+          },
+        ]),
+      );
+
+      const topProducts = Object.entries(productBreakdown)
+        .map(([key, value]) => ({ key, label: PRODUCT_LABELS[key] || key, ...value }))
+        .filter((product) => product.orders > 0)
+        .sort((a, b) => {
+          if (b.orders !== a.orders) return b.orders - a.orders;
+          return b.revenue_eur - a.revenue_eur;
+        });
+
+      return {
+        ...blankNetworkRecord(definition),
+        matched_labels: Array.from(matchedLabels).sort(),
+        orders: {
+          total: scopedOrders.length,
+          confirmed: confirmed.length,
+          cancelled: cancelled.length,
+          pending: pending.length,
+        },
+        tourists,
+        financials: {
+          revenue_eur: r2(revenueEur),
+          cost_eur: r2(costEur),
+          profit_eur: r2(profitEur),
+          profit_pct: revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
+          avg_order_eur: confirmed.length > 0 ? r2(revenueEur / confirmed.length) : 0,
+        },
+        top_destinations: topDestinations,
+        top_agents_by_orders: topAgentsByOrders,
+        product_breakdown: productBreakdown,
+        top_products: topProducts,
+        share_of_gto: {
+          orders_pct: totalOrders > 0 ? Math.round(scopedOrders.length / totalOrders * 100) : 0,
+          tourists_pct: totalTourists > 0 ? Math.round(tourists / totalTourists * 100) : 0,
+          revenue_pct: totalRevenue > 0 ? Math.round(revenueEur / totalRevenue * 100) : 0,
+        },
+        data_available: scopedOrders.length > 0,
+      };
+    });
+
+    return {
+      note: 'Networks are matched by bracket labels in agent/company names; money and profit are calculated for confirmed (CNF) orders only.',
+      general: {
+        totals: {
+          orders_total: totalOrders,
+          tourists: totalTourists,
+          revenue_eur: r2(totalRevenue),
+          profit_eur: r2(overallSales.financials?.profit_eur || 0),
+        },
+        networks: networks.map((network) => ({
+          key: network.key,
+          label: network.label,
+          matched_labels: network.matched_labels,
+          orders_total: network.orders.total,
+          tourists: network.tourists,
+          revenue_eur: network.financials.revenue_eur,
+          profit_eur: network.financials.profit_eur,
+          profit_pct: network.financials.profit_pct,
+          share_of_gto: network.share_of_gto,
+          top_products: network.top_products.slice(0, 5),
+          data_available: network.data_available,
+        })),
+      },
+      networks: Object.fromEntries(networks.map((network) => [network.key, network])),
+      data_available: networks.some((network) => network.data_available),
     };
   }
 

@@ -12,6 +12,7 @@ import { formatYouTrackProgressTelegramMessage } from '../lib/youtrack-progress-
 import { CurrencyService } from '../lib/currency.service';
 import { createHttpClient } from '../lib/http';
 import { buildGtoCommentsPrompts } from '../lib/gto-comments-prompt';
+import { GTO_NETWORK_DEFINITIONS, GtoNetworkKey } from '../connectors/gto/gto.connector';
 import {
   listManualReportAccessDefinitions,
   makeScheduleHoursReportKey,
@@ -37,6 +38,7 @@ type PeriodSelectionTarget =
   | { kind: 'sales'; accessKeys: string[] }
   | { kind: 'payments'; accessKeys: string[] }
   | { kind: 'agents'; accessKeys: string[] }
+  | { kind: 'network_sales'; accessKeys: string[]; networkKey: 'general' | GtoNetworkKey; networkLabel: string }
   | { kind: 'schedule'; scheduleId: string; scheduleName: string; accessKey: string };
 
 type BotSession =
@@ -69,6 +71,11 @@ const prismaManualReportAccess = (prisma as any).userManualReportAccess as {
 };
 const ADMIN_USER_PAGE_SIZE = 8;
 const MAX_CUSTOM_PERIOD_DAYS = 31;
+const GTO_NETWORK_ACCESS_KEY = 'sales.networks';
+const GTO_NETWORK_MENU_ITEMS: Array<{ key: 'general' | GtoNetworkKey; label: string }> = [
+  { key: 'general', label: 'General' },
+  ...GTO_NETWORK_DEFINITIONS.map((definition) => ({ key: definition.key, label: definition.label })),
+];
 
 function stripSummerSection(text: string): string {
   return text.replace(/\n{2,}☀️ Лето:[\s\S]*$/u, '').trim();
@@ -869,6 +876,7 @@ async function buildOrdersReportsMenu(userId: string) {
   const hasSales = hasGto && reports.some((report) => ['sales.yesterday', 'sales.today', 'sales.summer'].includes(report.key) && report.enabled);
   const hasPayments = hasGto && reports.some((report) => ['sales.payments_yesterday', 'sales.payments_today'].includes(report.key) && report.enabled);
   const hasAgents = hasGto && reports.some((report) => report.key === 'sales.agents' && report.enabled);
+  const hasNetworks = hasGto && reports.some((report) => report.key === GTO_NETWORK_ACCESS_KEY && report.enabled);
   const hasCommentsMenu = hasComments && commentSchedules.length > 0
     && commentSchedules.some((schedule) => reports.some((report) => report.key === makeScheduleRunReportKey(schedule.id) && report.enabled));
 
@@ -876,6 +884,7 @@ async function buildOrdersReportsMenu(userId: string) {
   if (hasCommentsMenu) rows.push([Markup.button.callback('Comments', 'orders:comments')]);
   if (hasPayments) rows.push([Markup.button.callback('Payments', 'orders:payments')]);
   if (hasAgents) rows.push([Markup.button.callback('Agents activity', 'orders:agents')]);
+  if (hasNetworks) rows.push([Markup.button.callback('Network sales', 'orders:networks')]);
   if (rows.length === 0) return null;
   rows.push([Markup.button.callback('← Back', 'reports:home')]);
   return Markup.inlineKeyboard(rows);
@@ -966,6 +975,36 @@ async function buildOrdersAgentsMenu(userId: string) {
     [Markup.button.callback('Last 7 days', 'gen:sales:agents')],
     [Markup.button.callback('Custom period', 'custom:sales:agents')],
     [Markup.button.callback('← Back', 'reports:orders')],
+  ];
+  return Markup.inlineKeyboard(rows);
+}
+
+async function buildOrdersNetworksMenu(userId: string) {
+  const [allowed, reports] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    getUserManualReportAccess(userId),
+  ]);
+  if (!allowed) return null;
+  if (!reports.find((report) => report.key === GTO_NETWORK_ACCESS_KEY)?.enabled) return null;
+
+  const rows = GTO_NETWORK_MENU_ITEMS.map((item) => [Markup.button.callback(item.label, `orders:network:${item.key}`)]);
+  rows.push([Markup.button.callback('← Back', 'reports:orders')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function buildOrdersNetworkPeriodMenu(userId: string, networkKey: 'general' | GtoNetworkKey) {
+  const [allowed, reports] = await Promise.all([
+    hasSourceAccess(userId, ['gto']),
+    getUserManualReportAccess(userId),
+  ]);
+  if (!allowed) return null;
+  if (!reports.find((report) => report.key === GTO_NETWORK_ACCESS_KEY)?.enabled) return null;
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [
+    [Markup.button.callback('7 days', `gen:sales:network:${networkKey}:7d`)],
+    [Markup.button.callback('30 days', `gen:sales:network:${networkKey}:30d`)],
+    [Markup.button.callback('Custom period', `custom:sales:network:${networkKey}`)],
+    [Markup.button.callback('← Back', 'orders:networks')],
   ];
   return Markup.inlineKeyboard(rows);
 }
@@ -1236,6 +1275,13 @@ async function resolvePresetPeriod(sourceId: string, preset: 'today' | 'yesterda
   return computePeriod('weekly', timezone);
 }
 
+async function resolveRollingDaysPeriod(sourceId: string, days: number): Promise<{ periodStart: Date; periodEnd: Date }> {
+  const timezone = await getSourceTimezone(sourceId);
+  const periodEnd = computeCurrentDayPeriod(timezone).periodEnd;
+  const periodStart = new Date(periodEnd.getTime() - days * 86400000);
+  return { periodStart, periodEnd };
+}
+
 async function runRollingHoursAnalysis(scheduleId: string, hours: number): Promise<{ runId: string; resultId: string; message: string }> {
   const schedule = await prisma.reportSchedule.findUnique({
     where: { id: scheduleId },
@@ -1490,6 +1536,91 @@ async function runGtoAgentActivityReport(
   }
 }
 
+async function runGtoNetworkSalesReport(
+  networkKey: 'general' | GtoNetworkKey,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<{ runId: string; resultId: string; message: string }> {
+  const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+  if (!schedule) throw new Error('Расписание Daily Sales Report не найдено');
+
+  const credRecord = await prisma.sourceCredential.findUnique({ where: { sourceId: schedule.source.id } });
+  if (!credRecord) throw new Error('Учётные данные GTO не настроены');
+
+  const credentials = JSON.parse(decrypt(credRecord.encryptedPayload)) as Record<string, unknown>;
+  const settingRows = await prisma.sourceSetting.findMany({ where: { sourceId: schedule.source.id } });
+  const settings: Record<string, string> = {};
+  settingRows.forEach((s) => { settings[s.key] = s.value; });
+
+  const run = await prisma.reportRun.create({
+    data: {
+      scheduleId: schedule.id,
+      periodStart,
+      periodEnd,
+      status: 'running',
+      triggerType: 'manual',
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await prisma.reportJob.create({
+      data: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        jobType: 'fetch',
+        status: 'running',
+        startedAt: new Date(),
+        attemptCount: 1,
+      },
+    });
+
+    const connector = connectorRegistry.get(schedule.source.type);
+    const result = await connector.fetchData(credentials, settings, { start: periodStart, end: periodEnd });
+    if (!result.success || !result.data) throw new Error(result.error?.message || 'Ошибка получения данных');
+
+    const message = networkKey === 'general'
+      ? formatNetworkGeneralReport(result.data.metrics)
+      : formatSingleNetworkSalesReport(result.data.metrics, networkKey);
+
+    const storedResult = await prisma.reportResult.upsert({
+      where: { runId_sourceId: { runId: run.id, sourceId: schedule.source.id } },
+      create: {
+        runId: run.id,
+        sourceId: schedule.source.id,
+        normalizedData: result.data.metrics as any,
+        formattedMessage: message,
+      },
+      update: {
+        normalizedData: result.data.metrics as any,
+        formattedMessage: message,
+      },
+    });
+
+    await prisma.reportJob.update({
+      where: { runId_sourceId_jobType: { runId: run.id, sourceId: schedule.source.id, jobType: 'fetch' } },
+      data: { status: 'success', completedAt: new Date() },
+    });
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_success', completedAt: new Date(), errorSummary: null },
+    });
+
+    return { runId: run.id, resultId: storedResult.id, message };
+  } catch (err: any) {
+    const errorSummary = err?.message || 'Network sales report generation failed';
+    await prisma.reportJob.updateMany({
+      where: { runId: run.id, status: 'running' },
+      data: { status: 'failed', lastError: errorSummary, completedAt: new Date() },
+    }).catch(() => {});
+    await prisma.reportRun.update({
+      where: { id: run.id },
+      data: { status: 'full_failure', completedAt: new Date(), errorSummary },
+    }).catch(() => {});
+    throw err;
+  }
+}
+
 function formatTopDestinationLines(destinations: any[]): string[] {
   return destinations.slice(0, 3).map(d => `${d.flag || ''}${d.country} ${formatInt(d.orders)} зак / ${formatInt(d.tourists)} тур`.trim());
 }
@@ -1518,6 +1649,115 @@ function formatNegativeMarginLines(orders: any[]): string[] {
 function formatAgentMainProducts(products: any[]): string {
   if (!Array.isArray(products) || products.length === 0) return '—';
   return products.map((product) => `${product.label} (${formatInt(product.orders)}; ${product.pct}%)`).join(', ');
+}
+
+function formatPct(value: number): string {
+  return `${Math.round(value || 0)}%`;
+}
+
+function formatNetworkProductStructureLines(products: any): string[] {
+  const entries = Object.entries(products || {})
+    .map(([key, value]: [string, any]) => ({ key, value }))
+    .filter((entry) => entry.value?.orders > 0)
+    .sort((a, b) => {
+      if ((b.value.orders || 0) !== (a.value.orders || 0)) return (b.value.orders || 0) - (a.value.orders || 0);
+      return (b.value.revenue_eur || 0) - (a.value.revenue_eur || 0);
+    });
+
+  return entries.map(({ value }: { key: string; value: any }) =>
+    `${value.label || 'Продукт'}: ${formatInt(value.orders)} зак / ${formatInt(value.tourists || 0)} тур / ${formatInt(value.revenue_eur || 0)} EUR / profit ${formatInt(value.profit_eur || 0)} EUR (${value.profit_pct || 0}%)`,
+  );
+}
+
+function formatNetworkTopProductLines(products: any[]): string[] {
+  return (products || []).slice(0, 5).map((product: any) =>
+    `${product.label} — ${formatInt(product.orders)} зак (${formatInt(product.revenue_eur || 0)} EUR)`,
+  );
+}
+
+function formatNetworkTopAgentLines(agents: any[]): string[] {
+  const lines: string[] = [];
+  for (const [index, agent] of (agents || []).slice(0, 5).entries()) {
+    lines.push(
+      `${index + 1}. ${agent.name}`,
+      `Заказы: ${formatInt(agent.orders)}, туристы: ${formatInt(agent.tourists || 0)}`,
+      `Деньги: ${formatInt(agent.revenue_eur || 0)} EUR, прибыль: ${formatInt(agent.profit_eur || 0)} EUR`,
+      `Структура заказов: ${formatAgentMainProducts(agent.main_products || [])}`,
+      '',
+    );
+  }
+  while (lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+function formatNetworkGeneralReport(metrics: any): string {
+  const section = metrics?.computed?.section6_requested_period_network_sales;
+  if (!section?.general) throw new Error('Данные отчёта по сетям недоступны');
+
+  const lines: string[] = [
+    '🌐 Network sales / General',
+    `Период: ${formatPeriodLabel(section.period?.from, section.period?.to)}`,
+    '',
+    'Все денежные показатели приведены к EUR. Деньги и прибыль считаются по CNF.',
+  ];
+
+  for (const item of section.general.networks || []) {
+    lines.push(
+      '',
+      `${item.label} — заказы ${formatInt(item.orders_total)} (${formatPct(item.share_of_gto?.orders_pct || 0)} GTO), туристы ${formatInt(item.tourists || 0)} (${formatPct(item.share_of_gto?.tourists_pct || 0)} GTO), выручка ${formatInt(item.revenue_eur || 0)} EUR (${formatPct(item.share_of_gto?.revenue_pct || 0)} GTO), profit ${formatInt(item.profit_eur || 0)} EUR (${item.profit_pct || 0}%)`,
+    );
+    const productLines = formatNetworkTopProductLines(item.top_products || []);
+    if (productLines.length > 0) {
+      lines.push('Топ продукты:', ...productLines);
+    } else {
+      lines.push('Топ продукты: —');
+    }
+  }
+
+  return lines.join('\n').trim();
+}
+
+function formatSingleNetworkSalesReport(metrics: any, networkKey: GtoNetworkKey): string {
+  const section = metrics?.computed?.section6_requested_period_network_sales?.networks?.[networkKey];
+  if (!section) throw new Error('Данные отчёта по сети недоступны');
+
+  const lines: string[] = [
+    `🌐 Network sales / ${section.label}`,
+    `Период: ${formatPeriodLabel(metrics?.computed?.section6_requested_period_network_sales?.period?.from, metrics?.computed?.section6_requested_period_network_sales?.period?.to)}`,
+    '',
+  ];
+
+  if (!section.data_available) {
+    lines.push('За выбранный период по этой сети данных нет.');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    `📦 Заказы: ${formatInt(section.orders?.total || 0)} (✅${formatInt(section.orders?.confirmed || 0)} / ❌${formatInt(section.orders?.cancelled || 0)} / ⚠️${formatInt(section.orders?.pending || 0)})`,
+    `Туристы: ${formatInt(section.tourists || 0)}`,
+    '',
+    `💶 Выручка по CNF: ${formatInt(section.financials?.revenue_eur || 0)} EUR`,
+    `Прибыль по CNF: ${formatInt(section.financials?.profit_eur || 0)} EUR (${section.financials?.profit_pct || 0}%)`,
+    `💼 Средний чек по CNF: ${formatInt(section.financials?.avg_order_eur || 0)} EUR`,
+    'Все денежные показатели приведены к EUR.',
+  );
+
+  const topAgents = formatNetworkTopAgentLines(section.top_agents_by_orders || []);
+  if (topAgents.length > 0) {
+    lines.push('', '---🏆 ТОП 5 агентов по заказам---', ...topAgents);
+  }
+
+  const productStructure = formatNetworkProductStructureLines(section.top_products || []);
+  if (productStructure.length > 0) {
+    lines.push('', '---📦 Структура заказов и прибыли---', ...productStructure);
+  }
+
+  const destinations = formatTopDestinationLines(section.top_destinations || []);
+  if (destinations.length > 0) {
+    lines.push('', '---🌍 Самые популярные направления---', ...destinations);
+  }
+
+  return lines.join('\n').trim();
 }
 
 function formatGtoAgentActivityReport(metrics: any): string {
@@ -2345,6 +2585,28 @@ async function executeCustomPeriodSelection(
       return;
     }
 
+    if (session.target.kind === 'network_sales') {
+      if (!(await hasAnyManualReportAccess(userId, session.target.accessKeys))) {
+        throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
+      }
+      const result = await runGtoNetworkSalesReport(
+        session.target.networkKey,
+        period.periodStart,
+        period.periodEnd,
+      );
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+      return;
+    }
+
     if (!(await hasManualReportAccess(userId, session.target.accessKey))) {
       throw new Error('У вас нет доступа к этому отчёту. Обратитесь к администратору.');
     }
@@ -2710,6 +2972,26 @@ function registerHandlers(instance: Telegraf) {
     await ctx.editMessageText('🧑‍💼 *Orders / Agents activity*\n\nВыберите отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
   });
 
+  instance.action('orders:networks', async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const keyboard = await buildOrdersNetworksMenu(user.id);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Network sales.');
+    await ctx.editMessageText('🌐 *Orders / Network sales*\n\nВыберите сеть или общий отчёт:', { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
+  instance.action(/^orders:network:(general|poikhaly_z_namy|tours_tickets|na_kanikuly|kho|hottur)$/, async (ctx) => {
+    const user = await requireApproved(ctx);
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const networkKey = ctx.match[1] as 'general' | GtoNetworkKey;
+    const keyboard = await buildOrdersNetworkPeriodMenu(user.id, networkKey);
+    if (!keyboard) return ctx.reply('Нет доступных отчётов Network sales.');
+    const label = GTO_NETWORK_MENU_ITEMS.find((item) => item.key === networkKey)?.label || 'Network';
+    await ctx.editMessageText(`🌐 *Orders / Network sales / ${label}*\n\nВыберите период:`, { parse_mode: 'Markdown', ...keyboard } as any).catch(() => {});
+  });
+
   instance.action('reports:redmine', async (ctx) => {
     const user = await requireApproved(ctx);
     if (!user) return ctx.answerCbQuery();
@@ -2771,6 +3053,25 @@ function registerHandlers(instance: Telegraf) {
     await beginCustomPeriodSelection(ctx, timezone, 'GTO Agents: произвольный период', {
       kind: 'agents',
       accessKeys: ['sales.agents'],
+    });
+  });
+
+  instance.action(/^custom:sales:network:(general|poikhaly_z_namy|tours_tickets|na_kanikuly|kho|hottur)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], GTO_NETWORK_ACCESS_KEY))) return;
+
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+    const timezone = await getSourceTimezone(schedule.source.id);
+    const networkKey = ctx.match[1] as 'general' | GtoNetworkKey;
+    const networkLabel = GTO_NETWORK_MENU_ITEMS.find((item) => item.key === networkKey)?.label || 'Network';
+    await beginCustomPeriodSelection(ctx, timezone, `GTO Network Sales / ${networkLabel}: произвольный период`, {
+      kind: 'network_sales',
+      accessKeys: [GTO_NETWORK_ACCESS_KEY],
+      networkKey,
+      networkLabel,
     });
   });
 
@@ -2943,6 +3244,43 @@ function registerHandlers(instance: Telegraf) {
     } catch (err: any) {
       logger.error({ err }, 'Last 7 days sales report failed');
       await ctx.reply(`❌ Ошибка генерации 7-day sales-отчёта: ${err.message}`);
+    }
+  });
+
+  instance.action(/^gen:sales:network:(general|poikhaly_z_namy|tours_tickets|na_kanikuly|kho|hottur):(7d|30d)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = await requireApproved(ctx);
+    if (!user) return;
+    if (!(await ensureManualReportAccess(ctx, user.id, ['gto'], GTO_NETWORK_ACCESS_KEY))) return;
+
+    const schedule = await getScheduleBySourceTypeAndPeriod('gto', 'daily');
+    if (!schedule) return ctx.reply('Daily Sales Report не найден.');
+    const networkKey = ctx.match[1] as 'general' | GtoNetworkKey;
+    const periodKey = ctx.match[2] as '7d' | '30d';
+    const days = periodKey === '30d' ? 30 : 7;
+    const label = GTO_NETWORK_MENU_ITEMS.find((item) => item.key === networkKey)?.label || 'Network';
+    const period = await resolveRollingDaysPeriod(schedule.source.id, days);
+
+    await ctx.editMessageText(
+      `⏳ Готовлю *Network sales / ${label} / ${days} days*...\nЭто может занять до минуты.`,
+      { parse_mode: 'Markdown' },
+    ).catch(() => {});
+
+    try {
+      const result = await runGtoNetworkSalesReport(networkKey, period.periodStart, period.periodEnd);
+      const sent = await replySafe(ctx, result.message, { disable_web_page_preview: true });
+      await prisma.sentMessage.create({
+        data: {
+          resultId: result.resultId,
+          userId: user.id,
+          status: 'sent',
+          telegramMessageId: sent?.message_id ? BigInt(sent.message_id) : undefined,
+          sentAt: new Date(),
+        },
+      }).catch(() => {});
+    } catch (err: any) {
+      logger.error({ err, networkKey, periodKey }, 'Network sales report failed');
+      await ctx.reply(`❌ Ошибка генерации сетевого отчёта: ${err.message}`);
     }
   });
 

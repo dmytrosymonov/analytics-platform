@@ -173,6 +173,14 @@ Key models:
 - `Orders -> Comments` should expose `Today`, `Yesterday`, `Last 7 days`, and `Custom period`
 - `Orders -> Payments` should expose `Today`, `Yesterday`, `Last 7 days`, and `Custom period`
 - `Orders -> Agents activity` should expose `Today`, `Yesterday`, `Last 7 days`, and `Custom period`
+- `Orders -> Network sales` should expose a first submenu with `General`, `Поїхали з нами`, `TOURS&TICKETS`, `На канікули`, `ХО`, and `Хоттур`
+- Each `Orders -> Network sales -> <section>` submenu should expose `7 days`, `30 days`, and `Custom period`
+- Network identity for GTO reports is determined from bracketed labels in `agent_name` with fallback to `company_name`
+- Network matching is case-insensitive and must only inspect text inside square brackets
+- Current supported network matchers are partial matches for `Поїхали з нами`, `TOURS&TICKETS`, `На канікули`, `ХО`, and `Хоттур`
+- `ХО` and `Хоттур` should intentionally match partial bracket labels such as `[АЛЬФА ХО]` or `[Хоттур намбер ту]`
+- `Orders -> Network sales -> General` should show, for each configured network, orders, tourists, revenue, profitability, share of overall GTO sales by orders/tourists/revenue, and top products by order count with revenue in brackets
+- `Orders -> Network sales -> <specific network>` should show orders, tourists, revenue, profitability, top 5 agents by orders with revenue/profit/product mix, product and profit structure, and the most popular destinations
 - Telegram report menus should also offer `Custom Period` actions directly in-chat for supported manual reports, using inline calendar buttons inside Telegram
 - Access to Telegram reports is admin-managed from the back office per user, and the primary permission is the per-source report access flag (`UserReportPreference`)
 - Manual generation in Telegram must depend on source-level access, not on per-schedule subscription toggles

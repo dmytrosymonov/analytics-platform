@@ -31,6 +31,13 @@ export const MANUAL_REPORT_ACCESS_DEFINITIONS: ManualReportAccessDefinition[] = 
     description: 'GTO agent activity reports for preset and custom Telegram periods.',
   },
   {
+    key: 'sales.networks',
+    category: 'sales',
+    sourceType: 'gto',
+    label: 'Network sales',
+    description: 'GTO network sales reports for General and per-network Telegram periods.',
+  },
+  {
     key: 'sales.payments_yesterday',
     category: 'sales',
     sourceType: 'gto',
