@@ -31,6 +31,12 @@ function serializeInitiator(run: any) {
 function serializeRun(run: any) {
   return {
     ...run,
+    triggeredByTelegramUser: run.triggeredByTelegramUser
+      ? {
+          ...run.triggeredByTelegramUser,
+          telegramId: run.triggeredByTelegramUser.telegramId?.toString() || null,
+        }
+      : null,
     initiator: serializeInitiator(run),
     triggeredByTelegramUserId: run.triggeredByTelegramUserId || null,
   };
