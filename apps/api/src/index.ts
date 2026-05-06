@@ -4,6 +4,7 @@ import { startWorkers } from './workers';
 import { startScheduler } from './scheduler/scheduler.service';
 import { startBot } from './bot/bot.service';
 import { startLogDrain } from './lib/log-drain';
+import { startGtoLookerSyncScheduler } from './services/gto-looker-sync.service';
 
 const PORT = parseInt(process.env.PORT || '3000');
 const HOST = process.env.HOST || '0.0.0.0';
@@ -22,6 +23,9 @@ async function main() {
 
     await startScheduler();
     logger.info('Scheduler started');
+
+    startGtoLookerSyncScheduler();
+    logger.info('GTO Looker sync scheduler started');
 
     try {
       await startBot();

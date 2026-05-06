@@ -10,7 +10,11 @@ export interface CurrencyRates {
 }
 
 const CACHE_KEY_PREFIX = 'gto:currency_rates:';
+const HISTORICAL_CACHE_KEY_PREFIX = 'gto:currency_rates:historical:';
+const CURRENCIES_CACHE_KEY = 'gto:currencies:v3';
 const CACHE_TTL = 86400; // 24 hours
+const HISTORICAL_CACHE_TTL = 86400 * 30; // 30 days
+const CURRENCIES_CACHE_TTL = 86400 * 30; // 30 days
 
 export class CurrencyService {
   /**
@@ -20,28 +24,64 @@ export class CurrencyService {
    */
   static async getRates(apiKey: string, v3BaseUrl: string): Promise<CurrencyRates> {
     const today = new Date().toISOString().slice(0, 10);
-    const cacheKey = `${CACHE_KEY_PREFIX}${today}`;
+    return this.getRatesForDate(apiKey, v3BaseUrl, today);
+  }
+
+  static async getRatesForDate(apiKey: string, v3BaseUrl: string, date: string): Promise<CurrencyRates> {
+    const today = new Date().toISOString().slice(0, 10);
+    const normalizedDate = String(date).slice(0, 10);
+    const cacheKey = normalizedDate === today
+      ? `${CACHE_KEY_PREFIX}${normalizedDate}`
+      : `${HISTORICAL_CACHE_KEY_PREFIX}${normalizedDate}`;
 
     const cached = await redis.get(cacheKey).catch(() => null);
     if (cached) {
       return JSON.parse(cached) as CurrencyRates;
     }
 
-    logger.info({ v3BaseUrl }, 'Fetching fresh currency rates from GTO v3');
+    logger.info({ v3BaseUrl, date: normalizedDate }, 'Fetching currency rates from GTO v3');
 
     try {
       const client = createHttpClient({ baseURL: v3BaseUrl, params: { apikey: apiKey }, timeout: 10000 }, 'gto-currency');
-      const resp = await client.get('/currency_rates');
+      const params = normalizedDate === today ? undefined : { date: normalizedDate };
+      const resp = await client.get('/currency_rates', { params });
 
-      const rates = this.parseResponse(resp.data);
+      const codeMap = await this.getCurrencyCodeMap(apiKey, v3BaseUrl);
+      const rates = this.parseResponse(resp.data, codeMap);
       logger.info({ ratesCount: Object.keys(rates.rates).length }, 'Currency rates fetched successfully');
 
-      await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(rates));
+      await redis.setex(
+        cacheKey,
+        normalizedDate === today ? CACHE_TTL : HISTORICAL_CACHE_TTL,
+        JSON.stringify(rates),
+      );
       return rates;
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to fetch currency rates from GTO v3');
       throw err;
     }
+  }
+
+  static async getCurrencyCodeMap(apiKey: string, v3BaseUrl: string): Promise<Record<string, string>> {
+    const cached = await redis.get(CURRENCIES_CACHE_KEY).catch(() => null);
+    if (cached) {
+      return JSON.parse(cached) as Record<string, string>;
+    }
+
+    const client = createHttpClient({ baseURL: v3BaseUrl, params: { apikey: apiKey }, timeout: 10000 }, 'gto-currency');
+    const resp = await client.get('/currencies');
+    const items: any[] = Array.isArray(resp.data)
+      ? resp.data
+      : (Array.isArray(resp.data?.data) ? resp.data.data : []);
+
+    const codeMap = Object.fromEntries(
+      items
+        .map((item) => [String(item.id), String(item.code || '').toUpperCase()])
+        .filter(([, code]) => Boolean(code)),
+    );
+
+    await redis.setex(CURRENCIES_CACHE_KEY, CURRENCIES_CACHE_TTL, JSON.stringify(codeMap));
+    return codeMap;
   }
 
   /**
@@ -55,7 +95,7 @@ export class CurrencyService {
    * We build a directed graph of all known rates and do BFS from EUR
    * to derive rates for all currencies in terms of "units per 1 EUR".
    */
-  private static parseResponse(data: unknown): CurrencyRates {
+  private static parseResponse(data: unknown, codeMap: Record<string, string> = {}): CurrencyRates {
     const obj = data as any;
     const items: any[] = Array.isArray(obj) ? obj : (Array.isArray(obj?.data) ? obj.data : []);
 
@@ -70,8 +110,10 @@ export class CurrencyService {
     };
 
     for (const item of items) {
-      const from = String(item.currency_from || '').toUpperCase();
-      const to   = String(item.currency_to   || '').toUpperCase();
+      const fromRaw = String(item.currency_from || '').toUpperCase();
+      const toRaw   = String(item.currency_to   || '').toUpperCase();
+      const from = codeMap[fromRaw] || fromRaw;
+      const to   = codeMap[toRaw] || toRaw;
       const vf   = parseFloat(item.value_from) || 0;
       const vt   = parseFloat(item.value_to)   || 0;
       if (!from || !to || vf === 0) continue;

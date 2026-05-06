@@ -60,6 +60,26 @@ apps/
 **All monetary values are converted to EUR before AI analysis.**
 Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Redis for 24 hours (refreshed daily on first use).
 
+### Looker Studio / PostgreSQL Export
+
+- A dedicated PostgreSQL export for Looker Studio is implemented in the API layer, not as a Telegram/report source
+- Main tables:
+  - `reporting_gto_orders` — one flattened row per order
+  - `reporting_gto_order_lines` — flattened product/service rows per order
+  - `reporting_gto_sync_runs` — operational sync log
+- Sync service:
+  - `apps/api/src/services/gto-looker-sync.service.ts`
+  - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
+  - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
+- Daily scheduler:
+  - built into API startup via `startGtoLookerSyncScheduler()`
+  - runs every day at `08:00` `Europe/Kyiv`
+  - refresh window is the last 4 calendar days including the current Kyiv business date
+- Currency conversion for this export must use GTO v3 historical rates for the booking creation day (`created_at` date), not today's rate
+- Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
+- Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
+- The export keeps historical rows in PostgreSQL and only rewrites rows for the refreshed order ids inside the current sync window
+
 ---
 
 ## Currency Handling
@@ -100,6 +120,39 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 | `/meals` | Meal plan types |
 
 These can be used in future for enriching reports with geography/hotel context.
+
+### Local GTO Analytics Memory
+
+- Ad-hoc sales analytics for this workspace should first use the local process memo at `docs/gto-local-sales-analytics-process.md`
+- Treat `docs/gto-local-sales-analytics-process.md` as the index of local GTO analytical artifacts before reading scripts or reprocessing raw JSONL data
+- Current local GTO cache for follow-up analytics questions covers orders created from 2025-01-01 through 2026-05-04:
+  - `tmp/gto-sales-2025-01-01_to_2026-05-04/orders-list.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-04/order-details.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-04/currency-rates.json`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-04/manifest.json`
+- Previous cache snapshot remains available in `tmp/gto-sales-2025-01-01_to_2026-04-10/`
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-04-29/`
+- `tmp/cache-gto-sales-data.ts` now supports fallback credentials via env (`GTO_API_KEY`, `GTO_BASE_URL`, `GTO_V3_BASE_URL`, `GTO_TIMEOUT_SECONDS`) when local Prisma `DataSource` credentials are missing
+- `tmp/cache-gto-sales-data.ts` now refreshes incrementally by default when a prior snapshot exists for the same `date_from`; default overlap is 7 days and full refetch can be forced with `GTO_CACHE_INCREMENTAL=0`
+- Static GTO v3 dictionaries currently saved locally:
+  - `tmp/gto-destinations.json`
+  - `tmp/gto-cities.json`
+- For Spain destination/supplier analytics, group by system destinations from GTO v3 `/destinations`, not by countries and not only by raw hotel text
+- Use GTO v3 `/cities` only as a conservative helper for city-to-destination aliases; preserve unmatched rows instead of forcing uncertain matches
+- Current Spain hotel supplier workbook: `output/spreadsheet/gto_spain_hotel_supplier_ranking_2025-12-01_to_2026-04-10.xlsx`
+- Current Spain hotel supplier companion JSON: `reports/gto-spain-hotel-supplier-ranking-2025-12-01_to_2026-04-10.json`
+- Current broad hotel supplier workbook for Spain, Turkey, Greece, Italy, Egypt, Montenegro, Croatia, and Cyprus: `output/spreadsheet/gto_hotel_supplier_ranking_8_countries_2025-10-01_to_2026-04-10.xlsx`
+- Current broad hotel supplier JSON: `reports/gto-hotel-supplier-ranking-8-countries-2025-10-01_to_2026-04-10.json`
+- Current CNX comment management DOCX: `output/doc/gto-cnx-comments-management-report-2025-01-01_to_2026-04-10.docx`
+- Current CNX comment analysis JSON/Markdown:
+  - `reports/gto-cnx-comments-analysis-2025-01-01_to_2026-04-10.json`
+  - `reports/gto-cnx-comments-analysis-2025-01-01_to_2026-04-10.md`
+- Current sales-depth-by-products DOCX: `output/doc/gto_sales_depth_products_2025_2026.docx`
+- Current sales-depth-by-products JSON/Markdown:
+  - `reports/gto-sales-depth-products-2025-01-01_to_2026-04-10.json`
+  - `reports/gto-sales-depth-products-2025-01-01_to_2026-04-10.md`
+- In sales depth by product group, `Packages` is an order-level basket category, while `Hotels`, `Tickets`, `Transfers`, and `Insurance` are non-exclusive presence categories; one order can belong to several groups
+- For cancelled-order supplier analysis, supplier presence is multi-touch exposure, not fault attribution
 
 ---
 
@@ -203,6 +256,7 @@ Key models:
 - Current implementation keeps `section4_summer` in connector metrics for reuse, but presents it only in the dedicated summer report flow
 - GTO relative report windows (`yesterday`, `last 7 days`, `upcoming`) are anchored to the requested run period end, so manual `/generate` and scheduled runs use the same business date reference
 - Manual Telegram `/generate` runs are persisted in `report_runs`, `report_jobs`, `report_results`, and `sent_messages` for later investigation
+- `report_runs` should record who initiated a manual run: admin-side launches keep the admin user, and Telegram manual launches should keep the Telegram user so the back office can show the initiator in Report Runs
 - New Telegram `/start` registration requests must notify the configured admin chat and include inline moderation actions directly in the notification message
 
 ## GTO Date Windows
@@ -314,11 +368,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-04-08T12:59:22Z
+- Generated at (UTC): 2026-05-06T13:14:07Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 9370dbd (9370dbdeb1d7abffdf50b6124bf277d2cd506863)
-- Commit date: 2026-04-08T13:40:22+02:00
+- Commit: cf47378 (cf4737826c67e5af9c02d580facde6c5d1f6b16c)
+- Commit date: 2026-05-06T11:02:53+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

@@ -9,7 +9,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:seed": "tsx src/db/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "sync:gto-looker": "tsx src/scripts/gto-looker-sync.ts"
   },
   "dependencies": {
     "fastify": "^4.29.0",

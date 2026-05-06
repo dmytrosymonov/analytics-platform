@@ -14,6 +14,7 @@ import { settingRoutes } from './modules/settings/setting.routes';
 import { scheduleRoutes } from './modules/schedules/schedule.routes';
 import { telegramWebhookRoute } from './bot/webhook.controller';
 import { connectorLogsRoutes } from './modules/connector-logs/connector-logs.routes';
+import { lookerRoutes } from './modules/looker/looker.routes';
 
 export async function buildApp() {
   const app = Fastify({
@@ -72,6 +73,7 @@ export async function buildApp() {
   await app.register(scheduleRoutes, { prefix: '/api/v1/schedules' });
   await app.register(telegramWebhookRoute, { prefix: '/webhook' });
   await app.register(connectorLogsRoutes, { prefix: '/api/v1/connector-logs' });
+  await app.register(lookerRoutes, { prefix: '/api/v1/looker' });
 
   // Error handler
   app.setErrorHandler((error, request, reply) => {

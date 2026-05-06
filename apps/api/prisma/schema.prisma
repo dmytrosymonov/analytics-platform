@@ -222,6 +222,132 @@ model UserManualReportAccess {
   @@map("user_manual_report_access")
 }
 
+model ReportingGtoOrder {
+  orderId                 BigInt    @id @map("order_id")
+  createdAt               DateTime  @map("created_at")
+  updatedAt               DateTime? @map("updated_at")
+  confirmedAt             DateTime? @map("confirmed_at")
+  dateStart               DateTime? @map("date_start") @db.Date
+  dateEnd                 DateTime? @map("date_end") @db.Date
+  orderStatus             String    @map("order_status")
+  orderStatusName         String?   @map("order_status_name")
+  creator                 String?
+  agentId                 String?   @map("agent_id")
+  agentName               String?   @map("agent_name")
+  agentNetwork            String?   @map("agent_network")
+  agentReference          String?   @map("agent_reference")
+  companyId               String?   @map("company_id")
+  companyName             String?   @map("company_name")
+  orderCurrency           String?   @map("order_currency")
+  balanceCurrency         String?   @map("balance_currency")
+  totalAmountOriginal     Decimal?  @map("total_amount_original") @db.Decimal(18, 2)
+  totalAmountEur          Decimal?  @map("total_amount_eur") @db.Decimal(18, 2)
+  balanceAmountOriginal   Decimal?  @map("balance_amount_original") @db.Decimal(18, 2)
+  balanceAmountEur        Decimal?  @map("balance_amount_eur") @db.Decimal(18, 2)
+  bookingRateDate         DateTime? @map("booking_rate_date") @db.Date
+  touristsCount           Int       @default(0) @map("tourists_count")
+  countriesCount          Int       @default(0) @map("countries_count")
+  countryNames            String?   @map("country_names") @db.Text
+  primaryCountryName      String?   @map("primary_country_name")
+  suppliersCount          Int       @default(0) @map("suppliers_count")
+  supplierNames           String?   @map("supplier_names") @db.Text
+  destinationNames        String?   @map("destination_names") @db.Text
+  productGroups           String?   @map("product_groups") @db.Text
+  hasHotel                Boolean   @default(false) @map("has_hotel")
+  hasAirticket            Boolean   @default(false) @map("has_airticket")
+  hasTransfer             Boolean   @default(false) @map("has_transfer")
+  hasInsurance            Boolean   @default(false) @map("has_insurance")
+  hasOther                Boolean   @default(false) @map("has_other")
+  isPackage               Boolean   @default(false) @map("is_package")
+  hotelLinesCount         Int       @default(0) @map("hotel_lines_count")
+  airticketLinesCount     Int       @default(0) @map("airticket_lines_count")
+  transferLinesCount      Int       @default(0) @map("transfer_lines_count")
+  insuranceLinesCount     Int       @default(0) @map("insurance_lines_count")
+  otherLinesCount         Int       @default(0) @map("other_lines_count")
+  activeLinesCount        Int       @default(0) @map("active_lines_count")
+  cancelledLinesCount     Int       @default(0) @map("cancelled_lines_count")
+  commentCount            Int       @default(0) @map("comment_count")
+  urgentCommentCount      Int       @default(0) @map("urgent_comment_count")
+  hasComments             Boolean   @default(false) @map("has_comments")
+  salesLeadDays           Int?      @map("sales_lead_days")
+  syncedAt                DateTime  @default(now()) @map("synced_at")
+
+  lines ReportingGtoOrderLine[]
+
+  @@index([createdAt])
+  @@index([dateStart])
+  @@index([orderStatus])
+  @@index([agentNetwork])
+  @@index([primaryCountryName])
+  @@map("reporting_gto_orders")
+}
+
+model ReportingGtoOrderLine {
+  lineId              String    @id @map("line_id")
+  orderId             BigInt    @map("order_id")
+  productGroup        String    @map("product_group")
+  rawType             String?   @map("raw_type")
+  serviceTypeName     String?   @map("service_type_name")
+  status              String?   @map("status")
+  statusName          String?   @map("status_name")
+  supplierId          String?   @map("supplier_id")
+  supplierName        String?   @map("supplier_name")
+  destinationRaw      String?   @map("destination_raw") @db.Text
+  dateFrom            DateTime? @map("date_from") @db.Date
+  dateTo              DateTime? @map("date_to") @db.Date
+  currency            String?
+  priceOriginal       Decimal?  @map("price_original") @db.Decimal(18, 2)
+  priceEur            Decimal?  @map("price_eur") @db.Decimal(18, 2)
+  priceBuyOriginal    Decimal?  @map("price_buy_original") @db.Decimal(18, 2)
+  priceBuyEur         Decimal?  @map("price_buy_eur") @db.Decimal(18, 2)
+  discountOriginal    Decimal?  @map("discount_original") @db.Decimal(18, 2)
+  numberOfServices    Int?      @map("number_of_services")
+  hotelName           String?   @map("hotel_name") @db.Text
+  roomName            String?   @map("room_name") @db.Text
+  mealName            String?   @map("meal_name")
+  accommodationName   String?   @map("accommodation_name") @db.Text
+  transferType        String?   @map("transfer_type")
+  pointFrom           String?   @map("point_from") @db.Text
+  pointTo             String?   @map("point_to") @db.Text
+  syncedAt            DateTime  @default(now()) @map("synced_at")
+
+  order ReportingGtoOrder @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([productGroup])
+  @@index([supplierName])
+  @@index([destinationRaw])
+  @@map("reporting_gto_order_lines")
+}
+
+model ReportingGtoSyncRun {
+  id                        String    @id @default(uuid())
+  mode                      String
+  status                    String
+  windowDateFrom            DateTime  @map("window_date_from") @db.Date
+  windowDateTo              DateTime  @map("window_date_to") @db.Date
+  startedAt                 DateTime  @default(now()) @map("started_at")
+  finishedAt                DateTime? @map("finished_at")
+  fetchedOrderRows          Int       @default(0) @map("fetched_order_rows")
+  fetchedUniqueOrderIds     Int       @default(0) @map("fetched_unique_order_ids")
+  syncedOrderRows           Int       @default(0) @map("synced_order_rows")
+  syncedLineRows            Int       @default(0) @map("synced_line_rows")
+  detailErrorRows           Int       @default(0) @map("detail_error_rows")
+  insertedOrderRows         Int       @default(0) @map("inserted_order_rows")
+  insertedLineRows          Int       @default(0) @map("inserted_line_rows")
+  deletedOrderRows          Int       @default(0) @map("deleted_order_rows")
+  deletedLineRows           Int       @default(0) @map("deleted_line_rows")
+  warnings                  Json?
+  errorMessage              String?   @map("error_message") @db.Text
+  triggeredBy               String?   @map("triggered_by")
+  sourceSnapshotDateFrom    DateTime? @map("source_snapshot_date_from") @db.Date
+  sourceSnapshotDateTo      DateTime? @map("source_snapshot_date_to") @db.Date
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("reporting_gto_sync_runs")
+}
+
 model PromptTemplate {
   id              String    @id @default(uuid())
   sourceId        String    @unique @map("source_id")
