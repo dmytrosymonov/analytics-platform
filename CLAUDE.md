@@ -73,12 +73,21 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
-  - runs every day at `08:00` `Europe/Kyiv`
+  - runs every `2` hours in `Europe/Kyiv` timezone (`0 */2 * * *`)
   - refresh window is the last 4 calendar days including the current Kyiv business date
+- Coverage nuance:
+  - the main incremental/daily Looker export is still creation-date based
+  - it does not automatically revisit older already-finished orders outside the rolling 4-day created-at window
+  - a one-time backfill was executed on `2026-05-06` for orders with `date_start` in `2025` but `created_at` in `2024`
+  - this backfill inserted `521` missing orders and `1,196` order lines into the reporting tables
+  - status mix of that backfill: `380 CNF`, `140 CNX`, `1 XNP`
+  - recorded decision: keep daily refresh unchanged; do not expand it to all old finished orders
 - Currency conversion for this export must use GTO v3 historical rates for the booking creation day (`created_at` date), not today's rate
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
 - The export keeps historical rows in PostgreSQL and only rewrites rows for the refreshed order ids inside the current sync window
+- User-facing setup guide for continuing Looker Studio configuration via ChatGPT:
+  - `docs/gto-looker-studio-chatgpt-guide.md`
 
 ---
 
@@ -130,6 +139,7 @@ These can be used in future for enriching reports with geography/hotel context.
   - `tmp/gto-sales-2025-01-01_to_2026-05-04/order-details.jsonl`
   - `tmp/gto-sales-2025-01-01_to_2026-05-04/currency-rates.json`
   - `tmp/gto-sales-2025-01-01_to_2026-05-04/manifest.json`
+- PostgreSQL reporting export also contains a one-time supplement for orders with `date_start` in `2025` and `created_at` before `2025-01-01`; this supplement exists in reporting tables, not in the local JSONL cache
 - Previous cache snapshot remains available in `tmp/gto-sales-2025-01-01_to_2026-04-10/`
 - Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-04-29/`
 - `tmp/cache-gto-sales-data.ts` now supports fallback credentials via env (`GTO_API_KEY`, `GTO_BASE_URL`, `GTO_V3_BASE_URL`, `GTO_TIMEOUT_SECONDS`) when local Prisma `DataSource` credentials are missing
@@ -368,11 +378,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-06T13:14:07Z
+- Generated at (UTC): 2026-05-06T14:20:15Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: cf47378 (cf4737826c67e5af9c02d580facde6c5d1f6b16c)
-- Commit date: 2026-05-06T11:02:53+02:00
+- Commit: d2c7fc2 (d2c7fc21ae284cc6601d0fc8f4537bb3b8a892a7)
+- Commit date: 2026-05-06T15:14:20+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

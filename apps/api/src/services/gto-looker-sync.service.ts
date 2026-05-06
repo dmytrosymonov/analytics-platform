@@ -8,7 +8,7 @@ import { logger } from '../lib/logger';
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
-const DEFAULT_DAILY_CRON = '0 8 * * *';
+const DEFAULT_SYNC_CRON = '0 */2 * * *';
 const DEFAULT_REFRESH_WINDOW_DAYS = 4;
 const DETAIL_CONCURRENCY = 8;
 const INSERT_CHUNK = 500;
@@ -666,7 +666,7 @@ export function startGtoLookerSyncScheduler() {
   schedulerStarted = true;
 
   cron.schedule(
-    DEFAULT_DAILY_CRON,
+    DEFAULT_SYNC_CRON,
     async () => {
       const { dateFrom, dateTo } = computeDailyWindow(DEFAULT_TIMEZONE);
       try {
@@ -683,7 +683,7 @@ export function startGtoLookerSyncScheduler() {
     { timezone: DEFAULT_TIMEZONE },
   );
 
-  logger.info({ cron: DEFAULT_DAILY_CRON, timezone: DEFAULT_TIMEZONE }, 'Scheduled GTO Looker sync');
+  logger.info({ cron: DEFAULT_SYNC_CRON, timezone: DEFAULT_TIMEZONE }, 'Scheduled GTO Looker sync');
 }
 
 export function getDailyLookerWindow() {
