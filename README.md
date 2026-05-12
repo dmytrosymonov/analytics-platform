@@ -175,6 +175,9 @@ Cron (node-cron)
 | Подписки | `user_schedule_preferences` | per-user per-schedule |
 | Отчёты | `report_results` | Сырые данные + LLM анализ |
 | Аудит | `audit_logs` | Все действия |
+| GTO заказы (Looker) | `reporting_gto_orders` | Плоская таблица заказов для Looker Studio |
+| GTO строки заказов (Looker) | `reporting_gto_order_lines` | Плоские строки продуктов/услуг для Looker Studio |
+| Логи синхронизации (Looker) | `reporting_gto_sync_runs` | Операционный журнал синхронизации GTO → PostgreSQL |
 
 ### Безопасность при деплое
 
@@ -308,6 +311,9 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 | GET | `/health` | Health check |
 | GET | `/connector-logs` | Логи HTTP запросов коннекторов (из Redis) |
 | DELETE | `/connector-logs` | Очистить логи (flush Redis list) |
+| GET | `/looker/gto-orders/status` | Статус последней синхронизации GTO → PostgreSQL |
+| GET | `/looker/gto-orders/default-window` | Стандартное окно синхронизации (последние 4 дня) |
+| POST | `/looker/gto-orders/sync` | Запустить синхронизацию GTO → PostgreSQL вручную |
 
 ---
 
@@ -363,12 +369,14 @@ ls -la /opt/backups/analytics/
 
 ## Последнее обновление
 
-Документация актуальна на: **6 мая 2026**
+Документация актуальна на: **12 мая 2026**
 
 ### История изменений
 
 | Дата | Изменение |
 |------|----------|
+| 06.05.2026 | GTO Looker Studio: автоматическая синхронизация GTO → PostgreSQL каждые 2 часа (`0 */2 * * *`, зона `Europe/Kyiv`); окно обновления — последние 4 дня включая текущую бизнес-дату |
+| 06.05.2026 | GTO Looker Studio: новый экспорт данных в PostgreSQL для подключения к Looker Studio — таблицы `reporting_gto_orders`, `reporting_gto_order_lines`, `reporting_gto_sync_runs`; новые API-маршруты `/api/v1/looker/gto-orders/*`; CLI backfill скрипт; конвертация валют по историческим курсам GTO v3 на дату создания заказа; одноразовый backfill за 2025 год выполнен (521 заказ, 1196 строк) |
 | 03.04.2026 | Расписания: добавлено поле `weekend_cron_expression` в `ReportSchedule` — отдельный cron-выражение для выходных дней; настраивается в admin UI на странице источников |
 | 03.04.2026 | Telegram: подписки на расписания перенесены в самообслуживание — пользователи управляют подписками через `/settings`, admin панель отображает их только для чтения (без редактирования) |
 | 03.04.2026 | GTO Comments: исправлены ручные периоды — коннектор теперь использует фактический запрошенный период run (а не жёстко задвинутые «сегодня и вчера») |
