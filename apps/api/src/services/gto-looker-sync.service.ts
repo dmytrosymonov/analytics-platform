@@ -132,6 +132,26 @@ function isActiveStatus(value?: string | null) {
   return status !== 'CNX' && status !== '';
 }
 
+function cleanSupplierName(name?: string | null) {
+  return String(name || '').replace(/\s*\[.*?\]/g, '').trim();
+}
+
+function buildSupplierNameMap(detail: JsonRecord) {
+  const map = new Map<string, string>();
+  for (const supplier of (Array.isArray(detail.supplier) ? detail.supplier : [])) {
+    if (supplier?.id) {
+      map.set(String(supplier.id), String(supplier.name || ''));
+    }
+  }
+  return map;
+}
+
+function supplierTagCurrency(supplierNameMap: Map<string, string>, supplierId: unknown): string | null {
+  const name = supplierNameMap.get(String(supplierId || '')) || '';
+  const match = name.match(/\[(UAH|EUR|KZT|USD|PLN)\]/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
 function extractBracketLabels(name: string): string[] {
   return [...String(name || '').matchAll(/\[([^\]]+)\]/g)]
     .map((match) => (match[1] || '').trim())
@@ -184,6 +204,102 @@ function extractDestinationRaw(line: JsonRecord, productGroup: string): string |
   }
 
   return null;
+}
+
+function computeOrderFinancials(
+  detail: JsonRecord,
+  summary: JsonRecord,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const orderCurrency = String(detail.currency || summary.currency || 'UAH');
+  const balanceCurrency = String(detail.balance_currency || orderCurrency);
+  const balanceAmount = parseAmount(detail.balance_amount) || 0;
+  const totalAmount = parseAmount(detail.total_amount) || 0;
+  const priceEur = balanceAmount > 0
+    ? (toEur(balanceAmount, balanceCurrency) ?? 0)
+    : (toEur(totalAmount, orderCurrency) ?? 0);
+
+  let costEur = 0;
+  const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
+  const services = Array.isArray(detail.service) ? detail.service : [];
+  const confirmedHotels = hotels.filter((row: any) => row.status === 'CNF');
+  const confirmedServices = services.filter((row: any) => row.status === 'CNF');
+  const eurTransferSuppliers = new Set(['suntransfers']);
+  const supplierNameMap = buildSupplierNameMap(detail);
+
+  for (const hotel of confirmedHotels) {
+    const priceBuy = parseAmount(hotel.price_buy) || 0;
+    const priceSell = parseAmount(hotel.price) || 0;
+    if (priceBuy <= 0) continue;
+
+    const hotelCurrency = String(hotel.currency || orderCurrency);
+    const costConverted = toEur(priceBuy, hotelCurrency) ?? 0;
+    const sellConverted = toEur(priceSell, hotelCurrency) ?? 0;
+    const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
+
+    const hotelCost = (sellConverted > 0 && costConverted > sellConverted) ||
+      (priceEur > 0 && costConverted > priceEur)
+      ? costUah
+      : costConverted;
+
+    costEur += hotelCost;
+  }
+
+  for (const service of confirmedServices) {
+    const priceBuy = parseAmount(service.price_buy) || 0;
+    const priceSell = parseAmount(service.price) || 0;
+    if (priceBuy <= 0) continue;
+
+    let serviceCostEur: number;
+
+    if (service.type === 'transfer') {
+      const transferSupplier = cleanSupplierName(service.supplier_name || service.service_supplier_name).toLowerCase();
+      const transferCurrency = eurTransferSuppliers.has(transferSupplier)
+        ? 'EUR'
+        : String(service.currency || orderCurrency);
+      const transferCostConverted = toEur(priceBuy, transferCurrency) ?? 0;
+      const transferSellConverted = toEur(priceSell, transferCurrency) ?? 0;
+      const transferCostUah = toEur(priceBuy, 'UAH') ?? transferCostConverted;
+
+      serviceCostEur = transferCurrency !== 'UAH' && (
+        (transferSellConverted > 0 && transferCostConverted > transferSellConverted * 2) ||
+        (priceEur > 0 && transferCostConverted > priceEur)
+      )
+        ? transferCostUah
+        : transferCostConverted;
+    } else if (service.type === 'airticket') {
+      const buyCurrency = supplierTagCurrency(supplierNameMap, service.supplier_id) || String(service.currency || orderCurrency);
+      const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
+      const airSellConverted = toEur(priceSell, buyCurrency) ?? 0;
+      const airCostUah = toEur(priceBuy, 'UAH') ?? airCostConverted;
+
+      serviceCostEur = (airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
+        (priceEur > 0 && airCostConverted > priceEur)
+        ? airCostUah
+        : airCostConverted;
+    } else {
+      const serviceCurrency = String(service.currency || orderCurrency);
+      const costConverted = toEur(priceBuy, serviceCurrency) ?? 0;
+      const sellConverted = toEur(priceSell, serviceCurrency) ?? 0;
+      const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
+
+      serviceCostEur = (sellConverted > 0 && costConverted > sellConverted) ||
+        (priceEur > 0 && costConverted > priceEur)
+        ? costUah
+        : costConverted;
+    }
+
+    costEur += serviceCostEur;
+  }
+
+  const profitEur = priceEur - costEur;
+  const profitPct = priceEur > 0 ? Math.round((profitEur / priceEur) * 100) : 0;
+
+  return {
+    costEur: round2(costEur),
+    profitEur: round2(profitEur),
+    profitPct,
+  };
 }
 
 async function fetchWithRetry<T>(
@@ -394,6 +510,7 @@ async function buildReportingRows(
     const orderId = Number(detail.order_id || row.orderId);
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
+    const financials = computeOrderFinancials(detail, summary, toEur);
 
     orderRows.push({
       orderId: BigInt(orderId),
@@ -417,6 +534,9 @@ async function buildReportingRows(
       totalAmountEur: decimalValue(toEur(totalAmountOriginal, detail.currency)),
       balanceAmountOriginal: decimalValue(balanceAmountOriginal),
       balanceAmountEur: decimalValue(toEur(balanceAmountOriginal, detail.balance_currency || detail.currency)),
+      costAmountEur: decimalValue(financials.costEur),
+      profitEur: decimalValue(financials.profitEur),
+      profitPct: financials.profitPct,
       bookingRateDate: bookingDate ? parseDateOnly(bookingDate) : null,
       touristsCount: Array.isArray(detail.tourist) ? detail.tourist.length : 0,
       countriesCount: countries.length,

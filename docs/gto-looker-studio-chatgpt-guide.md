@@ -56,6 +56,9 @@ Typical fields:
 - `total_amount_eur`
 - `balance_amount_original`
 - `balance_amount_eur`
+- `cost_amount_eur`
+- `profit_eur`
+- `profit_pct`
 - `primary_country_name`
 - `country_names`
 - `supplier_names`
@@ -154,6 +157,7 @@ Recommended scorecards:
 
 - Orders
 - GMV EUR
+- Profit EUR
 - Average GMV per order
 - Tourists
 - Cancelled orders
@@ -313,6 +317,7 @@ Recommended global controls:
 - EUR is already precomputed in the exported tables.
 - EUR must be treated as authoritative for reporting.
 - FX is based on booking creation date, not current date.
+- For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
 - Main scheduled refresh covers only the rolling last 4 days by `created_at`.
 - This is intentional.
 - A one-time backfill was already done for orders with `date_start` in `2025` but `created_at` in `2024`.

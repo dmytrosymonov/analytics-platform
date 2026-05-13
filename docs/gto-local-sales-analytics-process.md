@@ -135,11 +135,19 @@ Reporting tables:
 - `public.reporting_gto_order_lines`
 - `public.reporting_gto_sync_runs`
 
+Key financial fields now available in `public.reporting_gto_orders`:
+
+- `total_amount_eur`
+- `cost_amount_eur`
+- `profit_eur`
+- `profit_pct`
+
 Operational rules:
 
 - Scheduled refresh runs every `2` hours in `Europe/Kyiv` timezone.
 - Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
+- Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
 - This export is intentionally not a full rolling refresh of all historical finished orders.
 
 One-time supplemental backfill already completed:
@@ -176,6 +184,31 @@ For product-specific analyses:
 - Insurance should be excluded when the user asks for products except insurance.
 
 ## Existing Analysis Artifacts
+
+### April 2026 Created-Orders Export
+
+Use this when the user needs a standalone export of orders created in April 2026, including comments, for upload into external analysis tools.
+
+- Folder: `tmp/gto-created-2026-04-export/`
+- Source snapshot: `tmp/gto-sales-2025-01-01_to_2026-05-04/`
+- Basis: `order.created_at` from `2026-04-01` through `2026-04-30`, inclusive
+- Counts:
+  - orders: `1,216`
+  - orders with comments: `1,181`
+  - total comments: `7,514`
+
+Files:
+
+- `orders-list.jsonl`: raw `/orders_list` subset
+- `order-details.jsonl`: raw `/order_data` subset
+- `orders-with-comments.jsonl`: best single-file upload option; one order per row with embedded comments
+- `comments-flat.jsonl`: one comment per row
+- `comments-flat.csv`: one comment per row in CSV
+- `manifest.json`: metadata and counts
+
+Important note:
+
+- Comments are preserved from `order_data.comment` as present in the local snapshot fetched on `2026-05-06`. This means the export contains all comments currently stored inside those April-created orders, not only comments whose own `created_at` falls in April.
 
 ### Product/Supplier/Destination Management Memo
 
