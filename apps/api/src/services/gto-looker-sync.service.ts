@@ -13,6 +13,34 @@ const DEFAULT_REFRESH_WINDOW_DAYS = 4;
 const DETAIL_CONCURRENCY = 8;
 const INSERT_CHUNK = 500;
 const DELETE_CHUNK = 500;
+const LOOKER_IGNORED_TEST_AGENT_NAMES = new Set([
+  'gto for test-goodwin',
+  'ocoo мтревел test agent for gto-test website',
+  'esky_test',
+  'kg goodwin test agent гранд турс паруса',
+  'test_b2b',
+  'tina test online.gto.global',
+  'o2_test',
+  'test new',
+  'tina test agent mtp gto pl',
+  'goodwin test kz',
+  'tina test agent mtp gto kz',
+  'test1watt',
+  'test verify',
+  'reg travel test',
+  'test goodwin agent gto.online.global',
+  'gto global kazakhstan test goodwin agent (gto.kz)',
+  'kz test agency',
+  'gto global poland test goodwin agent (gto.pl)',
+  'test registration pl',
+  'pl test agent',
+  'your brand travel (test agent. view only)',
+  'testuser',
+  '2025 test agent',
+  'testagency',
+  'test-',
+  'test',
+]);
 
 type JsonRecord = Record<string, any>;
 type SyncMode = 'daily' | 'manual' | 'backfill';
@@ -62,6 +90,18 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function normalizeAgentName(value?: string | null) {
+  return String(value || '').trim().toLocaleLowerCase('uk-UA');
+}
+
+function isIgnoredTestAgentName(value?: string | null) {
+  return LOOKER_IGNORED_TEST_AGENT_NAMES.has(normalizeAgentName(value));
+}
+
+function isIgnoredLookerOrder(summary?: JsonRecord, detail?: JsonRecord) {
+  return isIgnoredTestAgentName(detail?.agent_name) || isIgnoredTestAgentName(summary?.company_name);
 }
 
 function toIsoDate(date: Date): string {
@@ -381,6 +421,7 @@ async function fetchOrderListWindow(
   const perPage = 1000;
   const rows: JsonRecord[] = [];
   let page = 1;
+  let excluded = 0;
 
   for (;;) {
     const resp = await fetchWithRetry(`orders_list:${dateFrom}:${dateTo}:page:${page}`, () =>
@@ -396,14 +437,23 @@ async function fetchOrderListWindow(
         ? body.data
         : [];
 
-    rows.push(...pageRows);
-    logger.info({ page, pageRows: pageRows.length, total: rows.length, dateFrom, dateTo }, 'Fetched GTO orders_list page');
+    const keptRows = pageRows.filter((row: JsonRecord) => !isIgnoredTestAgentName(String(row.company_name || '')));
+    excluded += pageRows.length - keptRows.length;
+    rows.push(...keptRows);
+    logger.info(
+      { page, pageRows: pageRows.length, keptRows: keptRows.length, excludedRows: excluded, total: rows.length, dateFrom, dateTo },
+      'Fetched GTO orders_list page',
+    );
 
     if (pageRows.length < perPage) break;
     page += 1;
     if (page > 500) {
       throw new Error('orders_list exceeded 500 pages');
     }
+  }
+
+  if (excluded > 0) {
+    logger.info({ excluded, dateFrom, dateTo }, 'Excluded test-agent orders from GTO orders_list window before detail fetch');
   }
 
   return rows;
@@ -474,6 +524,9 @@ async function buildReportingRows(
   for (const row of successful) {
     const detail = row.detail as JsonRecord;
     const summary = row.summary || {};
+    if (isIgnoredLookerOrder(summary, detail)) {
+      continue;
+    }
     const createdAtText = String(detail.created_at || summary.created_at || '');
     const bookingDate = createdAtText.slice(0, 10);
     const rates = bookingDate ? await getRatesForDate(bookingDate) : null;
@@ -528,6 +581,8 @@ async function buildReportingRows(
       agentReference: String(detail.agent_reference || '') || null,
       companyId: String(summary.company_id || '') || null,
       companyName: String(summary.company_name || '') || null,
+      structureId: String(detail.structure_id || '') || null,
+      structureName: String(detail.structure_name || '') || null,
       orderCurrency: String(detail.currency || '') || null,
       balanceCurrency: String(detail.balance_currency || '') || null,
       totalAmountOriginal: decimalValue(totalAmountOriginal),

@@ -141,6 +141,8 @@ Key financial fields now available in `public.reporting_gto_orders`:
 - `cost_amount_eur`
 - `profit_eur`
 - `profit_pct`
+- `structure_id`
+- `structure_name`
 
 Operational rules:
 
@@ -148,6 +150,8 @@ Operational rules:
 - Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
+- Looker export excludes test-agent orders by exact normalized match (`trim` + case-insensitive) on `detail.agent_name` and `orders_list.company_name`.
+- This test-agent cleanup policy is limited to the PostgreSQL reporting layer; archived local JSONL snapshots are intentionally left untouched unless a future task explicitly asks to rebuild them.
 - This export is intentionally not a full rolling refresh of all historical finished orders.
 
 One-time supplemental backfill already completed:

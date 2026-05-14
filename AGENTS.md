@@ -72,6 +72,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `cost_amount_eur`
   - `profit_eur`
   - `profit_pct`
+- `reporting_gto_orders` now also includes:
+  - `structure_id`
+  - `structure_name`
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
@@ -94,6 +97,10 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - supplier-specific transfer currency handling such as `SunTransfers`
   - airticket supplier-tag currency handling like `[EUR]`, `[UAH]`, `[KZT]`
   - sanity fallback to `UAH` when `price_buy` currency labels are implausible versus sell price or whole-order revenue
+- Looker/PostgreSQL export must exclude test-agent orders using an exact normalized match (`trim` + case-insensitive) against:
+  - detail-side `agent_name`
+  - summary-side `company_name`
+- This broader blacklist policy is specific to the Looker/PostgreSQL reporting layer and must not be treated as permission to rewrite archived local JSONL analytical snapshots
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
 - The export keeps historical rows in PostgreSQL and only rewrites rows for the refreshed order ids inside the current sync window

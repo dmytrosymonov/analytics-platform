@@ -1,6 +1,6 @@
 # GTO Looker Studio Guide for ChatGPT
 
-> Updated: 2026-05-06
+> Updated: 2026-05-14
 > Purpose: upload this file into ChatGPT when continuing Google Looker Studio setup, so ChatGPT has the right project context without re-reading code.
 
 ## What Is Already Done
@@ -9,6 +9,7 @@
 - Refresh is already scheduled every `2` hours in `Europe/Kyiv` timezone.
 - Currency conversion to EUR is already handled in the backend using GTO v3 historical FX rates on the booking creation date.
 - Data sources are already connected in Looker Studio.
+- Test-agent orders are already excluded in the backend export by exact normalized match against `agent_name` and `company_name`.
 
 ## PostgreSQL Source
 
@@ -51,6 +52,8 @@ Typical fields:
 - `agent_name`
 - `agent_network`
 - `company_name`
+- `structure_id`
+- `structure_name`
 - `order_currency`
 - `total_amount_original`
 - `total_amount_eur`

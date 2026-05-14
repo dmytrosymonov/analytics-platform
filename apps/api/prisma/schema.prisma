@@ -238,6 +238,8 @@ model ReportingGtoOrder {
   agentReference          String?   @map("agent_reference")
   companyId               String?   @map("company_id")
   companyName             String?   @map("company_name")
+  structureId             String?   @map("structure_id")
+  structureName           String?   @map("structure_name")
   orderCurrency           String?   @map("order_currency")
   balanceCurrency         String?   @map("balance_currency")
   totalAmountOriginal     Decimal?  @map("total_amount_original") @db.Decimal(18, 2)

@@ -72,6 +72,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `cost_amount_eur`
   - `profit_eur`
   - `profit_pct`
+- `reporting_gto_orders` now also includes:
+  - `structure_id`
+  - `structure_name`
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
@@ -94,6 +97,10 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - supplier-specific transfer currency handling such as `SunTransfers`
   - airticket supplier-tag currency handling like `[EUR]`, `[UAH]`, `[KZT]`
   - sanity fallback to `UAH` when `price_buy` currency labels are implausible versus sell price or whole-order revenue
+- Looker/PostgreSQL export must exclude test-agent orders using an exact normalized match (`trim` + case-insensitive) against:
+  - detail-side `agent_name`
+  - summary-side `company_name`
+- This broader blacklist policy is specific to the Looker/PostgreSQL reporting layer and must not be treated as permission to rewrite archived local JSONL analytical snapshots
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
 - The export keeps historical rows in PostgreSQL and only rewrites rows for the refreshed order ids inside the current sync window
@@ -393,11 +400,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-13T17:48:15Z
+- Generated at (UTC): 2026-05-14T07:56:09Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 1e97c9b (1e97c9b0aa6f060cc8a4ee2bfff06c125715710e)
-- Commit date: 2026-05-12T15:56:30+02:00
+- Commit: d049904 (d04990450365fc370c7d15f82f3635227ebc2658)
+- Commit date: 2026-05-13T19:48:25+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
