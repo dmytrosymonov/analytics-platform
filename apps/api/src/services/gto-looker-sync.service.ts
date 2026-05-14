@@ -49,6 +49,9 @@ type GtoConfig = {
   timeoutMs: number;
 };
 
+type ProductGroup = 'hotel' | 'airticket' | 'transfer' | 'insurance' | 'excursion' | 'other';
+type ProductSegment = 'Package' | 'Transfer' | 'Insurance' | 'Excursion' | 'Combi' | 'Hotel' | 'Airtickets' | 'Other';
+
 type DetailEnvelope = {
   orderId: number;
   summary?: JsonRecord;
@@ -190,13 +193,26 @@ function salesLeadDays(createdAt?: string | null, startDate?: string | null) {
   return Math.round((startUtc - createdUtc) / 86400000);
 }
 
-function productGroupForService(row: JsonRecord): 'airticket' | 'transfer' | 'insurance' | 'other' {
+const EXCURSION_SERVICE_TYPE_NAMES = new Set([
+  'excursion',
+]);
+
+function normalizeServiceTypeName(value?: string | null) {
+  return String(value || '').trim().toLocaleLowerCase('uk-UA');
+}
+
+function isExcursionServiceType(value?: string | null) {
+  return EXCURSION_SERVICE_TYPE_NAMES.has(normalizeServiceTypeName(value));
+}
+
+function productGroupForService(row: JsonRecord): ProductGroup {
   const rawType = String(row.type || '').toLowerCase();
-  const serviceTypeName = String(row.service_type_name || '').toLowerCase();
+  const serviceTypeName = normalizeServiceTypeName(row.service_type_name);
 
   if (rawType === 'airticket') return 'airticket';
   if (rawType === 'transfer') return 'transfer';
   if (rawType === 'service' && serviceTypeName.includes('insurance')) return 'insurance';
+  if (rawType === 'service' && isExcursionServiceType(serviceTypeName)) return 'excursion';
   return 'other';
 }
 
@@ -213,6 +229,69 @@ function extractDestinationRaw(line: JsonRecord, productGroup: string): string |
   }
 
   return null;
+}
+
+const ORDER_DESTINATION_CANDIDATE_KEYS = [
+  'destination',
+  'destination_name',
+  'destination_label',
+  'package_destination',
+  'package_destination_name',
+  'order_destination',
+  'order_destination_name',
+];
+
+function normalizeOrderDestinationValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    return text || null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = normalizeOrderDestinationValue(item);
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    const record = value as JsonRecord;
+    for (const key of ['name', 'label', 'title', 'destination', 'value']) {
+      const normalized = normalizeOrderDestinationValue(record[key]);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function extractOrderDestination(detail: JsonRecord, summary: JsonRecord): string | null {
+  for (const source of [detail, summary]) {
+    for (const key of ORDER_DESTINATION_CANDIDATE_KEYS) {
+      const normalized = normalizeOrderDestinationValue(source?.[key]);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function classifyProductSegment(
+  activeLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }>,
+  hasOrderDestination: boolean,
+): ProductSegment {
+  if (hasOrderDestination) return 'Package';
+
+  if (activeLines.length === 1) {
+    const onlyGroup = activeLines[0]?.productGroup;
+    if (onlyGroup === 'transfer') return 'Transfer';
+    if (onlyGroup === 'insurance') return 'Insurance';
+    if (onlyGroup === 'excursion') return 'Excursion';
+  }
+
+  const groups = new Set(activeLines.map((line) => line.productGroup));
+  if (groups.has('hotel') && groups.has('airticket')) return 'Combi';
+  if (groups.has('hotel')) return 'Hotel';
+  if (groups.has('airticket')) return 'Airtickets';
+  return 'Other';
 }
 
 function computeOrderFinancials(
@@ -507,16 +586,12 @@ async function buildReportingRows(
 
     const hotelLines = Array.isArray(detail.hotel) ? detail.hotel : [];
     const serviceLines = Array.isArray(detail.service) ? detail.service : [];
-    const allLines: Array<{ productGroup: string; raw: JsonRecord }> = [
-      ...hotelLines.map((line: JsonRecord) => ({ productGroup: 'hotel', raw: line })),
+    const allLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }> = [
+      ...hotelLines.map((line: JsonRecord) => ({ productGroup: 'hotel' as ProductGroup, raw: line })),
       ...serviceLines.map((line: JsonRecord) => ({ productGroup: productGroupForService(line), raw: line })),
     ];
-
-    const activeProductGroups = Array.from(new Set(
-      allLines
-        .filter(({ raw }) => isActiveStatus(raw.status))
-        .map(({ productGroup }) => productGroup),
-    ));
+    const activeLines = allLines.filter(({ raw }) => isActiveStatus(raw.status));
+    const activeProductGroups = Array.from(new Set(activeLines.map(({ productGroup }) => productGroup)));
 
     const destinations = Array.from(new Set(
       allLines
@@ -533,6 +608,9 @@ async function buildReportingRows(
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
     const financials = computeOrderFinancials(detail, summary, toEur);
+    const packageDestinationName = extractOrderDestination(detail, summary);
+    const hasOrderDestination = Boolean(packageDestinationName);
+    const productSegment = classifyProductSegment(activeLines, hasOrderDestination);
 
     orderRows.push({
       orderId: BigInt(orderId),
@@ -568,8 +646,11 @@ async function buildReportingRows(
       primaryCountryName: String(countries[0]?.name || '') || null,
       suppliersCount: suppliers.length,
       supplierNames: suppliers.map((supplier: any) => supplier.name).filter(Boolean).join(' | ') || null,
+      hasOrderDestination,
+      packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
       productGroups: activeProductGroups.join(' | ') || null,
+      productSegment,
       hasHotel: activeProductGroups.includes('hotel'),
       hasAirticket: activeProductGroups.includes('airticket'),
       hasTransfer: activeProductGroups.includes('transfer'),
@@ -581,7 +662,7 @@ async function buildReportingRows(
       transferLinesCount: allLines.filter((line) => line.productGroup === 'transfer').length,
       insuranceLinesCount: allLines.filter((line) => line.productGroup === 'insurance').length,
       otherLinesCount: allLines.filter((line) => line.productGroup === 'other').length,
-      activeLinesCount: allLines.filter((line) => isActiveStatus(line.raw.status)).length,
+      activeLinesCount: activeLines.length,
       cancelledLinesCount: allLines.filter((line) => isCancelledStatus(line.raw.status)).length,
       commentCount: comments.length,
       urgentCommentCount,

@@ -256,8 +256,11 @@ model ReportingGtoOrder {
   primaryCountryName      String?   @map("primary_country_name")
   suppliersCount          Int       @default(0) @map("suppliers_count")
   supplierNames           String?   @map("supplier_names") @db.Text
+  hasOrderDestination     Boolean   @default(false) @map("has_order_destination")
+  packageDestinationName  String?   @map("package_destination_name") @db.Text
   destinationNames        String?   @map("destination_names") @db.Text
   productGroups           String?   @map("product_groups") @db.Text
+  productSegment          String?   @map("product_segment")
   hasHotel                Boolean   @default(false) @map("has_hotel")
   hasAirticket            Boolean   @default(false) @map("has_airticket")
   hasTransfer             Boolean   @default(false) @map("has_transfer")

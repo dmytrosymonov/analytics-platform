@@ -148,6 +148,41 @@ Recommended approach:
 - `GTO Order Lines`
 - optional: `GTO Sync Runs`
 
+## Active Dashboard Pattern
+
+The current main `GTO Orders` report already uses a date-basis switch and should keep that pattern.
+
+Working configuration:
+
+- parameter: `Date Basis`
+  - `Start date`
+  - `Creation date`
+- calculated field: `report_date`
+```text
+CASE
+  WHEN Date Basis = "Start date" THEN date_start
+  WHEN Date Basis = "Creation date" THEN DATE(created_at)
+END
+```
+
+Rules:
+
+- Any scorecard, chart, or table that must react to the switch should use `report_date` as its `Date range dimension`.
+- Any time-based chart or table should also use `report_date` as its visible `Dimension`.
+- If a chart filters by `report_date` but still displays `date_start`, the report will show future travel dates in `Creation date` mode. That means the chart is misconfigured, not that the backend data is wrong.
+
+Current control pattern:
+
+- status filter on `order_status`
+- date-basis filter on `Date Basis`
+- structure filter on `structure_name`
+- date range control for the current selected `report_date`
+
+Default business interpretation:
+
+- profit-focused management views should default to `CNF`
+- cross-status analysis is still allowed when the user explicitly selects other statuses
+
 ## Recommended Dashboard Structure
 
 ### Page 1. Executive Overview
@@ -172,6 +207,12 @@ Recommended charts:
 - Orders by `order_status`
 - Orders by `primary_country_name`
 - Orders by `agent_network`
+
+For the current active report, the user already started with a more operational daily view. In that view the first page can also contain:
+
+- scorecards: `Orders`, `GMV EUR`, `Tourists`, `Profit EUR`
+- a daily chart by `report_date`
+- a daily detail table by `report_date`
 
 ### Page 2. Booking Depth
 
@@ -226,12 +267,26 @@ Optional detailed source:
 
 Recommended charts:
 
-- orders with hotel
-- orders with airticket
-- orders with transfer
-- orders with insurance
-- package vs non-package
+- orders by `product_segment`
+- GMV by `product_segment`
+- profit by `product_segment`
+- orders by legacy `product_groups` only for QA/debug, not for executive pie charts
 - line GMV by `product_group`
+
+Important product logic:
+
+- Prefer `product_segment` over raw `product_groups` for business-facing charts.
+- `product_segment` is an exclusive bucket with values:
+  - `Package`
+  - `Transfer`
+  - `Insurance`
+  - `Excursion`
+  - `Combi`
+  - `Hotel`
+  - `Airtickets`
+  - `Other`
+- `Package` must not be inferred from `destination_names`.
+- `has_order_destination` and `package_destination_name` are the only valid package markers when the source provides them.
 
 ### Page 5. Supplier Analysis
 
@@ -276,11 +331,14 @@ Use these in Looker Studio if needed.
 - `Created Date`
 - `Created Month`
 - `Travel Month`
+- `report_date`
 - `Is Cancelled`
 - `Is Confirmed`
 - `Avg GMV per Tourist`
 - `Package Label`
 - `Lead Time Bucket`
+- `Profit per PAX`
+- `Profitability Ratio`
 
 Suggested formulas:
 
@@ -290,6 +348,17 @@ Suggested formulas:
   - `CASE WHEN order_status = "CNF" THEN "Confirmed" ELSE "Other" END`
 - `Package Label`:
   - `CASE WHEN is_package = true THEN "Package" ELSE "Single product" END`
+- `report_date`:
+```text
+CASE
+  WHEN Date Basis = "Start date" THEN date_start
+  WHEN Date Basis = "Creation date" THEN DATE(created_at)
+END
+```
+- `Profit per PAX`:
+  - `SUM(profit_eur) / SUM(tourists_count)`
+- `Profitability Ratio`:
+  - `SUM(profit_eur) / SUM(total_amount_eur)`
 
 ### Order lines source
 
@@ -321,6 +390,7 @@ Recommended global controls:
 - EUR must be treated as authoritative for reporting.
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
+- For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
 - Main scheduled refresh covers only the rolling last 4 days by `created_at`.
 - This is intentional.
 - A one-time backfill was already done for orders with `date_start` in `2025` but `created_at` in `2024`.
@@ -336,6 +406,8 @@ Recommended global controls:
 - Do not mix order-level and line-level metrics in one chart without careful modeling.
 - Do not recalculate EUR inside Looker Studio from original currencies.
 - Do not assume `destination_names` and `destination_raw` are the same thing.
+- Do not leave `Dimension = date_start` while `Date range dimension = report_date` if you want true creation-date reporting.
+- Do not compare a chart and a table before checking that `Dimension`, `Date range dimension`, `Metric`, and `Filter` match on both objects.
 
 ## Good Prompt to Give ChatGPT Next Time
 

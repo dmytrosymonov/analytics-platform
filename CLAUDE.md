@@ -76,6 +76,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - `reporting_gto_orders` now also includes:
   - `structure_id`
   - `structure_name`
+  - `has_order_destination`
+  - `package_destination_name`
+  - `product_segment`
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
@@ -102,6 +105,19 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Looker/PostgreSQL export must exclude test-agent orders using an exact normalized match (`trim` + case-insensitive) against:
   - detail-side `agent_name`
   - summary-side `company_name`
+- Looker/PostgreSQL export now keeps both:
+  - legacy technical `product_groups` / `has_*` flags
+  - one final business-facing `product_segment`
+- `product_segment` must use this precedence:
+  - `Package` if a dedicated order-level destination/package marker exists
+  - `Transfer` / `Insurance` / `Excursion` for single active-line orders
+  - `Combi` for any order with hotel + airticket
+  - `Hotel` for hotel-led non-combi orders
+  - `Airtickets` for airticket-led non-combi orders
+  - `Other` for everything else
+- `Package` must not be inferred from line-derived `destination_names`
+- current GTO raw data does not reliably expose a dedicated order-level package destination marker for ordinary orders, so `has_order_destination` / `package_destination_name` may remain empty until the API/source adds it
+- `Excursion` must be detected only from controlled `service_type_name` values, not from free-text `name` / `full_name`
 - This broader blacklist policy is specific to the Looker/PostgreSQL reporting layer and must not be treated as permission to rewrite archived local JSONL analytical snapshots
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
@@ -402,11 +418,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-14T08:14:29Z
+- Generated at (UTC): 2026-05-14T15:26:52Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: e65c7d2 (e65c7d20d34928bafc43f88eddf351ca2a32906d)
-- Commit date: 2026-05-14T10:08:49+02:00
+- Commit: e2588c2 (e2588c21c3911d974f8829664f7e9b1dc1ae26f4)
+- Commit date: 2026-05-14T10:15:08+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

@@ -166,12 +166,25 @@ function salesLeadDays(createdAt, startDate) {
   return Math.round((startUtc - createdUtc) / 86400000);
 }
 
+const EXCURSION_SERVICE_TYPE_NAMES = new Set([
+  'excursion',
+]);
+
+function normalizeServiceTypeName(value) {
+  return String(value || '').trim().toLocaleLowerCase('uk-UA');
+}
+
+function isExcursionServiceType(value) {
+  return EXCURSION_SERVICE_TYPE_NAMES.has(normalizeServiceTypeName(value));
+}
+
 function productGroupForService(row) {
   const rawType = String(row.type || '').toLowerCase();
-  const serviceTypeName = String(row.service_type_name || '').toLowerCase();
+  const serviceTypeName = normalizeServiceTypeName(row.service_type_name);
   if (rawType === 'airticket') return 'airticket';
   if (rawType === 'transfer') return 'transfer';
   if (rawType === 'service' && serviceTypeName.includes('insurance')) return 'insurance';
+  if (rawType === 'service' && isExcursionServiceType(serviceTypeName)) return 'excursion';
   return 'other';
 }
 
@@ -186,6 +199,65 @@ function extractDestinationRaw(line, productGroup) {
     return String(line.point_to || line.point_from || '').trim() || null;
   }
   return null;
+}
+
+const ORDER_DESTINATION_CANDIDATE_KEYS = [
+  'destination',
+  'destination_name',
+  'destination_label',
+  'package_destination',
+  'package_destination_name',
+  'order_destination',
+  'order_destination_name',
+];
+
+function normalizeOrderDestinationValue(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    return text || null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = normalizeOrderDestinationValue(item);
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    for (const key of ['name', 'label', 'title', 'destination', 'value']) {
+      const normalized = normalizeOrderDestinationValue(value[key]);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function extractOrderDestination(detail, summary) {
+  for (const source of [detail, summary]) {
+    for (const key of ORDER_DESTINATION_CANDIDATE_KEYS) {
+      const normalized = normalizeOrderDestinationValue(source?.[key]);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function classifyProductSegment(activeLines, hasOrderDestination) {
+  if (hasOrderDestination) return 'Package';
+
+  if (activeLines.length === 1) {
+    const onlyGroup = activeLines[0]?.productGroup;
+    if (onlyGroup === 'transfer') return 'Transfer';
+    if (onlyGroup === 'insurance') return 'Insurance';
+    if (onlyGroup === 'excursion') return 'Excursion';
+  }
+
+  const groups = new Set(activeLines.map((line) => line.productGroup));
+  if (groups.has('hotel') && groups.has('airticket')) return 'Combi';
+  if (groups.has('hotel')) return 'Hotel';
+  if (groups.has('airticket')) return 'Airtickets';
+  return 'Other';
 }
 
 async function sleep(ms) {
@@ -504,8 +576,9 @@ async function main() {
       ...serviceLines.map((line) => ({ productGroup: productGroupForService(line), raw: line })),
     ];
 
+    const activeLines = allLines.filter(({ raw }) => isActiveStatus(raw.status));
     const activeProductGroups = Array.from(new Set(
-      allLines.filter(({ raw }) => isActiveStatus(raw.status)).map(({ productGroup }) => productGroup),
+      activeLines.map(({ productGroup }) => productGroup),
     ));
     const destinations = Array.from(new Set(
       allLines.map(({ productGroup, raw }) => extractDestinationRaw(raw, productGroup)).filter(Boolean),
@@ -519,6 +592,9 @@ async function main() {
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
     const financials = computeOrderFinancials(detail, summary, (amount, currency) => toEur(amount, currency, rates));
+    const packageDestinationName = extractOrderDestination(detail, summary);
+    const hasOrderDestination = Boolean(packageDestinationName);
+    const productSegment = classifyProductSegment(activeLines, hasOrderDestination);
 
     orderRows.push({
       orderId: BigInt(orderId),
@@ -554,8 +630,11 @@ async function main() {
       primaryCountryName: String(countries[0]?.name || '') || null,
       suppliersCount: suppliers.length,
       supplierNames: suppliers.map((supplier) => supplier.name).filter(Boolean).join(' | ') || null,
+      hasOrderDestination,
+      packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
       productGroups: activeProductGroups.join(' | ') || null,
+      productSegment,
       hasHotel: activeProductGroups.includes('hotel'),
       hasAirticket: activeProductGroups.includes('airticket'),
       hasTransfer: activeProductGroups.includes('transfer'),
@@ -567,7 +646,7 @@ async function main() {
       transferLinesCount: allLines.filter((line) => line.productGroup === 'transfer').length,
       insuranceLinesCount: allLines.filter((line) => line.productGroup === 'insurance').length,
       otherLinesCount: allLines.filter((line) => line.productGroup === 'other').length,
-      activeLinesCount: allLines.filter((line) => isActiveStatus(line.raw.status)).length,
+      activeLinesCount: activeLines.length,
       cancelledLinesCount: allLines.filter((line) => isCancelledStatus(line.raw.status)).length,
       commentCount: comments.length,
       urgentCommentCount,

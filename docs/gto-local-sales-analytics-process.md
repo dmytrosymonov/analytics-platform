@@ -148,6 +148,9 @@ Key financial fields now available in `public.reporting_gto_orders`:
 - `profit_pct`
 - `structure_id`
 - `structure_name`
+- `has_order_destination`
+- `package_destination_name`
+- `product_segment`
 
 Operational rules:
 
@@ -155,6 +158,16 @@ Operational rules:
 - Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
+- `product_segment` is the main business-facing product bucket for Looker and should be preferred over raw multi-tag `product_groups` in pie charts and order mix views.
+- `product_segment` precedence is:
+  - `Package`
+  - single-service `Transfer` / `Insurance` / `Excursion`
+  - `Combi`
+  - `Hotel`
+  - `Airtickets`
+  - `Other`
+- `Package` must only use a dedicated order-level destination/package marker and must not be inferred from line-derived `destination_names`.
+- Current GTO raw/export data often has no dedicated order-level package marker, so `has_order_destination` can remain `false` and `package_destination_name` can remain empty until the source starts exposing that signal.
 - Looker export excludes test-agent orders by exact normalized match (`trim` + case-insensitive) on `detail.agent_name` and `orders_list.company_name`.
 - This test-agent cleanup policy is limited to the PostgreSQL reporting layer; archived local JSONL snapshots are intentionally left untouched unless a future task explicitly asks to rebuild them.
 - This export is intentionally not a full rolling refresh of all historical finished orders.
@@ -176,6 +189,49 @@ Recorded decision with the user:
 - Do not widen the daily refresh to revisit old already-finished orders.
 - Keep the regular daily sync focused on recent created-at changes only.
 - Treat the `2024 created / 2025 start` layer as a one-time reporting supplement unless a future request says otherwise.
+
+### Current Looker Dashboard Conventions
+
+Use these rules when continuing the active Looker Studio dashboard work for `GTO Orders`.
+
+- The dashboard supports switching the date basis between travel start and order creation.
+- Parameter:
+  - `Date Basis`
+  - values:
+    - `Start date`
+    - `Creation date`
+- Calculated field:
+  - `report_date`
+  - logic:
+    - `date_start` when `Date Basis = "Start date"`
+    - `DATE(created_at)` when `Date Basis = "Creation date"`
+- For any chart, scorecard, or table that should react to the date-basis switch:
+  - `Dimension` must use `report_date` when the chart is date-based
+  - `Date range dimension` must also use `report_date`
+- If `Dimension` remains `date_start` while `Date range dimension` is switched to `report_date`, creation-date mode will still show future travel dates; this is a configuration mismatch, not a data error.
+- Current dashboard also uses:
+  - status control on `order_status`
+  - structure control on `structure_name`
+- For management profitability views, default status should remain `CNF` unless the user explicitly wants cross-status comparison.
+- `profit_eur` is valid at order level, but the business interpretation remains `CNF`-first.
+- A combo chart for structure profitability should use:
+  - X axis: `structure_name`
+  - metric 1: `SUM(profit_eur)`
+  - metric 2: profitability ratio `SUM(profit_eur) / SUM(total_amount_eur)`
+  - render `profit_eur` as bars
+  - render profitability ratio as a line on the right axis
+- A daily operational table already requested by the user should use:
+  - dimension: `report_date`
+  - metrics:
+    - `Orders`
+    - `PAX`
+    - `GMV`
+    - `Profit`
+    - `Profit per PAX`
+- For the daily table:
+  - `Orders` should be based on order-level counting, not line-level data
+  - if sorting appears wrong, check for an interactive sort override on a metric header before assuming the configured `Sort` block failed
+  - if a chart and table disagree on the same day, compare `Dimension`, `Date range dimension`, `Metric`, and `Filter` first
 
 ## Product Interpretation
 
