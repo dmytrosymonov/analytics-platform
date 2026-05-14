@@ -44,6 +44,7 @@ apps/
 - `deploy.sh` now validates critical build artifacts before touching PM2: Prisma client must exist after `prisma generate`, and admin build must produce `.next/BUILD_ID`
 - `deploy.sh` now restarts existing PM2 apps in place instead of deleting them first, reducing the chance of downtime if a later step fails
 - `deploy.sh` now performs a post-restart API health check on `http://localhost:4000/health` and fails the deploy if the API does not come back
+- GitHub Actions deploy SSH now uses keepalive options (`ServerAliveInterval=30`, `ServerAliveCountMax=10`, `TCPKeepAlive=yes`, `ConnectTimeout=15`) to reduce broken-pipe failures during long remote builds
 
 ---
 

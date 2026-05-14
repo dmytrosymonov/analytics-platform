@@ -44,6 +44,7 @@ apps/
 - `deploy.sh` now validates critical build artifacts before touching PM2: Prisma client must exist after `prisma generate`, and admin build must produce `.next/BUILD_ID`
 - `deploy.sh` now restarts existing PM2 apps in place instead of deleting them first, reducing the chance of downtime if a later step fails
 - `deploy.sh` now performs a post-restart API health check on `http://localhost:4000/health` and fails the deploy if the API does not come back
+- GitHub Actions deploy SSH now uses keepalive options (`ServerAliveInterval=30`, `ServerAliveCountMax=10`, `TCPKeepAlive=yes`, `ConnectTimeout=15`) to reduce broken-pipe failures during long remote builds
 
 ---
 
@@ -400,11 +401,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-14T07:56:09Z
+- Generated at (UTC): 2026-05-14T08:08:34Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: d049904 (d04990450365fc370c7d15f82f3635227ebc2658)
-- Commit date: 2026-05-13T19:48:25+02:00
+- Commit: 2470bd8 (2470bd81889b9ae59dd19f124e0890769edebdcf)
+- Commit date: 2026-05-14T09:56:45+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh
