@@ -275,19 +275,21 @@ function extractOrderDestination(detail: JsonRecord, summary: JsonRecord): strin
 }
 
 function classifyProductSegment(
-  activeLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }>,
+  orderLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }>,
   hasOrderDestination: boolean,
 ): ProductSegment {
   if (hasOrderDestination) return 'Package';
 
-  if (activeLines.length === 1) {
-    const onlyGroup = activeLines[0]?.productGroup;
+  if (orderLines.length === 0) return 'Other';
+
+  const groups = new Set(orderLines.map((line) => line.productGroup));
+  if (groups.size === 1) {
+    const onlyGroup = orderLines[0]?.productGroup;
     if (onlyGroup === 'transfer') return 'Transfer';
     if (onlyGroup === 'insurance') return 'Insurance';
     if (onlyGroup === 'excursion') return 'Excursion';
   }
 
-  const groups = new Set(activeLines.map((line) => line.productGroup));
   if (groups.has('hotel') && groups.has('airticket')) return 'Combi';
   if (groups.has('hotel')) return 'Hotel';
   if (groups.has('airticket')) return 'Airtickets';
@@ -610,7 +612,7 @@ async function buildReportingRows(
     const financials = computeOrderFinancials(detail, summary, toEur);
     const packageDestinationName = extractOrderDestination(detail, summary);
     const hasOrderDestination = Boolean(packageDestinationName);
-    const productSegment = classifyProductSegment(activeLines, hasOrderDestination);
+    const productSegment = classifyProductSegment(allLines, hasOrderDestination);
 
     orderRows.push({
       orderId: BigInt(orderId),

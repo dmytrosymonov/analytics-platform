@@ -287,6 +287,7 @@ Important product logic:
   - `Other`
 - `Package` must not be inferred from `destination_names`.
 - `has_order_destination` and `package_destination_name` are the only valid package markers when the source provides them.
+- `Transfer` / `Insurance` / `Excursion` are composition-based buckets, not status-based ones: a cancelled insurance-only order should still be `Insurance`, and a round-trip transfer with two transfer rows should still be `Transfer`.
 
 ### Page 5. Supplier Analysis
 

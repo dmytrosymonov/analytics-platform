@@ -161,13 +161,14 @@ Operational rules:
 - `product_segment` is the main business-facing product bucket for Looker and should be preferred over raw multi-tag `product_groups` in pie charts and order mix views.
 - `product_segment` precedence is:
   - `Package`
-  - single-service `Transfer` / `Insurance` / `Excursion`
+  - pure `Transfer` / `Insurance` / `Excursion` orders, regardless of status and even if they contain multiple same-type lines such as round-trip transfers
   - `Combi`
   - `Hotel`
   - `Airtickets`
   - `Other`
 - `Package` must only use a dedicated order-level destination/package marker and must not be inferred from line-derived `destination_names`.
 - Current GTO raw/export data often has no dedicated order-level package marker, so `has_order_destination` can remain `false` and `package_destination_name` can remain empty until the source starts exposing that signal.
+- `product_segment` must stay composition-based for cancelled orders too; missing active lines in CNX orders are not a valid reason to downgrade a recognisable insurance / hotel / airticket / transfer basket into `Other`.
 - Looker export excludes test-agent orders by exact normalized match (`trim` + case-insensitive) on `detail.agent_name` and `orders_list.company_name`.
 - This test-agent cleanup policy is limited to the PostgreSQL reporting layer; archived local JSONL snapshots are intentionally left untouched unless a future task explicitly asks to rebuild them.
 - This export is intentionally not a full rolling refresh of all historical finished orders.

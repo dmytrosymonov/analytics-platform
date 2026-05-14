@@ -110,7 +110,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - one final business-facing `product_segment`
 - `product_segment` must use this precedence:
   - `Package` if a dedicated order-level destination/package marker exists
-  - `Transfer` / `Insurance` / `Excursion` for single active-line orders
+  - `Transfer` / `Insurance` / `Excursion` for orders whose full line composition is only that one product type, regardless of status and even if the order has multiple same-type lines such as RT transfers
   - `Combi` for any order with hotel + airticket
   - `Hotel` for hotel-led non-combi orders
   - `Airtickets` for airticket-led non-combi orders
@@ -118,6 +118,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - `Package` must not be inferred from line-derived `destination_names`
 - current GTO raw data does not reliably expose a dedicated order-level package destination marker for ordinary orders, so `has_order_destination` / `package_destination_name` may remain empty until the API/source adds it
 - `Excursion` must be detected only from controlled `service_type_name` values, not from free-text `name` / `full_name`
+- `product_segment` must reflect the order composition even for cancelled orders; CNX-only insurance stays `Insurance`, CNX-only hotel+insurance stays `Hotel`, and similar cancelled mixes should not collapse into `Other` just because active lines are absent
 - This broader blacklist policy is specific to the Looker/PostgreSQL reporting layer and must not be treated as permission to rewrite archived local JSONL analytical snapshots
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
@@ -418,11 +419,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-14T15:26:52Z
+- Generated at (UTC): 2026-05-14T19:01:22Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: e2588c2 (e2588c21c3911d974f8829664f7e9b1dc1ae26f4)
-- Commit date: 2026-05-14T10:15:08+02:00
+- Commit: 2e5a241 (2e5a241f667e378a95565470d8d10d4de3f3efdf)
+- Commit date: 2026-05-14T17:28:31+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

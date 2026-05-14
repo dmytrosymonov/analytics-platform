@@ -110,7 +110,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - one final business-facing `product_segment`
 - `product_segment` must use this precedence:
   - `Package` if a dedicated order-level destination/package marker exists
-  - `Transfer` / `Insurance` / `Excursion` for single active-line orders
+  - `Transfer` / `Insurance` / `Excursion` for orders whose full line composition is only that one product type, regardless of status and even if the order has multiple same-type lines such as RT transfers
   - `Combi` for any order with hotel + airticket
   - `Hotel` for hotel-led non-combi orders
   - `Airtickets` for airticket-led non-combi orders
@@ -118,6 +118,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - `Package` must not be inferred from line-derived `destination_names`
 - current GTO raw data does not reliably expose a dedicated order-level package destination marker for ordinary orders, so `has_order_destination` / `package_destination_name` may remain empty until the API/source adds it
 - `Excursion` must be detected only from controlled `service_type_name` values, not from free-text `name` / `full_name`
+- `product_segment` must reflect the order composition even for cancelled orders; CNX-only insurance stays `Insurance`, CNX-only hotel+insurance stays `Hotel`, and similar cancelled mixes should not collapse into `Other` just because active lines are absent
 - This broader blacklist policy is specific to the Looker/PostgreSQL reporting layer and must not be treated as permission to rewrite archived local JSONL analytical snapshots
 - Historical currency rates are fetched via `GET /api/v3/currency_rates?date=YYYY-MM-DD`
 - Historical endpoint can return numeric currency ids, so the implementation must map ids through `GET /api/v3/currencies` before normalizing rates to EUR
