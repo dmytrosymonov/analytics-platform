@@ -79,6 +79,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
+  - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`

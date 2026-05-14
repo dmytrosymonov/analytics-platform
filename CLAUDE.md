@@ -79,6 +79,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
+  - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
@@ -401,11 +402,11 @@ redis-cli DEL gto:currency_rates:$(date +%Y-%m-%d)
 
 ## Claude Deployment Snapshot
 
-- Generated at (UTC): 2026-05-14T08:08:34Z
+- Generated at (UTC): 2026-05-14T08:14:29Z
 - Source doc: AGENTS.md
 - Branch: main
-- Commit: 2470bd8 (2470bd81889b9ae59dd19f124e0890769edebdcf)
-- Commit date: 2026-05-14T09:56:45+02:00
+- Commit: e65c7d2 (e65c7d20d34928bafc43f88eddf351ca2a32906d)
+- Commit date: 2026-05-14T10:08:49+02:00
 - Server repo path: /Users/dmitry.simonov/Library/CloudStorage/OneDrive-Personal/Pet projects/analytics-platform
 - Deploy workflow: GitHub Actions -> SSH -> /opt/analytics-platform/deploy.sh
 - Post-deploy doc refresh: bash scripts/refresh-claude-docs.sh

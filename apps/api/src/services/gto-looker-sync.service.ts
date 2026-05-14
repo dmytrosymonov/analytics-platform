@@ -4,6 +4,7 @@ import { decrypt } from '../lib/encryption';
 import { createHttpClient } from '../lib/http';
 import { CurrencyService } from '../lib/currency.service';
 import { logger } from '../lib/logger';
+import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
@@ -13,34 +14,6 @@ const DEFAULT_REFRESH_WINDOW_DAYS = 4;
 const DETAIL_CONCURRENCY = 8;
 const INSERT_CHUNK = 500;
 const DELETE_CHUNK = 500;
-const LOOKER_IGNORED_TEST_AGENT_NAMES = new Set([
-  'gto for test-goodwin',
-  'ocoo мтревел test agent for gto-test website',
-  'esky_test',
-  'kg goodwin test agent гранд турс паруса',
-  'test_b2b',
-  'tina test online.gto.global',
-  'o2_test',
-  'test new',
-  'tina test agent mtp gto pl',
-  'goodwin test kz',
-  'tina test agent mtp gto kz',
-  'test1watt',
-  'test verify',
-  'reg travel test',
-  'test goodwin agent gto.online.global',
-  'gto global kazakhstan test goodwin agent (gto.kz)',
-  'kz test agency',
-  'gto global poland test goodwin agent (gto.pl)',
-  'test registration pl',
-  'pl test agent',
-  'your brand travel (test agent. view only)',
-  'testuser',
-  '2025 test agent',
-  'testagency',
-  'test-',
-  'test',
-]);
 
 type JsonRecord = Record<string, any>;
 type SyncMode = 'daily' | 'manual' | 'backfill';
@@ -92,12 +65,8 @@ function round2(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-function normalizeAgentName(value?: string | null) {
-  return String(value || '').trim().toLocaleLowerCase('uk-UA');
-}
-
 function isIgnoredTestAgentName(value?: string | null) {
-  return LOOKER_IGNORED_TEST_AGENT_NAMES.has(normalizeAgentName(value));
+  return isIgnoredLookerTestAgentName(value);
 }
 
 function isIgnoredLookerOrder(summary?: JsonRecord, detail?: JsonRecord) {

@@ -135,6 +135,11 @@ Reporting tables:
 - `public.reporting_gto_order_lines`
 - `public.reporting_gto_sync_runs`
 
+Operational helper commands:
+
+- `npm --workspace apps/api run cleanup:gto-looker-test-orders`
+- `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
+
 Key financial fields now available in `public.reporting_gto_orders`:
 
 - `total_amount_eur`

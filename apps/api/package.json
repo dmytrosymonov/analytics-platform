@@ -10,7 +10,8 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx src/db/seed.ts",
     "db:studio": "prisma studio",
-    "sync:gto-looker": "tsx src/scripts/gto-looker-sync.ts"
+    "sync:gto-looker": "tsx src/scripts/gto-looker-sync.ts",
+    "cleanup:gto-looker-test-orders": "tsx src/scripts/gto-looker-clean-test-orders.ts"
   },
   "dependencies": {
     "fastify": "^4.29.0",
