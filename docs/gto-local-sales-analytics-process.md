@@ -135,6 +135,7 @@ Reporting tables:
 
 - `public.reporting_gto_orders`
 - `public.reporting_gto_order_lines`
+- `public.reporting_gto_order_line_airlines`
 - `public.reporting_gto_sync_runs`
 
 Operational helper commands:
@@ -153,6 +154,8 @@ Key financial fields now available in `public.reporting_gto_orders`:
 - `has_order_destination`
 - `package_destination_name`
 - `product_segment`
+- `airline_codes`
+- `airline_names`
 
 Operational rules:
 
@@ -160,6 +163,11 @@ Operational rules:
 - Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
+- Airticket airline enrichment uses GTO v3 `/airlines`.
+- `reporting_gto_order_lines` now carries aggregated `airline_codes` / `airline_names` per airticket line.
+- `reporting_gto_orders` now carries aggregated order-level `airline_codes` / `airline_names`.
+- Exact carrier filtering for mixed-carrier tickets should use `public.reporting_gto_order_line_airlines`, not `contains` filters on the aggregated text fields.
+- Airline deduplication is by normalized carrier code; repeated same-code segments stay visible through `segment_count` in `reporting_gto_order_line_airlines`.
 - `product_segment` is the main business-facing product bucket for Looker and should be preferred over raw multi-tag `product_groups` in pie charts and order mix views.
 - `product_segment` precedence is:
   - `Package`

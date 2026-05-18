@@ -67,6 +67,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Main tables:
   - `reporting_gto_orders` — one flattened row per order
   - `reporting_gto_order_lines` — flattened product/service rows per order
+  - `reporting_gto_order_line_airlines` — one row per unique airline code inside one airticket line
   - `reporting_gto_sync_runs` — operational sync log
 - `reporting_gto_orders` now includes order-level financial fields for Looker Studio:
   - `total_amount_eur`
@@ -79,6 +80,21 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `has_order_destination`
   - `package_destination_name`
   - `product_segment`
+- Airline enrichment for Looker/PostgreSQL reporting must use GTO v3 `/airlines`
+- Carrier data should be stored on both reporting levels:
+  - aggregated `airline_codes` / `airline_names` in `reporting_gto_orders`
+  - aggregated `airline_codes` / `airline_names` in `reporting_gto_order_lines`
+- Exact airline filtering must also use a dedicated bridge table:
+  - `reporting_gto_order_line_airlines`
+  - one row per unique `(line_id, airline_code)`
+  - includes `order_id`, `airline_code`, `airline_name`, `segment_count`, `synced_at`
+- Airline deduplication policy is by normalized airline code, not by airline name
+- Raw airticket carriers come from `service.flight_details.segment[].airline`
+- Repeated same-carrier segments inside one airticket line are not an error; aggregated fields deduplicate by code, while bridge rows preserve repetition via `segment_count`
+- Duplicate `/airlines` records from GTO v3 must be audited:
+  - same code + same name: collapse silently
+  - same code + conflicting names: keep the first non-empty mapping and emit a warning
+  - different codes + same normalized name: keep both codes and emit a warning
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`

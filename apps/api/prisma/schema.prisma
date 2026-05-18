@@ -256,6 +256,8 @@ model ReportingGtoOrder {
   primaryCountryName      String?   @map("primary_country_name")
   suppliersCount          Int       @default(0) @map("suppliers_count")
   supplierNames           String?   @map("supplier_names") @db.Text
+  airlineCodes            String?   @map("airline_codes") @db.Text
+  airlineNames            String?   @map("airline_names") @db.Text
   hasOrderDestination     Boolean   @default(false) @map("has_order_destination")
   packageDestinationName  String?   @map("package_destination_name") @db.Text
   destinationNames        String?   @map("destination_names") @db.Text
@@ -300,6 +302,8 @@ model ReportingGtoOrderLine {
   statusName          String?   @map("status_name")
   supplierId          String?   @map("supplier_id")
   supplierName        String?   @map("supplier_name")
+  airlineCodes        String?   @map("airline_codes") @db.Text
+  airlineNames        String?   @map("airline_names") @db.Text
   destinationRaw      String?   @map("destination_raw") @db.Text
   dateFrom            DateTime? @map("date_from") @db.Date
   dateTo              DateTime? @map("date_to") @db.Date
@@ -320,12 +324,30 @@ model ReportingGtoOrderLine {
   syncedAt            DateTime  @default(now()) @map("synced_at")
 
   order ReportingGtoOrder @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+  airlines ReportingGtoOrderLineAirline[]
 
   @@index([orderId])
   @@index([productGroup])
   @@index([supplierName])
   @@index([destinationRaw])
   @@map("reporting_gto_order_lines")
+}
+
+model ReportingGtoOrderLineAirline {
+  lineId       String   @map("line_id")
+  orderId      BigInt   @map("order_id")
+  airlineCode  String   @map("airline_code")
+  airlineName  String?  @map("airline_name")
+  segmentCount Int      @default(0) @map("segment_count")
+  syncedAt     DateTime @default(now()) @map("synced_at")
+
+  line ReportingGtoOrderLine @relation(fields: [lineId], references: [lineId], onDelete: Cascade)
+
+  @@id([lineId, airlineCode])
+  @@index([orderId])
+  @@index([airlineCode])
+  @@index([airlineName])
+  @@map("reporting_gto_order_line_airlines")
 }
 
 model ReportingGtoSyncRun {

@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import { decrypt } from '../lib/encryption';
 import { createHttpClient } from '../lib/http';
 import { CurrencyService } from '../lib/currency.service';
+import { AirlineService } from '../lib/airline.service';
 import { logger } from '../lib/logger';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 
@@ -57,6 +58,12 @@ type DetailEnvelope = {
   summary?: JsonRecord;
   detail?: JsonRecord;
   error?: string;
+};
+
+type CarrierStats = {
+  code: string;
+  name: string | null;
+  segmentCount: number;
 };
 
 let schedulerStarted = false;
@@ -229,6 +236,30 @@ function extractDestinationRaw(line: JsonRecord, productGroup: string): string |
   }
 
   return null;
+}
+
+function extractCarrierStats(raw: JsonRecord, codeToName: Record<string, string>) {
+  const segments = Array.isArray(raw.flight_details?.segment) ? raw.flight_details.segment : [];
+  const byCode = new Map<string, CarrierStats>();
+
+  for (const segment of segments) {
+    const code = String(segment?.airline || '').trim().toUpperCase();
+    if (!code) continue;
+    const current = byCode.get(code);
+    if (current) {
+      current.segmentCount += 1;
+      continue;
+    }
+
+    const mappedName = String(codeToName[code] || '').trim();
+    byCode.set(code, {
+      code,
+      name: mappedName || code,
+      segmentCount: 1,
+    });
+  }
+
+  return Array.from(byCode.values()).sort((left, right) => left.code.localeCompare(right.code));
 }
 
 const ORDER_DESTINATION_CANDIDATE_KEYS = [
@@ -558,6 +589,9 @@ async function buildReportingRows(
   const successful = details.filter((row) => row.detail && !row.error);
   const failed = details.filter((row) => row.error);
   const rateCache = new Map<string, Awaited<ReturnType<typeof CurrencyService.getRatesForDate>>>();
+  const airlineDictionary = await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl);
+  const unknownAirlineCodes = new Set<string>();
+  warnings.push(...airlineDictionary.duplicateCodeWarnings, ...airlineDictionary.duplicateNameWarnings);
 
   const getRatesForDate = async (date: string) => {
     const normalized = date.slice(0, 10);
@@ -570,6 +604,7 @@ async function buildReportingRows(
 
   const orderRows: any[] = [];
   const lineRows: any[] = [];
+  const lineAirlineRows: any[] = [];
 
   for (const row of successful) {
     const detail = row.detail as JsonRecord;
@@ -613,6 +648,8 @@ async function buildReportingRows(
     const packageDestinationName = extractOrderDestination(detail, summary);
     const hasOrderDestination = Boolean(packageDestinationName);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
+    const orderAirlineCodes = new Set<string>();
+    const orderAirlineNames = new Set<string>();
 
     orderRows.push({
       orderId: BigInt(orderId),
@@ -648,6 +685,8 @@ async function buildReportingRows(
       primaryCountryName: String(countries[0]?.name || '') || null,
       suppliersCount: suppliers.length,
       supplierNames: suppliers.map((supplier: any) => supplier.name).filter(Boolean).join(' | ') || null,
+      airlineCodes: null,
+      airlineNames: null,
       hasOrderDestination,
       packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
@@ -679,6 +718,27 @@ async function buildReportingRows(
       const priceOriginal = parseAmount(raw.price);
       const priceBuyOriginal = parseAmount(raw.price_buy);
       const discountOriginal = parseAmount(raw.discount);
+      const carrierStats = productGroup === 'airticket'
+        ? extractCarrierStats(raw, airlineDictionary.codeToName)
+        : [];
+      const airlineCodes = carrierStats.map((carrier) => carrier.code);
+      const airlineNames = carrierStats.map((carrier) => carrier.name).filter((value): value is string => Boolean(value));
+
+      for (const carrier of carrierStats) {
+        if (!airlineDictionary.codeToName[carrier.code]) {
+          unknownAirlineCodes.add(carrier.code);
+        }
+        orderAirlineCodes.add(carrier.code);
+        if (carrier.name) orderAirlineNames.add(carrier.name);
+        lineAirlineRows.push({
+          lineId,
+          orderId: BigInt(orderId),
+          airlineCode: carrier.code,
+          airlineName: carrier.name,
+          segmentCount: carrier.segmentCount,
+          syncedAt: new Date(),
+        });
+      }
 
       lineRows.push({
         lineId,
@@ -690,6 +750,8 @@ async function buildReportingRows(
         statusName: String(raw.status_name || '') || null,
         supplierId: String(raw.supplier_id || '') || null,
         supplierName: String(raw.supplier_name || '') || null,
+        airlineCodes: airlineCodes.join(' | ') || null,
+        airlineNames: airlineNames.join(' | ') || null,
         destinationRaw: extractDestinationRaw(raw, productGroup),
         dateFrom: parseDateOnly(raw.date_from),
         dateTo: parseDateOnly(raw.date_to),
@@ -710,15 +772,23 @@ async function buildReportingRows(
         syncedAt: new Date(),
       });
     }
+
+    const lastOrderRow = orderRows[orderRows.length - 1];
+    lastOrderRow.airlineCodes = Array.from(orderAirlineCodes).sort().join(' | ') || null;
+    lastOrderRow.airlineNames = Array.from(orderAirlineNames).sort((left, right) => left.localeCompare(right)).join(' | ') || null;
   }
 
   if (failed.length > 0) {
     warnings.push(`Failed to refresh ${failed.length} orders in current sync window`);
   }
+  if (unknownAirlineCodes.size > 0) {
+    warnings.push(`Unknown airline codes in GTO airticket segments: ${Array.from(unknownAirlineCodes).sort().join(', ')}`);
+  }
 
   return {
     orderRows,
     lineRows,
+    lineAirlineRows,
     failed,
     warnings,
   };
@@ -732,7 +802,7 @@ function chunk<T>(rows: T[], size: number): T[][] {
   return result;
 }
 
-async function replaceReportingRows(orderRows: any[], lineRows: any[]) {
+async function replaceReportingRows(orderRows: any[], lineRows: any[], lineAirlineRows: any[]) {
   const orderIds = orderRows.map((row) => row.orderId);
   let deletedLineRows = 0;
   let deletedOrderRows = 0;
@@ -740,6 +810,10 @@ async function replaceReportingRows(orderRows: any[], lineRows: any[]) {
   let insertedLineRows = 0;
 
   for (const ids of chunk(orderIds, DELETE_CHUNK)) {
+    await (prisma as any).reportingGtoOrderLineAirline.deleteMany({
+      where: { orderId: { in: ids } },
+    });
+
     deletedLineRows += await (prisma as any).reportingGtoOrderLine.deleteMany({
       where: { orderId: { in: ids } },
     }).then((result: any) => result.count);
@@ -761,6 +835,13 @@ async function replaceReportingRows(orderRows: any[], lineRows: any[]) {
     insertedLineRows += await (prisma as any).reportingGtoOrderLine.createMany({
       data: rows,
     }).then((result: any) => result.count);
+  }
+
+  for (const rows of chunk(lineAirlineRows, INSERT_CHUNK)) {
+    if (!rows.length) continue;
+    await (prisma as any).reportingGtoOrderLineAirline.createMany({
+      data: rows,
+    });
   }
 
   return {
@@ -811,8 +892,8 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
 
     const summaries = await fetchOrderListWindow(http, params.dateFrom, params.dateTo);
     const details = await fetchOrderDetails(http, summaries);
-    const { orderRows, lineRows, failed, warnings } = await buildReportingRows(details, config);
-    const replaceStats = await replaceReportingRows(orderRows, lineRows);
+    const { orderRows, lineRows, lineAirlineRows, failed, warnings } = await buildReportingRows(details, config);
+    const replaceStats = await replaceReportingRows(orderRows, lineRows, lineAirlineRows);
 
     const result: SyncResult = {
       runId: run.id,

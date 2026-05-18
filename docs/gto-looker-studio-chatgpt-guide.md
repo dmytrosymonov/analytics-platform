@@ -54,6 +54,8 @@ Typical fields:
 - `company_name`
 - `structure_id`
 - `structure_name`
+- `airline_codes`
+- `airline_names`
 - `order_currency`
 - `total_amount_original`
 - `total_amount_eur`
@@ -103,6 +105,8 @@ Typical fields:
 - `product_group`
 - `supplier_id`
 - `supplier_name`
+- `airline_codes`
+- `airline_names`
 - `status`
 - `currency`
 - `price_original`
@@ -118,6 +122,28 @@ Use this for operational monitoring only.
 Granularity:
 
 - `1 row = 1 sync run`
+
+### 4. `public.reporting_gto_order_line_airlines`
+
+Use this for exact airline filtering and mixed-carrier airticket analysis.
+
+Granularity:
+
+- `1 row = 1 unique airline code inside 1 airticket line`
+
+Best use cases:
+
+- exact carrier filter
+- multi-carrier airticket diagnostics
+- carrier segment counts
+
+Typical fields:
+
+- `line_id`
+- `order_id`
+- `airline_code`
+- `airline_name`
+- `segment_count`
 
 Best use cases:
 

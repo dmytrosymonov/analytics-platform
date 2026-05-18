@@ -40,7 +40,9 @@ const LOOKER_IGNORED_TEST_AGENT_NAMES = new Set([
 
 const rateCache = new Map();
 let currencyCodeMapPromise = null;
+let airlineDictionaryPromise = null;
 const unknownCurrencies = new Map();
+const unknownAirlineCodes = new Set();
 
 function decrypt(payload) {
   const key = Buffer.from(process.env.ENCRYPTION_MASTER_KEY, 'hex');
@@ -201,6 +203,30 @@ function extractDestinationRaw(line, productGroup) {
   return null;
 }
 
+function extractCarrierStats(raw, codeToName) {
+  const segments = Array.isArray(raw?.flight_details?.segment) ? raw.flight_details.segment : [];
+  const byCode = new Map();
+
+  for (const segment of segments) {
+    const code = String(segment?.airline || '').trim().toUpperCase();
+    if (!code) continue;
+    const current = byCode.get(code);
+    if (current) {
+      current.segmentCount += 1;
+      continue;
+    }
+
+    const mappedName = String(codeToName[code] || '').trim();
+    byCode.set(code, {
+      code,
+      name: mappedName || code,
+      segmentCount: 1,
+    });
+  }
+
+  return Array.from(byCode.values()).sort((left, right) => left.code.localeCompare(right.code));
+}
+
 const ORDER_DESTINATION_CANDIDATE_KEYS = [
   'destination',
   'destination_name',
@@ -325,6 +351,50 @@ async function getCurrencyCodeMap(httpV3) {
     );
   })();
   return currencyCodeMapPromise;
+}
+
+async function getAirlineDictionary(httpV3) {
+  if (airlineDictionaryPromise) return airlineDictionaryPromise;
+  airlineDictionaryPromise = (async () => {
+    const resp = await fetchWithRetry('airlines', () => httpV3.get('/airlines'));
+    const items = Array.isArray(resp.data) ? resp.data : (Array.isArray(resp.data?.data) ? resp.data.data : []);
+    const codeToName = {};
+    const duplicateCodeWarnings = new Set();
+    const duplicateNameWarnings = new Set();
+    const normalizedNameToCodes = new Map();
+
+    for (const item of items) {
+      const code = String(item.code || item.iata || item.iata_code || item.airline_code || '').trim().toUpperCase();
+      const name = String(item.name || item.title || item.airline_name || '').trim();
+      if (!code) continue;
+
+      if (!codeToName[code]) {
+        codeToName[code] = name;
+      } else if (name && String(codeToName[code]).trim().toLowerCase() !== name.toLowerCase()) {
+        duplicateCodeWarnings.add(`Duplicate airline code ${code}: keeping "${codeToName[code]}" over "${name}"`);
+      }
+
+      const normalizedName = name.toLowerCase();
+      if (normalizedName) {
+        const codes = normalizedNameToCodes.get(normalizedName) || new Set();
+        codes.add(code);
+        normalizedNameToCodes.set(normalizedName, codes);
+      }
+    }
+
+    for (const [normalizedName, codes] of normalizedNameToCodes.entries()) {
+      if (codes.size > 1) {
+        duplicateNameWarnings.add(`Duplicate airline name "${normalizedName}" for codes ${Array.from(codes).sort().join(', ')}`);
+      }
+    }
+
+    return {
+      codeToName,
+      duplicateCodeWarnings: Array.from(duplicateCodeWarnings).sort(),
+      duplicateNameWarnings: Array.from(duplicateNameWarnings).sort(),
+    };
+  })();
+  return airlineDictionaryPromise;
 }
 
 function parseRatesResponse(data, codeMap) {
@@ -560,6 +630,10 @@ async function main() {
   const successful = details.filter((row) => row.detail && !row.error);
   const orderRows = [];
   const lineRows = [];
+  const lineAirlineRows = [];
+  const airlineDictionary = await getAirlineDictionary(httpV3);
+  airlineDictionary.duplicateCodeWarnings.forEach((warning) => console.warn(warning));
+  airlineDictionary.duplicateNameWarnings.forEach((warning) => console.warn(warning));
 
   for (const row of successful) {
     const detail = row.detail;
@@ -597,6 +671,8 @@ async function main() {
     const packageDestinationName = extractOrderDestination(detail, summary);
     const hasOrderDestination = Boolean(packageDestinationName);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
+    const orderAirlineCodes = new Set();
+    const orderAirlineNames = new Set();
 
     orderRows.push({
       orderId: BigInt(orderId),
@@ -632,6 +708,8 @@ async function main() {
       primaryCountryName: String(countries[0]?.name || '') || null,
       suppliersCount: suppliers.length,
       supplierNames: suppliers.map((supplier) => supplier.name).filter(Boolean).join(' | ') || null,
+      airlineCodes: null,
+      airlineNames: null,
       hasOrderDestination,
       packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
@@ -663,6 +741,27 @@ async function main() {
       const priceOriginal = parseAmount(raw.price);
       const priceBuyOriginal = parseAmount(raw.price_buy);
       const discountOriginal = parseAmount(raw.discount);
+      const carrierStats = productGroup === 'airticket'
+        ? extractCarrierStats(raw, airlineDictionary.codeToName)
+        : [];
+      const airlineCodes = carrierStats.map((carrier) => carrier.code);
+      const airlineNames = carrierStats.map((carrier) => carrier.name).filter(Boolean);
+
+      for (const carrier of carrierStats) {
+        if (!airlineDictionary.codeToName[carrier.code]) {
+          unknownAirlineCodes.add(carrier.code);
+        }
+        orderAirlineCodes.add(carrier.code);
+        if (carrier.name) orderAirlineNames.add(carrier.name);
+        lineAirlineRows.push({
+          lineId,
+          orderId: BigInt(orderId),
+          airlineCode: carrier.code,
+          airlineName: carrier.name,
+          segmentCount: carrier.segmentCount,
+          syncedAt: new Date(),
+        });
+      }
 
       lineRows.push({
         lineId,
@@ -674,6 +773,8 @@ async function main() {
         statusName: String(raw.status_name || '') || null,
         supplierId: String(raw.supplier_id || '') || null,
         supplierName: String(raw.supplier_name || '') || null,
+        airlineCodes: airlineCodes.join(' | ') || null,
+        airlineNames: airlineNames.join(' | ') || null,
         destinationRaw: extractDestinationRaw(raw, productGroup),
         dateFrom: parseDateOnly(raw.date_from),
         dateTo: parseDateOnly(raw.date_to),
@@ -694,11 +795,16 @@ async function main() {
         syncedAt: new Date(),
       });
     }
+
+    const lastOrderRow = orderRows[orderRows.length - 1];
+    lastOrderRow.airlineCodes = Array.from(orderAirlineCodes).sort().join(' | ') || null;
+    lastOrderRow.airlineNames = Array.from(orderAirlineNames).sort((left, right) => left.localeCompare(right)).join(' | ') || null;
   }
 
   const orderIds = orderRows.map((row) => row.orderId);
 
   for (const ids of chunk(orderIds, DELETE_CHUNK)) {
+    await prisma.reportingGtoOrderLineAirline.deleteMany({ where: { orderId: { in: ids } } });
     await prisma.reportingGtoOrderLine.deleteMany({ where: { orderId: { in: ids } } });
     await prisma.reportingGtoOrder.deleteMany({ where: { orderId: { in: ids } } });
   }
@@ -713,6 +819,9 @@ async function main() {
     const result = await prisma.reportingGtoOrderLine.createMany({ data: rows });
     insertedLines += result.count;
   }
+  for (const rows of chunk(lineAirlineRows, INSERT_CHUNK)) {
+    await prisma.reportingGtoOrderLineAirline.createMany({ data: rows });
+  }
 
   console.log(JSON.stringify({
     candidateOrders: candidateRows.length,
@@ -721,6 +830,7 @@ async function main() {
     failedDetails: details.filter((row) => row.error).length,
     insertedOrders,
     insertedLines,
+    unknownAirlineCodes: Array.from(unknownAirlineCodes).sort(),
     unknownCurrencies: Object.fromEntries(unknownCurrencies),
   }, null, 2));
 }
