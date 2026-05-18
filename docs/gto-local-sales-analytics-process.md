@@ -166,12 +166,17 @@ Key financial fields now available in `public.reporting_gto_orders`:
 
 Operational rules:
 
-- Scheduled refresh runs every `30` minutes in `Europe/Kyiv` timezone.
-- Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
+- Scheduled refresh runs every `60` minutes in `Europe/Kyiv` timezone.
+- Each refresh rewrites only the order ids found in the rolling last-2-days created-at window.
+- Protective runtime settings for the current regular sync:
+  - detail fetch concurrency `4`
+  - detail batch size `100`
+  - short pause between committed batches
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
 - Airticket airline enrichment uses GTO v3 `/airlines`.
 - Package destination enrichment now uses raw `destination_id` from private API resolved through GTO v3 `/destinations`.
+- In regular non-backfill syncs, airline and destination enrichment should be reused from existing reporting rows when already populated; recomputation is mainly for full backfills and new or still-unenriched orders.
 - `currency_buy` is now the preferred cost currency for reporting profit when present on hotel/service rows.
 - `reporting_gto_order_lines` now carries aggregated `airline_codes` / `airline_names` per airticket line.
 - `reporting_gto_orders` now carries aggregated order-level `airline_codes` / `airline_names`.

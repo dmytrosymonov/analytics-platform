@@ -11,10 +11,11 @@ import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
-const DEFAULT_SYNC_CRON = '*/30 * * * *';
-const DEFAULT_REFRESH_WINDOW_DAYS = 4;
-const DETAIL_CONCURRENCY = 8;
-const DETAIL_BATCH_SIZE = 250;
+const DEFAULT_SYNC_CRON = '0 * * * *';
+const DEFAULT_REFRESH_WINDOW_DAYS = 2;
+const DETAIL_CONCURRENCY = 4;
+const DETAIL_BATCH_SIZE = 100;
+const BATCH_PAUSE_MS = 750;
 const INSERT_CHUNK = 500;
 const DELETE_CHUNK = 500;
 
@@ -73,6 +74,21 @@ type BuildContext = {
   airlineDictionary: Awaited<ReturnType<typeof AirlineService.getAirlineDictionary>>;
   destinationDictionary: Awaited<ReturnType<typeof DestinationService.getDestinationDictionary>>;
   unknownAirlineCodes: Set<string>;
+  reuseExistingEnrichment: boolean;
+  existingOrderEnrichment: Map<number, ExistingOrderEnrichment>;
+  existingLineEnrichment: Map<string, ExistingLineEnrichment>;
+};
+
+type ExistingOrderEnrichment = {
+  destinationId: string | null;
+  hasOrderDestination: boolean;
+  packageDestinationName: string | null;
+};
+
+type ExistingLineEnrichment = {
+  airlineCodes: string[];
+  airlineNames: string[];
+  carriers: CarrierStats[];
 };
 
 let schedulerStarted = false;
@@ -619,6 +635,81 @@ async function fetchOrderDetails(
   });
 }
 
+async function fetchExistingEnrichment(orderIds: bigint[]) {
+  const [orders, lines, lineAirlines] = await Promise.all([
+    (prisma as any).reportingGtoOrder.findMany({
+      where: { orderId: { in: orderIds } },
+      select: {
+        orderId: true,
+        destinationId: true,
+        hasOrderDestination: true,
+        packageDestinationName: true,
+      },
+    }),
+    (prisma as any).reportingGtoOrderLine.findMany({
+      where: { orderId: { in: orderIds } },
+      select: {
+        lineId: true,
+        airlineCodes: true,
+        airlineNames: true,
+      },
+    }),
+    (prisma as any).reportingGtoOrderLineAirline.findMany({
+      where: { orderId: { in: orderIds } },
+      select: {
+        lineId: true,
+        airlineCode: true,
+        airlineName: true,
+        segmentCount: true,
+      },
+    }),
+  ]);
+
+  const existingOrderEnrichment = new Map<number, ExistingOrderEnrichment>();
+  for (const row of orders) {
+    existingOrderEnrichment.set(Number(row.orderId), {
+      destinationId: row.destinationId || null,
+      hasOrderDestination: Boolean(row.hasOrderDestination),
+      packageDestinationName: row.packageDestinationName || null,
+    });
+  }
+
+  const carriersByLineId = new Map<string, CarrierStats[]>();
+  for (const row of lineAirlines) {
+    const lineId = String(row.lineId);
+    const carriers = carriersByLineId.get(lineId) || [];
+    carriers.push({
+      code: String(row.airlineCode || '').trim().toUpperCase(),
+      name: String(row.airlineName || '').trim() || null,
+      segmentCount: Number(row.segmentCount || 0),
+    });
+    carriersByLineId.set(lineId, carriers);
+  }
+
+  const existingLineEnrichment = new Map<string, ExistingLineEnrichment>();
+  for (const row of lines) {
+    const lineId = String(row.lineId);
+    const airlineCodes = String(row.airlineCodes || '')
+      .split('|')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const airlineNames = String(row.airlineNames || '')
+      .split('|')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    existingLineEnrichment.set(lineId, {
+      airlineCodes,
+      airlineNames,
+      carriers: (carriersByLineId.get(lineId) || []).sort((left, right) => left.code.localeCompare(right.code)),
+    });
+  }
+
+  return {
+    existingOrderEnrichment,
+    existingLineEnrichment,
+  };
+}
+
 function decimalValue(value: number | null): string | null {
   return value === null || value === undefined ? null : round2(value).toFixed(2);
 }
@@ -683,11 +774,21 @@ async function buildReportingRows(
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
     const financials = computeOrderFinancials(detail, summary, toEur);
-    const { destinationId, packageDestinationName, hasOrderDestination } = resolveOrderDestination(
+    const existingOrderEnrichment = context.existingOrderEnrichment.get(orderId);
+    const resolvedDestination = resolveOrderDestination(
       detail,
       summary,
       context.destinationDictionary.idToName,
     );
+    const destinationId = context.reuseExistingEnrichment && existingOrderEnrichment?.destinationId
+      ? existingOrderEnrichment.destinationId
+      : resolvedDestination.destinationId;
+    const packageDestinationName = context.reuseExistingEnrichment && existingOrderEnrichment?.packageDestinationName
+      ? existingOrderEnrichment.packageDestinationName
+      : resolvedDestination.packageDestinationName;
+    const hasOrderDestination = context.reuseExistingEnrichment && existingOrderEnrichment?.hasOrderDestination
+      ? existingOrderEnrichment.hasOrderDestination
+      : resolvedDestination.hasOrderDestination;
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
     const orderAirlineNames = new Set<string>();
@@ -760,11 +861,20 @@ async function buildReportingRows(
       const priceOriginal = parseAmount(raw.price);
       const priceBuyOriginal = parseAmount(raw.price_buy);
       const discountOriginal = parseAmount(raw.discount);
+      const existingLineEnrichment = context.existingLineEnrichment.get(lineId);
       const carrierStats = productGroup === 'airticket'
-        ? extractCarrierStats(raw, context.airlineDictionary.codeToName)
+        ? (
+          context.reuseExistingEnrichment && existingLineEnrichment?.carriers.length
+            ? existingLineEnrichment.carriers
+            : extractCarrierStats(raw, context.airlineDictionary.codeToName)
+        )
         : [];
-      const airlineCodes = carrierStats.map((carrier) => carrier.code);
-      const airlineNames = carrierStats.map((carrier) => carrier.name).filter((value): value is string => Boolean(value));
+      const airlineCodes = productGroup === 'airticket' && context.reuseExistingEnrichment && existingLineEnrichment?.airlineCodes.length
+        ? existingLineEnrichment.airlineCodes
+        : carrierStats.map((carrier) => carrier.code);
+      const airlineNames = productGroup === 'airticket' && context.reuseExistingEnrichment && existingLineEnrichment?.airlineNames.length
+        ? existingLineEnrichment.airlineNames
+        : carrierStats.map((carrier) => carrier.name).filter((value): value is string => Boolean(value));
 
       for (const carrier of carrierStats) {
         if (!context.airlineDictionary.codeToName[carrier.code]) {
@@ -949,6 +1059,9 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
       airlineDictionary: await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl),
       destinationDictionary: await DestinationService.getDestinationDictionary(config.apiKey, config.v3BaseUrl),
       unknownAirlineCodes: new Set(),
+      reuseExistingEnrichment: params.mode !== 'backfill',
+      existingOrderEnrichment: new Map(),
+      existingLineEnrichment: new Map(),
     };
     const warnings = [
       ...buildContext.airlineDictionary.duplicateCodeWarnings,
@@ -965,6 +1078,18 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
 
     for (let offset = 0; offset < summaries.length; offset += DETAIL_BATCH_SIZE) {
       const summaryBatch = summaries.slice(offset, offset + DETAIL_BATCH_SIZE);
+      const batchOrderIds = summaryBatch
+        .map((row) => Number(row.order_id))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .map((value) => BigInt(value));
+      if (buildContext.reuseExistingEnrichment) {
+        const existing = await fetchExistingEnrichment(batchOrderIds);
+        buildContext.existingOrderEnrichment = existing.existingOrderEnrichment;
+        buildContext.existingLineEnrichment = existing.existingLineEnrichment;
+      } else {
+        buildContext.existingOrderEnrichment = new Map();
+        buildContext.existingLineEnrichment = new Map();
+      }
       const details = await fetchOrderDetails(http, summaryBatch, offset, summaries.length);
       const { orderRows, lineRows, lineAirlineRows, failed } = await buildReportingRows(details, config, buildContext);
       const replaceStats = await replaceReportingRows(orderRows, lineRows, lineAirlineRows);
@@ -998,6 +1123,10 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
         syncedOrderRows,
         syncedLineRows,
       }, 'Committed GTO Looker sync batch');
+
+      if (offset + DETAIL_BATCH_SIZE < summaries.length && BATCH_PAUSE_MS > 0) {
+        await sleep(BATCH_PAUSE_MS);
+      }
     }
 
     if (detailErrorRows > 0) {

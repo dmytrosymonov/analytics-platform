@@ -6,7 +6,7 @@
 ## What Is Already Done
 
 - PostgreSQL export is already built and running.
-- Refresh is already scheduled every `30` minutes in `Europe/Kyiv` timezone.
+- Refresh is already scheduled every `60` minutes in `Europe/Kyiv` timezone.
 - Currency conversion to EUR is already handled in the backend using GTO v3 historical FX rates on the booking creation date.
 - Data sources are already connected in Looker Studio.
 - Test-agent orders are already excluded in the backend export by exact normalized match against `agent_name` and `company_name`.
@@ -421,7 +421,12 @@ Recommended global controls:
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
-- Main scheduled refresh covers only the rolling last 4 days by `created_at`.
+- Main scheduled refresh covers only the rolling last 2 days by `created_at`.
+- Regular sync uses lighter runtime settings:
+  - detail fetch concurrency `4`
+  - detail batch size `100`
+  - short pause between committed batches
+- Airline and destination enrichment should normally be reused from already-populated reporting rows during regular syncs, with recomputation focused on full backfills and new or still-unenriched orders.
 - This is intentional.
 - A one-time backfill was already done for orders with `date_start` in `2025` but `created_at` in `2024`.
 - That one-time supplement added:

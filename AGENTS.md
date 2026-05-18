@@ -96,6 +96,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - `destination_name` in private API may be empty and must not block package classification if `destination_id` resolves
 - `reporting_gto_order_lines` must persist raw `currency_buy` when present
 - Repeated same-carrier segments inside one airticket line are not an error; aggregated fields deduplicate by code, while bridge rows preserve repetition via `segment_count`
+- In regular non-backfill syncs, airline and destination enrichment should be reused from existing reporting rows when already populated; they should be recomputed for full backfills and for genuinely new or still-unenriched orders
 - Duplicate `/airlines` records from GTO v3 must be audited:
   - same code + same name: collapse silently
   - same code + conflicting names: keep the first non-empty mapping and emit a warning
@@ -107,9 +108,13 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
-  - runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
-  - refresh window is the last 4 calendar days including the current Kyiv business date
+  - runs every `60` minutes in `Europe/Kyiv` timezone (`0 * * * *`)
+  - refresh window is the last 2 calendar days including the current Kyiv business date
   - sync execution must process order windows in small batches and commit each batch separately instead of building one giant in-memory write set for the full window
+  - current protective sync settings are:
+    - detail fetch concurrency `4`
+    - detail batch size `100`
+    - a short pause between committed batches
   - `reporting_gto_sync_runs` should be updated after each committed batch so long backfills show partial progress and can be diagnosed without waiting for a final all-or-nothing finish
 - Coverage nuance:
   - the main incremental/daily Looker export is still creation-date based
