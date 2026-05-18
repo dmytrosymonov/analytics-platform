@@ -9,7 +9,7 @@ import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
-const DEFAULT_SYNC_CRON = '0 */2 * * *';
+const DEFAULT_SYNC_CRON = '*/30 * * * *';
 const DEFAULT_REFRESH_WINDOW_DAYS = 4;
 const DETAIL_CONCURRENCY = 8;
 const INSERT_CHUNK = 500;

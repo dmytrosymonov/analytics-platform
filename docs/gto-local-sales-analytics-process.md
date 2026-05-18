@@ -1,6 +1,6 @@
 # GTO Local Sales Analytics Process
 
-> Updated: 2026-05-06
+> Updated: 2026-05-17
 > Scope: local analytics in the current workspace for GTO sales data, destination/supplier analytics, sales depth, and cancelled-order comments.
 
 ## Purpose
@@ -15,19 +15,21 @@ Use this document as the entry point before reading scripts. Most follow-up ques
 
 Primary sales cache:
 
-- `tmp/gto-sales-2025-01-01_to_2026-05-04/orders-list.jsonl`
-- `tmp/gto-sales-2025-01-01_to_2026-05-04/order-details.jsonl`
-- `tmp/gto-sales-2025-01-01_to_2026-05-04/currency-rates.json`
-- `tmp/gto-sales-2025-01-01_to_2026-05-04/manifest.json`
+- `tmp/gto-sales-2025-01-01_to_2026-05-17/orders-list.jsonl`
+- `tmp/gto-sales-2025-01-01_to_2026-05-17/order-details.jsonl`
+- `tmp/gto-sales-2025-01-01_to_2026-05-17/currency-rates.json`
+- `tmp/gto-sales-2025-01-01_to_2026-05-17/manifest.json`
 
 Coverage:
 
-- Order creation period requested by the user: all of 2025 through 2026-05-04.
-- `orders-list.jsonl`: 20,055 rows.
-- `order-details.jsonl`: 20,055 rows, with 20,054 successful details and one detail error.
-- Compared with the earlier `2026-04-29` cache, this incremental refresh added 223 new orders.
+- Order creation period requested by the user: all of 2025 through 2026-05-17.
+- `orders-list.jsonl`: 20,788 rows.
+- `order-details.jsonl`: 20,788 rows, with 20,787 successful details and one detail error.
+- Compared with the earlier `2026-05-15` cache, this incremental refresh added 65 new orders.
 - Previous cache is still available as an archived snapshot in `tmp/gto-sales-2025-01-01_to_2026-04-10/`.
 - Previous main snapshot is also available in `tmp/gto-sales-2025-01-01_to_2026-04-29/`.
+- Previous main snapshot is also available in `tmp/gto-sales-2025-01-01_to_2026-05-04/`.
+- Previous main snapshot is also available in `tmp/gto-sales-2025-01-01_to_2026-05-15/`.
 - This refresh used the same inclusive `created_at` logic and the same output format as the earlier cache.
 - Important distinction: the local JSONL cache remains creation-date based. A later one-time supplement for orders created in `2024` but starting travel in `2025` was applied only to the PostgreSQL reporting export, not to these local JSONL files.
 
@@ -66,7 +68,7 @@ Exclude test agent:
 - `GTO for Test-Goodwin`
 
 All monetary values for analysis must be converted to EUR.
-Use `tmp/gto-sales-2025-01-01_to_2026-05-04/currency-rates.json` for conversion when reading raw order detail rows.
+Use `tmp/gto-sales-2025-01-01_to_2026-05-17/currency-rates.json` for conversion when reading raw order detail rows.
 
 For supplier and sales ranking requested without profit/margin:
 
@@ -82,7 +84,7 @@ For cancelled-order comments:
 - Comment analysis can be read two ways:
   - by order creation period: all comments inside orders created in the selected period;
   - by comment creation period: only comments whose own `created_at` is inside the selected period.
-- The current local cache was fetched on 2026-05-06, so comments inside orders created through 2026-05-04 can include later comments up to the fetch moment.
+- The current local cache was fetched on 2026-05-17, so comments inside orders created through 2026-05-17 can include later comments up to the fetch moment.
 - For management analysis, split automatic/noise comments from useful operational comments.
 
 ## Cache Refresh Workflow
@@ -154,7 +156,7 @@ Key financial fields now available in `public.reporting_gto_orders`:
 
 Operational rules:
 
-- Scheduled refresh runs every `2` hours in `Europe/Kyiv` timezone.
+- Scheduled refresh runs every `30` minutes in `Europe/Kyiv` timezone.
 - Each refresh rewrites only the order ids found in the rolling last-4-days created-at window.
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
@@ -275,6 +277,45 @@ Files:
 Important note:
 
 - Comments are preserved from `order_data.comment` as present in the local snapshot fetched on `2026-05-06`. This means the export contains all comments currently stored inside those April-created orders, not only comments whose own `created_at` falls in April.
+
+### WizzAir Airticket Segments
+
+Use this when the user asks for WizzAir airticket volume by month, segment counts, or airticket `price_buy` attributed to WizzAir.
+
+- Source snapshot: `tmp/gto-sales-2025-01-01_to_2026-05-15/`
+- Files:
+- `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.json`
+- `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.csv`
+- `reports/gto-wizzair-segments-detail-2025-01-01_to_2026-05-15.csv`
+- `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.md`
+- `output/doc/gto_wizzair_segments_management_report_2025_2026.docx`
+- WizzAir carrier codes:
+  - `W6`
+  - `W9`
+  - `W4`
+
+Methodology:
+
+- Time axis: `order.created_at` by month.
+- Included all non-cancelled orders with `airticket` services; excluded `CNX` orders and `CNX` airticket lines.
+- Segment metric is passenger-segments:
+  - one flight leg = one segment
+  - multiplied by `number_of_services` from the airticket line
+- `price_buy` is converted to EUR using the same airticket logic as the main GTO connector:
+  - supplier-tag currency override when present
+  - otherwise row currency
+  - fallback to UAH when the converted cost is implausibly larger than sell or order revenue
+- For mixed-carrier airticket lines, Wizz `price_buy` is allocated proportionally by Wizz segment share inside that airticket line.
+
+Current totals from the artifact:
+
+- orders with airticket: `7,316`
+- orders with Wizz: `1,615`
+- airticket lines: `7,664`
+- Wizz airticket lines: `1,645`
+- Wizz passenger-segments: `6,847`
+- Wizz `price_buy`: `676,494.07 EUR`
+- mixed Wizz/non-Wizz airticket lines: `21`
 
 ### Product/Supplier/Destination Management Memo
 

@@ -86,7 +86,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
-  - runs every `2` hours in `Europe/Kyiv` timezone (`0 */2 * * *`)
+  - runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
   - refresh window is the last 4 calendar days including the current Kyiv business date
 - Coverage nuance:
   - the main incremental/daily Looker export is still creation-date based
@@ -171,18 +171,26 @@ These can be used in future for enriching reports with geography/hotel context.
 
 - Ad-hoc sales analytics for this workspace should first use the local process memo at `docs/gto-local-sales-analytics-process.md`
 - Treat `docs/gto-local-sales-analytics-process.md` as the index of local GTO analytical artifacts before reading scripts or reprocessing raw JSONL data
-- Current local GTO cache for follow-up analytics questions covers orders created from 2025-01-01 through 2026-05-04:
-  - `tmp/gto-sales-2025-01-01_to_2026-05-04/orders-list.jsonl`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-04/order-details.jsonl`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-04/currency-rates.json`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-04/manifest.json`
+- Current local GTO cache for follow-up analytics questions covers orders created from 2025-01-01 through 2026-05-17:
+  - `tmp/gto-sales-2025-01-01_to_2026-05-17/orders-list.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-17/order-details.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-17/currency-rates.json`
+  - `tmp/gto-sales-2025-01-01_to_2026-05-17/manifest.json`
 - Standalone April 2026 created-orders export with comments:
   - folder: `tmp/gto-created-2026-04-export/`
   - best upload-ready file: `tmp/gto-created-2026-04-export/orders-with-comments.jsonl`
   - flat comments export: `tmp/gto-created-2026-04-export/comments-flat.csv`
+- WizzAir airticket monthly artifacts:
+  - summary JSON: `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.json`
+  - summary CSV: `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.csv`
+  - detail CSV: `reports/gto-wizzair-segments-detail-2025-01-01_to_2026-05-15.csv`
+  - methodology note: `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.md`
+  - management DOCX: `output/doc/gto_wizzair_segments_management_report_2025_2026.docx`
 - PostgreSQL reporting export also contains a one-time supplement for orders with `date_start` in `2025` and `created_at` before `2025-01-01`; this supplement exists in reporting tables, not in the local JSONL cache
 - Previous cache snapshot remains available in `tmp/gto-sales-2025-01-01_to_2026-04-10/`
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-15/`
 - Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-04-29/`
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-04/`
 - `tmp/cache-gto-sales-data.ts` now supports fallback credentials via env (`GTO_API_KEY`, `GTO_BASE_URL`, `GTO_V3_BASE_URL`, `GTO_TIMEOUT_SECONDS`) when local Prisma `DataSource` credentials are missing
 - `tmp/cache-gto-sales-data.ts` now refreshes incrementally by default when a prior snapshot exists for the same `date_from`; default overlap is 7 days and full refetch can be forced with `GTO_CACHE_INCREMENTAL=0`
 - Static GTO v3 dictionaries currently saved locally:
@@ -372,7 +380,7 @@ Tracked `deploy.sh` does:
 
 **Important:** seed uses `update: {}` for all upserts — existing settings/credentials are NEVER overwritten by deploy.
 
-**Operational rule for AI agents:** after any documentation-affecting code or config change, update `AGENTS.md` first, then regenerate `CLAUDE.md` with `bash scripts/refresh-claude-docs.sh` so Claude sees the latest operational context.
+**Operational rule for AI agents:** for this workspace and this user, treat `AGENTS.md` as the only required handoff/source-of-truth document for new rules and agreements. Do not manually regenerate or maintain local `CLAUDE.md` during normal analytical or coding work unless the user explicitly asks for it. The server-side deploy workflow may still refresh `/opt/analytics-platform/CLAUDE.md` automatically, but that is no longer part of the required local update routine.
 
 ---
 

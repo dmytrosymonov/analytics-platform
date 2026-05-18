@@ -6,7 +6,7 @@
 ## What Is Already Done
 
 - PostgreSQL export is already built and running.
-- Refresh is already scheduled every `2` hours in `Europe/Kyiv` timezone.
+- Refresh is already scheduled every `30` minutes in `Europe/Kyiv` timezone.
 - Currency conversion to EUR is already handled in the backend using GTO v3 historical FX rates on the booking creation date.
 - Data sources are already connected in Looker Studio.
 - Test-agent orders are already excluded in the backend export by exact normalized match against `agent_name` and `company_name`.
