@@ -41,6 +41,7 @@ const LOOKER_IGNORED_TEST_AGENT_NAMES = new Set([
 const rateCache = new Map();
 let currencyCodeMapPromise = null;
 let airlineDictionaryPromise = null;
+let destinationDictionaryPromise = null;
 const unknownCurrencies = new Map();
 const unknownAirlineCodes = new Set();
 
@@ -259,7 +260,7 @@ function normalizeOrderDestinationValue(value) {
   return null;
 }
 
-function extractOrderDestination(detail, summary) {
+function extractOrderDestinationFallback(detail, summary) {
   for (const source of [detail, summary]) {
     for (const key of ORDER_DESTINATION_CANDIDATE_KEYS) {
       const normalized = normalizeOrderDestinationValue(source?.[key]);
@@ -267,6 +268,30 @@ function extractOrderDestination(detail, summary) {
     }
   }
   return null;
+}
+
+function extractOrderDestinationId(detail, summary) {
+  for (const source of [detail, summary]) {
+    const normalized = String(source?.destination_id || '').trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function resolveOrderDestination(detail, summary, destinationDictionary) {
+  const destinationId = extractOrderDestinationId(detail, summary);
+  const resolvedById = destinationId ? String(destinationDictionary.idToName[destinationId] || '').trim() : '';
+  const fallbackName = extractOrderDestinationFallback(detail, summary);
+  return {
+    destinationId,
+    packageDestinationName: resolvedById || fallbackName || null,
+    hasOrderDestination: Boolean(destinationId && resolvedById),
+  };
+}
+
+function normalizeCurrencyCode(value) {
+  const text = String(value || '').trim().toUpperCase();
+  return text || null;
 }
 
 function classifyProductSegment(orderLines, hasOrderDestination) {
@@ -397,6 +422,22 @@ async function getAirlineDictionary(httpV3) {
   return airlineDictionaryPromise;
 }
 
+async function getDestinationDictionary(httpV3) {
+  if (destinationDictionaryPromise) return destinationDictionaryPromise;
+  destinationDictionaryPromise = (async () => {
+    const resp = await fetchWithRetry('destinations', () => httpV3.get('/destinations'));
+    const items = Array.isArray(resp.data) ? resp.data : (Array.isArray(resp.data?.data) ? resp.data.data : []);
+    return {
+      idToName: Object.fromEntries(
+        items
+          .map((item) => [String(item.id || '').trim(), String(item.name || '').trim()])
+          .filter(([id, name]) => Boolean(id && name)),
+      ),
+    };
+  })();
+  return destinationDictionaryPromise;
+}
+
 function parseRatesResponse(data, codeMap) {
   const items = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
   const graph = {};
@@ -478,9 +519,9 @@ function computeOrderFinancials(detail, summary, convertToEur) {
     const priceSell = parseAmount(hotel.price) || 0;
     if (priceBuy <= 0) continue;
 
-    const hotelCurrency = String(hotel.currency || orderCurrency);
+    const hotelCurrency = normalizeCurrencyCode(hotel.currency_buy) || String(hotel.currency || orderCurrency);
     const costConverted = convertToEur(priceBuy, hotelCurrency) ?? 0;
-    const sellConverted = convertToEur(priceSell, hotelCurrency) ?? 0;
+    const sellConverted = convertToEur(priceSell, hotel.currency || orderCurrency) ?? 0;
     const costUah = convertToEur(priceBuy, 'UAH') ?? costConverted;
 
     const hotelCost = (sellConverted > 0 && costConverted > sellConverted) ||
@@ -500,11 +541,11 @@ function computeOrderFinancials(detail, summary, convertToEur) {
 
     if (service.type === 'transfer') {
       const transferSupplier = cleanSupplierName(service.supplier_name || service.service_supplier_name).toLowerCase();
-      const transferCurrency = eurTransferSuppliers.has(transferSupplier)
+      const transferCurrency = normalizeCurrencyCode(service.currency_buy) || (eurTransferSuppliers.has(transferSupplier)
         ? 'EUR'
-        : String(service.currency || orderCurrency);
+        : String(service.currency || orderCurrency));
       const transferCostConverted = convertToEur(priceBuy, transferCurrency) ?? 0;
-      const transferSellConverted = convertToEur(priceSell, transferCurrency) ?? 0;
+      const transferSellConverted = convertToEur(priceSell, service.currency || orderCurrency) ?? 0;
       const transferCostUah = convertToEur(priceBuy, 'UAH') ?? transferCostConverted;
 
       serviceCostEur = transferCurrency !== 'UAH' && (
@@ -514,9 +555,11 @@ function computeOrderFinancials(detail, summary, convertToEur) {
         ? transferCostUah
         : transferCostConverted;
     } else if (service.type === 'airticket') {
-      const buyCurrency = supplierTagCurrency(supplierNameMap, service.supplier_id) || String(service.currency || orderCurrency);
+      const buyCurrency = normalizeCurrencyCode(service.currency_buy)
+        || supplierTagCurrency(supplierNameMap, service.supplier_id)
+        || String(service.currency || orderCurrency);
       const airCostConverted = convertToEur(priceBuy, buyCurrency) ?? 0;
-      const airSellConverted = convertToEur(priceSell, buyCurrency) ?? 0;
+      const airSellConverted = convertToEur(priceSell, service.currency || orderCurrency) ?? 0;
       const airCostUah = convertToEur(priceBuy, 'UAH') ?? airCostConverted;
 
       serviceCostEur = (airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
@@ -524,9 +567,9 @@ function computeOrderFinancials(detail, summary, convertToEur) {
         ? airCostUah
         : airCostConverted;
     } else {
-      const serviceCurrency = String(service.currency || orderCurrency);
+      const serviceCurrency = normalizeCurrencyCode(service.currency_buy) || String(service.currency || orderCurrency);
       const costConverted = convertToEur(priceBuy, serviceCurrency) ?? 0;
-      const sellConverted = convertToEur(priceSell, serviceCurrency) ?? 0;
+      const sellConverted = convertToEur(priceSell, service.currency || orderCurrency) ?? 0;
       const costUah = convertToEur(priceBuy, 'UAH') ?? costConverted;
 
       serviceCostEur = (sellConverted > 0 && costConverted > sellConverted) ||
@@ -593,27 +636,19 @@ async function main() {
   const candidateRows = rows.filter((row) => String(row.created_at || '').slice(0, 10) < '2025-01-01');
   console.log(`Candidate orders created in 2024 with start in 2025: ${candidateRows.length}`);
 
-  const existingIds = new Set(
-    (await prisma.reportingGtoOrder.findMany({
-      where: { orderId: { in: candidateRows.map((row) => BigInt(Number(row.order_id))) } },
-      select: { orderId: true },
-    })).map((row) => Number(row.orderId)),
-  );
-
-  const missingRows = candidateRows.filter((row) => !existingIds.has(Number(row.order_id)));
-  console.log(`Missing orders to insert: ${missingRows.length}`);
-  if (!missingRows.length) {
+  console.log(`Orders to refresh in supplemental layer: ${candidateRows.length}`);
+  if (!candidateRows.length) {
     console.log(JSON.stringify({ insertedOrders: 0, insertedLines: 0, unknownCurrencies: Object.fromEntries(unknownCurrencies) }, null, 2));
     return;
   }
 
-  const summaryById = new Map(missingRows.map((row) => [Number(row.order_id), row]));
+  const summaryById = new Map(candidateRows.map((row) => [Number(row.order_id), row]));
   const details = await mapLimit(
-    missingRows.map((row) => Number(row.order_id)),
+    candidateRows.map((row) => Number(row.order_id)),
     DETAIL_CONCURRENCY,
     async (orderId, index) => {
       if (index > 0 && index % 100 === 0) {
-        console.log(`order_data progress: ${index}/${missingRows.length}`);
+        console.log(`order_data progress: ${index}/${candidateRows.length}`);
       }
       try {
         const resp = await fetchWithRetry(`order_data:${orderId}`, () =>
@@ -632,6 +667,7 @@ async function main() {
   const lineRows = [];
   const lineAirlineRows = [];
   const airlineDictionary = await getAirlineDictionary(httpV3);
+  const destinationDictionary = await getDestinationDictionary(httpV3);
   airlineDictionary.duplicateCodeWarnings.forEach((warning) => console.warn(warning));
   airlineDictionary.duplicateNameWarnings.forEach((warning) => console.warn(warning));
 
@@ -668,8 +704,11 @@ async function main() {
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
     const financials = computeOrderFinancials(detail, summary, (amount, currency) => toEur(amount, currency, rates));
-    const packageDestinationName = extractOrderDestination(detail, summary);
-    const hasOrderDestination = Boolean(packageDestinationName);
+    const { destinationId, packageDestinationName, hasOrderDestination } = resolveOrderDestination(
+      detail,
+      summary,
+      destinationDictionary,
+    );
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set();
     const orderAirlineNames = new Set();
@@ -710,6 +749,7 @@ async function main() {
       supplierNames: suppliers.map((supplier) => supplier.name).filter(Boolean).join(' | ') || null,
       airlineCodes: null,
       airlineNames: null,
+      destinationId,
       hasOrderDestination,
       packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
@@ -779,10 +819,11 @@ async function main() {
         dateFrom: parseDateOnly(raw.date_from),
         dateTo: parseDateOnly(raw.date_to),
         currency: String(raw.currency || '') || null,
+        currencyBuy: normalizeCurrencyCode(raw.currency_buy),
         priceOriginal: decimalValue(priceOriginal),
         priceEur: decimalValue(toEur(priceOriginal, raw.currency, rates)),
         priceBuyOriginal: decimalValue(priceBuyOriginal),
-        priceBuyEur: decimalValue(toEur(priceBuyOriginal, raw.currency, rates)),
+        priceBuyEur: decimalValue(toEur(priceBuyOriginal, normalizeCurrencyCode(raw.currency_buy) || raw.currency, rates)),
         discountOriginal: decimalValue(discountOriginal),
         numberOfServices: Number.isFinite(Number(raw.number_of_services)) ? Number(raw.number_of_services) : null,
         hotelName: String(raw.hotel_name || '') || null,

@@ -258,6 +258,7 @@ model ReportingGtoOrder {
   supplierNames           String?   @map("supplier_names") @db.Text
   airlineCodes            String?   @map("airline_codes") @db.Text
   airlineNames            String?   @map("airline_names") @db.Text
+  destinationId           String?   @map("destination_id")
   hasOrderDestination     Boolean   @default(false) @map("has_order_destination")
   packageDestinationName  String?   @map("package_destination_name") @db.Text
   destinationNames        String?   @map("destination_names") @db.Text
@@ -308,6 +309,7 @@ model ReportingGtoOrderLine {
   dateFrom            DateTime? @map("date_from") @db.Date
   dateTo              DateTime? @map("date_to") @db.Date
   currency            String?
+  currencyBuy         String?   @map("currency_buy")
   priceOriginal       Decimal?  @map("price_original") @db.Decimal(18, 2)
   priceEur            Decimal?  @map("price_eur") @db.Decimal(18, 2)
   priceBuyOriginal    Decimal?  @map("price_buy_original") @db.Decimal(18, 2)

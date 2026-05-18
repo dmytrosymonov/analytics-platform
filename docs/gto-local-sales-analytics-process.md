@@ -138,6 +138,12 @@ Reporting tables:
 - `public.reporting_gto_order_line_airlines`
 - `public.reporting_gto_sync_runs`
 
+Operational sync behavior:
+
+- Main Looker sync is creation-date based and now processes orders in small batches rather than one full-window in-memory replace.
+- Each committed batch updates `public.reporting_gto_sync_runs`, so long backfills should show partial progress in the sync log before the final run status flips to `success`.
+- This batching rule exists specifically to reduce server pressure during large backfills and to avoid one large delete/insert burst at the end of the run.
+
 Operational helper commands:
 
 - `npm --workspace apps/api run cleanup:gto-looker-test-orders`
@@ -151,6 +157,7 @@ Key financial fields now available in `public.reporting_gto_orders`:
 - `profit_pct`
 - `structure_id`
 - `structure_name`
+- `destination_id`
 - `has_order_destination`
 - `package_destination_name`
 - `product_segment`
@@ -164,6 +171,8 @@ Operational rules:
 - EUR conversion uses GTO v3 historical rates for the booking creation date.
 - Order-level profit uses the same business logic as the main GTO connector rather than a naive `sum(price) - sum(price_buy)` rollup from lines.
 - Airticket airline enrichment uses GTO v3 `/airlines`.
+- Package destination enrichment now uses raw `destination_id` from private API resolved through GTO v3 `/destinations`.
+- `currency_buy` is now the preferred cost currency for reporting profit when present on hotel/service rows.
 - `reporting_gto_order_lines` now carries aggregated `airline_codes` / `airline_names` per airticket line.
 - `reporting_gto_orders` now carries aggregated order-level `airline_codes` / `airline_names`.
 - Exact carrier filtering for mixed-carrier tickets should use `public.reporting_gto_order_line_airlines`, not `contains` filters on the aggregated text fields.

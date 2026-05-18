@@ -54,6 +54,7 @@ Typical fields:
 - `company_name`
 - `structure_id`
 - `structure_name`
+- `destination_id`
 - `airline_codes`
 - `airline_names`
 - `order_currency`
@@ -67,6 +68,7 @@ Typical fields:
 - `primary_country_name`
 - `country_names`
 - `supplier_names`
+- `package_destination_name`
 - `destination_names`
 - `has_hotel`
 - `has_airticket`
@@ -109,6 +111,7 @@ Typical fields:
 - `airline_names`
 - `status`
 - `currency`
+- `currency_buy`
 - `price_original`
 - `price_eur`
 - `price_buy_original`

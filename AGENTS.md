@@ -75,12 +75,14 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `profit_eur`
   - `profit_pct`
 - `reporting_gto_orders` now also includes:
+  - `destination_id`
   - `structure_id`
   - `structure_name`
   - `has_order_destination`
   - `package_destination_name`
   - `product_segment`
 - Airline enrichment for Looker/PostgreSQL reporting must use GTO v3 `/airlines`
+- Destination enrichment for package classification must use GTO v3 `/destinations`
 - Carrier data should be stored on both reporting levels:
   - aggregated `airline_codes` / `airline_names` in `reporting_gto_orders`
   - aggregated `airline_codes` / `airline_names` in `reporting_gto_order_lines`
@@ -90,6 +92,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - includes `order_id`, `airline_code`, `airline_name`, `segment_count`, `synced_at`
 - Airline deduplication policy is by normalized airline code, not by airline name
 - Raw airticket carriers come from `service.flight_details.segment[].airline`
+- Order-level package marker must now use raw private API `destination_id` resolved through GTO v3 `/destinations`
+- `destination_name` in private API may be empty and must not block package classification if `destination_id` resolves
+- `reporting_gto_order_lines` must persist raw `currency_buy` when present
 - Repeated same-carrier segments inside one airticket line are not an error; aggregated fields deduplicate by code, while bridge rows preserve repetition via `segment_count`
 - Duplicate `/airlines` records from GTO v3 must be audited:
   - same code + same name: collapse silently
@@ -104,6 +109,8 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - built into API startup via `startGtoLookerSyncScheduler()`
   - runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
   - refresh window is the last 4 calendar days including the current Kyiv business date
+  - sync execution must process order windows in small batches and commit each batch separately instead of building one giant in-memory write set for the full window
+  - `reporting_gto_sync_runs` should be updated after each committed batch so long backfills show partial progress and can be diagnosed without waiting for a final all-or-nothing finish
 - Coverage nuance:
   - the main incremental/daily Looker export is still creation-date based
   - it does not automatically revisit older already-finished orders outside the rolling 4-day created-at window
@@ -115,6 +122,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Order-level profit in the Looker export must follow the same GTO financial logic as the main connector:
   - revenue from `balance_amount` when present, else `total_amount`
   - cost from `CNF` hotel/service rows only
+  - `currency_buy` is the primary себестоимость currency when present
   - supplier-specific transfer currency handling such as `SunTransfers`
   - airticket supplier-tag currency handling like `[EUR]`, `[UAH]`, `[KZT]`
   - sanity fallback to `UAH` when `price_buy` currency labels are implausible versus sell price or whole-order revenue

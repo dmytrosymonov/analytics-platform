@@ -4,6 +4,7 @@ import { decrypt } from '../lib/encryption';
 import { createHttpClient } from '../lib/http';
 import { CurrencyService } from '../lib/currency.service';
 import { AirlineService } from '../lib/airline.service';
+import { DestinationService } from '../lib/destination.service';
 import { logger } from '../lib/logger';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 
@@ -13,6 +14,7 @@ const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 const DEFAULT_SYNC_CRON = '*/30 * * * *';
 const DEFAULT_REFRESH_WINDOW_DAYS = 4;
 const DETAIL_CONCURRENCY = 8;
+const DETAIL_BATCH_SIZE = 250;
 const INSERT_CHUNK = 500;
 const DELETE_CHUNK = 500;
 
@@ -64,6 +66,13 @@ type CarrierStats = {
   code: string;
   name: string | null;
   segmentCount: number;
+};
+
+type BuildContext = {
+  rateCache: Map<string, Awaited<ReturnType<typeof CurrencyService.getRatesForDate>>>;
+  airlineDictionary: Awaited<ReturnType<typeof AirlineService.getAirlineDictionary>>;
+  destinationDictionary: Awaited<ReturnType<typeof DestinationService.getDestinationDictionary>>;
+  unknownAirlineCodes: Set<string>;
 };
 
 let schedulerStarted = false;
@@ -295,7 +304,7 @@ function normalizeOrderDestinationValue(value: unknown): string | null {
   return null;
 }
 
-function extractOrderDestination(detail: JsonRecord, summary: JsonRecord): string | null {
+function extractOrderDestinationFallback(detail: JsonRecord, summary: JsonRecord): string | null {
   for (const source of [detail, summary]) {
     for (const key of ORDER_DESTINATION_CANDIDATE_KEYS) {
       const normalized = normalizeOrderDestinationValue(source?.[key]);
@@ -303,6 +312,35 @@ function extractOrderDestination(detail: JsonRecord, summary: JsonRecord): strin
     }
   }
   return null;
+}
+
+function extractOrderDestinationId(detail: JsonRecord, summary: JsonRecord): string | null {
+  for (const source of [detail, summary]) {
+    const normalized = String(source?.destination_id || '').trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function resolveOrderDestination(
+  detail: JsonRecord,
+  summary: JsonRecord,
+  destinationDictionary: Record<string, string>,
+) {
+  const destinationId = extractOrderDestinationId(detail, summary);
+  const resolvedById = destinationId ? String(destinationDictionary[destinationId] || '').trim() : '';
+  const fallbackName = extractOrderDestinationFallback(detail, summary);
+
+  return {
+    destinationId,
+    packageDestinationName: resolvedById || fallbackName || null,
+    hasOrderDestination: Boolean(destinationId && resolvedById),
+  };
+}
+
+function normalizeCurrencyCode(value: unknown): string | null {
+  const text = String(value || '').trim().toUpperCase();
+  return text || null;
 }
 
 function classifyProductSegment(
@@ -353,9 +391,9 @@ function computeOrderFinancials(
     const priceSell = parseAmount(hotel.price) || 0;
     if (priceBuy <= 0) continue;
 
-    const hotelCurrency = String(hotel.currency || orderCurrency);
+    const hotelCurrency = normalizeCurrencyCode(hotel.currency_buy) || String(hotel.currency || orderCurrency);
     const costConverted = toEur(priceBuy, hotelCurrency) ?? 0;
-    const sellConverted = toEur(priceSell, hotelCurrency) ?? 0;
+    const sellConverted = toEur(priceSell, hotel.currency || orderCurrency) ?? 0;
     const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
 
     const hotelCost = (sellConverted > 0 && costConverted > sellConverted) ||
@@ -375,11 +413,11 @@ function computeOrderFinancials(
 
     if (service.type === 'transfer') {
       const transferSupplier = cleanSupplierName(service.supplier_name || service.service_supplier_name).toLowerCase();
-      const transferCurrency = eurTransferSuppliers.has(transferSupplier)
+      const transferCurrency = normalizeCurrencyCode(service.currency_buy) || (eurTransferSuppliers.has(transferSupplier)
         ? 'EUR'
-        : String(service.currency || orderCurrency);
+        : String(service.currency || orderCurrency));
       const transferCostConverted = toEur(priceBuy, transferCurrency) ?? 0;
-      const transferSellConverted = toEur(priceSell, transferCurrency) ?? 0;
+      const transferSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const transferCostUah = toEur(priceBuy, 'UAH') ?? transferCostConverted;
 
       serviceCostEur = transferCurrency !== 'UAH' && (
@@ -389,9 +427,11 @@ function computeOrderFinancials(
         ? transferCostUah
         : transferCostConverted;
     } else if (service.type === 'airticket') {
-      const buyCurrency = supplierTagCurrency(supplierNameMap, service.supplier_id) || String(service.currency || orderCurrency);
+      const buyCurrency = normalizeCurrencyCode(service.currency_buy)
+        || supplierTagCurrency(supplierNameMap, service.supplier_id)
+        || String(service.currency || orderCurrency);
       const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
-      const airSellConverted = toEur(priceSell, buyCurrency) ?? 0;
+      const airSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const airCostUah = toEur(priceBuy, 'UAH') ?? airCostConverted;
 
       serviceCostEur = (airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
@@ -399,9 +439,9 @@ function computeOrderFinancials(
         ? airCostUah
         : airCostConverted;
     } else {
-      const serviceCurrency = String(service.currency || orderCurrency);
+      const serviceCurrency = normalizeCurrencyCode(service.currency_buy) || String(service.currency || orderCurrency);
       const costConverted = toEur(priceBuy, serviceCurrency) ?? 0;
-      const sellConverted = toEur(priceSell, serviceCurrency) ?? 0;
+      const sellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
 
       serviceCostEur = (sellConverted > 0 && costConverted > sellConverted) ||
@@ -543,6 +583,8 @@ async function fetchOrderListWindow(
 async function fetchOrderDetails(
   http: ReturnType<typeof createHttpClient>,
   summaries: JsonRecord[],
+  progressOffset = 0,
+  progressTotal = summaries.length,
 ): Promise<DetailEnvelope[]> {
   const summaryById = new Map<number, JsonRecord>();
   for (const summary of summaries) {
@@ -555,7 +597,7 @@ async function fetchOrderDetails(
   const orderIds = Array.from(summaryById.keys());
   return mapLimit(orderIds, DETAIL_CONCURRENCY, async (orderId, index) => {
     if (index > 0 && index % 100 === 0) {
-      logger.info({ progress: `${index}/${orderIds.length}` }, 'Fetching GTO order_data');
+      logger.info({ progress: `${progressOffset + index}/${progressTotal}` }, 'Fetching GTO order_data');
     }
 
     try {
@@ -584,21 +626,17 @@ function decimalValue(value: number | null): string | null {
 async function buildReportingRows(
   details: DetailEnvelope[],
   config: GtoConfig,
+  context: BuildContext,
 ) {
-  const warnings: string[] = [];
   const successful = details.filter((row) => row.detail && !row.error);
   const failed = details.filter((row) => row.error);
-  const rateCache = new Map<string, Awaited<ReturnType<typeof CurrencyService.getRatesForDate>>>();
-  const airlineDictionary = await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl);
-  const unknownAirlineCodes = new Set<string>();
-  warnings.push(...airlineDictionary.duplicateCodeWarnings, ...airlineDictionary.duplicateNameWarnings);
 
   const getRatesForDate = async (date: string) => {
     const normalized = date.slice(0, 10);
-    const cached = rateCache.get(normalized);
+    const cached = context.rateCache.get(normalized);
     if (cached) return cached;
     const rates = await CurrencyService.getRatesForDate(config.apiKey, config.v3BaseUrl, normalized);
-    rateCache.set(normalized, rates);
+    context.rateCache.set(normalized, rates);
     return rates;
   };
 
@@ -645,8 +683,11 @@ async function buildReportingRows(
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
     const financials = computeOrderFinancials(detail, summary, toEur);
-    const packageDestinationName = extractOrderDestination(detail, summary);
-    const hasOrderDestination = Boolean(packageDestinationName);
+    const { destinationId, packageDestinationName, hasOrderDestination } = resolveOrderDestination(
+      detail,
+      summary,
+      context.destinationDictionary.idToName,
+    );
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
     const orderAirlineNames = new Set<string>();
@@ -687,6 +728,7 @@ async function buildReportingRows(
       supplierNames: suppliers.map((supplier: any) => supplier.name).filter(Boolean).join(' | ') || null,
       airlineCodes: null,
       airlineNames: null,
+      destinationId,
       hasOrderDestination,
       packageDestinationName,
       destinationNames: destinations.join(' | ') || null,
@@ -719,14 +761,14 @@ async function buildReportingRows(
       const priceBuyOriginal = parseAmount(raw.price_buy);
       const discountOriginal = parseAmount(raw.discount);
       const carrierStats = productGroup === 'airticket'
-        ? extractCarrierStats(raw, airlineDictionary.codeToName)
+        ? extractCarrierStats(raw, context.airlineDictionary.codeToName)
         : [];
       const airlineCodes = carrierStats.map((carrier) => carrier.code);
       const airlineNames = carrierStats.map((carrier) => carrier.name).filter((value): value is string => Boolean(value));
 
       for (const carrier of carrierStats) {
-        if (!airlineDictionary.codeToName[carrier.code]) {
-          unknownAirlineCodes.add(carrier.code);
+        if (!context.airlineDictionary.codeToName[carrier.code]) {
+          context.unknownAirlineCodes.add(carrier.code);
         }
         orderAirlineCodes.add(carrier.code);
         if (carrier.name) orderAirlineNames.add(carrier.name);
@@ -756,10 +798,11 @@ async function buildReportingRows(
         dateFrom: parseDateOnly(raw.date_from),
         dateTo: parseDateOnly(raw.date_to),
         currency: String(raw.currency || '') || null,
+        currencyBuy: normalizeCurrencyCode(raw.currency_buy),
         priceOriginal: decimalValue(priceOriginal),
         priceEur: decimalValue(toEur(priceOriginal, raw.currency)),
         priceBuyOriginal: decimalValue(priceBuyOriginal),
-        priceBuyEur: decimalValue(toEur(priceBuyOriginal, raw.currency)),
+        priceBuyEur: decimalValue(toEur(priceBuyOriginal, normalizeCurrencyCode(raw.currency_buy) || raw.currency)),
         discountOriginal: decimalValue(discountOriginal),
         numberOfServices: Number.isFinite(Number(raw.number_of_services)) ? Number(raw.number_of_services) : null,
         hotelName: String(raw.hotel_name || '') || null,
@@ -778,19 +821,11 @@ async function buildReportingRows(
     lastOrderRow.airlineNames = Array.from(orderAirlineNames).sort((left, right) => left.localeCompare(right)).join(' | ') || null;
   }
 
-  if (failed.length > 0) {
-    warnings.push(`Failed to refresh ${failed.length} orders in current sync window`);
-  }
-  if (unknownAirlineCodes.size > 0) {
-    warnings.push(`Unknown airline codes in GTO airticket segments: ${Array.from(unknownAirlineCodes).sort().join(', ')}`);
-  }
-
   return {
     orderRows,
     lineRows,
     lineAirlineRows,
     failed,
-    warnings,
   };
 }
 
@@ -852,6 +887,23 @@ async function replaceReportingRows(orderRows: any[], lineRows: any[], lineAirli
   };
 }
 
+async function updateSyncRunProgress(runId: string, data: {
+  fetchedOrderRows: number;
+  fetchedUniqueOrderIds: number;
+  syncedOrderRows: number;
+  syncedLineRows: number;
+  detailErrorRows: number;
+  insertedOrderRows: number;
+  insertedLineRows: number;
+  deletedOrderRows: number;
+  deletedLineRows: number;
+}) {
+  await (prisma as any).reportingGtoSyncRun.update({
+    where: { id: runId },
+    data,
+  });
+}
+
 function computeDailyWindow(timezone = DEFAULT_TIMEZONE) {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
@@ -891,9 +943,69 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
     }, 'gto-looker-sync');
 
     const summaries = await fetchOrderListWindow(http, params.dateFrom, params.dateTo);
-    const details = await fetchOrderDetails(http, summaries);
-    const { orderRows, lineRows, lineAirlineRows, failed, warnings } = await buildReportingRows(details, config);
-    const replaceStats = await replaceReportingRows(orderRows, lineRows, lineAirlineRows);
+    const fetchedUniqueOrderIds = new Set(summaries.map((row) => Number(row.order_id))).size;
+    const buildContext: BuildContext = {
+      rateCache: new Map(),
+      airlineDictionary: await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl),
+      destinationDictionary: await DestinationService.getDestinationDictionary(config.apiKey, config.v3BaseUrl),
+      unknownAirlineCodes: new Set(),
+    };
+    const warnings = [
+      ...buildContext.airlineDictionary.duplicateCodeWarnings,
+      ...buildContext.airlineDictionary.duplicateNameWarnings,
+    ];
+
+    let syncedOrderRows = 0;
+    let syncedLineRows = 0;
+    let detailErrorRows = 0;
+    let insertedOrderRows = 0;
+    let insertedLineRows = 0;
+    let deletedOrderRows = 0;
+    let deletedLineRows = 0;
+
+    for (let offset = 0; offset < summaries.length; offset += DETAIL_BATCH_SIZE) {
+      const summaryBatch = summaries.slice(offset, offset + DETAIL_BATCH_SIZE);
+      const details = await fetchOrderDetails(http, summaryBatch, offset, summaries.length);
+      const { orderRows, lineRows, lineAirlineRows, failed } = await buildReportingRows(details, config, buildContext);
+      const replaceStats = await replaceReportingRows(orderRows, lineRows, lineAirlineRows);
+
+      syncedOrderRows += orderRows.length;
+      syncedLineRows += lineRows.length;
+      detailErrorRows += failed.length;
+      insertedOrderRows += replaceStats.insertedOrderRows;
+      insertedLineRows += replaceStats.insertedLineRows;
+      deletedOrderRows += replaceStats.deletedOrderRows;
+      deletedLineRows += replaceStats.deletedLineRows;
+
+      await updateSyncRunProgress(run.id, {
+        fetchedOrderRows: summaries.length,
+        fetchedUniqueOrderIds,
+        syncedOrderRows,
+        syncedLineRows,
+        detailErrorRows,
+        insertedOrderRows,
+        insertedLineRows,
+        deletedOrderRows,
+        deletedLineRows,
+      });
+
+      logger.info({
+        runId: run.id,
+        batchStart: offset,
+        batchSize: summaryBatch.length,
+        processed: Math.min(offset + summaryBatch.length, summaries.length),
+        total: summaries.length,
+        syncedOrderRows,
+        syncedLineRows,
+      }, 'Committed GTO Looker sync batch');
+    }
+
+    if (detailErrorRows > 0) {
+      warnings.push(`Failed to refresh ${detailErrorRows} orders in current sync window`);
+    }
+    if (buildContext.unknownAirlineCodes.size > 0) {
+      warnings.push(`Unknown airline codes in GTO airticket segments: ${Array.from(buildContext.unknownAirlineCodes).sort().join(', ')}`);
+    }
 
     const result: SyncResult = {
       runId: run.id,
@@ -901,14 +1013,14 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
       dateFrom: params.dateFrom,
       dateTo: params.dateTo,
       fetchedOrderRows: summaries.length,
-      fetchedUniqueOrderIds: new Set(summaries.map((row) => Number(row.order_id))).size,
-      syncedOrderRows: orderRows.length,
-      syncedLineRows: lineRows.length,
-      detailErrorRows: failed.length,
-      insertedOrderRows: replaceStats.insertedOrderRows,
-      insertedLineRows: replaceStats.insertedLineRows,
-      deletedOrderRows: replaceStats.deletedOrderRows,
-      deletedLineRows: replaceStats.deletedLineRows,
+      fetchedUniqueOrderIds,
+      syncedOrderRows,
+      syncedLineRows,
+      detailErrorRows,
+      insertedOrderRows,
+      insertedLineRows,
+      deletedOrderRows,
+      deletedLineRows,
       warnings,
     };
 
