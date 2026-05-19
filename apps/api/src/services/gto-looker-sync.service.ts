@@ -515,6 +515,17 @@ function singleAirticketOrderImpliedTotals(
 
   const totals = amountDetailsTotals(detail, orderCurrency, toEur);
   if (totals.rowCount !== 1) return null;
+  const balanceAmount = parseAmount(detail.balance_amount) || 0;
+  const balanceEur = toEur(balanceAmount, detail.balance_currency || orderCurrency) ?? 0;
+
+  if (totals.discountEur > 0 && balanceEur > 0 && Math.abs(balanceEur - totals.netEur) <= 1) {
+    return {
+      impliedSellEur: round2(totals.sellEur),
+      impliedBuyEur: round2(totals.sellEur - totals.discountEur),
+      discountEur: totals.discountEur,
+      netRevenueEur: round2(totals.sellEur),
+    };
+  }
 
   const amountDetail = totals.rows[0];
   const sellOriginal = parseAmount(service?.price) || 0;
