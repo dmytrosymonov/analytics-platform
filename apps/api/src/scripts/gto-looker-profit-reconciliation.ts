@@ -72,10 +72,16 @@ function parseDate(value: unknown): Date | null {
   }
   const text = String(value).trim();
   if (!text) return null;
-  const ddmmyy = text.match(/^(\d{2})\.(\d{2})\.(\d{2})$/);
+  const ddmmyy = text.match(/^(\d{2})\.(\d{2})\.(\d{2})(?:\s+(\d{2}):(\d{2}))?$/);
   if (ddmmyy) {
     const year = 2000 + Number(ddmmyy[3]);
-    return new Date(Date.UTC(year, Number(ddmmyy[2]) - 1, Number(ddmmyy[1])));
+    return new Date(Date.UTC(
+      year,
+      Number(ddmmyy[2]) - 1,
+      Number(ddmmyy[1]),
+      Number(ddmmyy[4] || 0),
+      Number(ddmmyy[5] || 0),
+    ));
   }
   const normalized = text.includes('T') ? text : text.replace(' ', 'T');
   const date = new Date(normalized);
