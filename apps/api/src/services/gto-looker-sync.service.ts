@@ -520,8 +520,10 @@ function singleAirticketOrderImpliedTotals(
   const sellOriginal = parseAmount(service?.price) || 0;
   const buyOriginal = parseAmount(service?.price_buy) || 0;
   const totalSellEur = toEur(parseAmount(amountDetail?.total_sell) || 0, amountDetail?.currency || orderCurrency) ?? 0;
+  const directSellEur = toEur(sellOriginal, service?.currency || orderCurrency) ?? 0;
 
-  if (sellOriginal <= 0 || buyOriginal <= 0 || totalSellEur <= 0) return null;
+  if (sellOriginal <= 0 || buyOriginal <= 0 || totalSellEur <= 0 || directSellEur <= 0) return null;
+  if (Math.abs(totalSellEur - directSellEur) / directSellEur > 0.25) return null;
 
   const impliedRate = totalSellEur / sellOriginal;
   return {
