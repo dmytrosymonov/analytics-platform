@@ -386,6 +386,7 @@ function computeOrderFinancials(
   summary: JsonRecord,
   toEur: (amount: number | null, currency?: string | null) => number | null,
 ) {
+  const orderStatus = String(detail.status || summary.status || '');
   const orderCurrency = String(detail.currency || summary.currency || 'UAH');
   const balanceCurrency = String(detail.balance_currency || orderCurrency);
   const balanceAmount = parseAmount(detail.balance_amount) || 0;
@@ -393,6 +394,14 @@ function computeOrderFinancials(
   const priceEur = balanceAmount > 0
     ? (toEur(balanceAmount, balanceCurrency) ?? 0)
     : (toEur(totalAmount, orderCurrency) ?? 0);
+
+  if (orderStatus !== 'CNF') {
+    return {
+      costEur: 0,
+      profitEur: 0,
+      profitPct: 0,
+    };
+  }
 
   let costEur = 0;
   const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
@@ -407,13 +416,15 @@ function computeOrderFinancials(
     const priceSell = parseAmount(hotel.price) || 0;
     if (priceBuy <= 0) continue;
 
-    const hotelCurrency = normalizeCurrencyCode(hotel.currency_buy) || String(hotel.currency || orderCurrency);
+    const explicitBuyCurrency = normalizeCurrencyCode(hotel.currency_buy);
+    const hotelCurrency = explicitBuyCurrency || String(hotel.currency || orderCurrency);
     const costConverted = toEur(priceBuy, hotelCurrency) ?? 0;
     const sellConverted = toEur(priceSell, hotel.currency || orderCurrency) ?? 0;
     const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
 
-    const hotelCost = (sellConverted > 0 && costConverted > sellConverted) ||
+    const hotelCost = !explicitBuyCurrency && ((sellConverted > 0 && costConverted > sellConverted) ||
       (priceEur > 0 && costConverted > priceEur)
+    )
       ? costUah
       : costConverted;
 
@@ -429,39 +440,44 @@ function computeOrderFinancials(
 
     if (service.type === 'transfer') {
       const transferSupplier = cleanSupplierName(service.supplier_name || service.service_supplier_name).toLowerCase();
-      const transferCurrency = normalizeCurrencyCode(service.currency_buy) || (eurTransferSuppliers.has(transferSupplier)
+      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
+      const transferCurrency = explicitBuyCurrency || (eurTransferSuppliers.has(transferSupplier)
         ? 'EUR'
         : String(service.currency || orderCurrency));
       const transferCostConverted = toEur(priceBuy, transferCurrency) ?? 0;
       const transferSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const transferCostUah = toEur(priceBuy, 'UAH') ?? transferCostConverted;
 
-      serviceCostEur = transferCurrency !== 'UAH' && (
+      serviceCostEur = !explicitBuyCurrency && transferCurrency !== 'UAH' && (
         (transferSellConverted > 0 && transferCostConverted > transferSellConverted * 2) ||
         (priceEur > 0 && transferCostConverted > priceEur)
       )
         ? transferCostUah
         : transferCostConverted;
     } else if (service.type === 'airticket') {
-      const buyCurrency = normalizeCurrencyCode(service.currency_buy)
+      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
+      const buyCurrency = explicitBuyCurrency
         || supplierTagCurrency(supplierNameMap, service.supplier_id)
         || String(service.currency || orderCurrency);
       const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
       const airSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const airCostUah = toEur(priceBuy, 'UAH') ?? airCostConverted;
 
-      serviceCostEur = (airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
+      serviceCostEur = !explicitBuyCurrency && ((airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
         (priceEur > 0 && airCostConverted > priceEur)
+      )
         ? airCostUah
         : airCostConverted;
     } else {
-      const serviceCurrency = normalizeCurrencyCode(service.currency_buy) || String(service.currency || orderCurrency);
+      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
+      const serviceCurrency = explicitBuyCurrency || String(service.currency || orderCurrency);
       const costConverted = toEur(priceBuy, serviceCurrency) ?? 0;
       const sellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
 
-      serviceCostEur = (sellConverted > 0 && costConverted > sellConverted) ||
+      serviceCostEur = !explicitBuyCurrency && ((sellConverted > 0 && costConverted > sellConverted) ||
         (priceEur > 0 && costConverted > priceEur)
+      )
         ? costUah
         : costConverted;
     }
