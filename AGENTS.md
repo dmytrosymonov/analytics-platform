@@ -81,6 +81,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `has_order_destination`
   - `package_destination_name`
   - `product_segment`
+  - `accounting_class`
+  - `profit_basis_used`
+  - `has_incomplete_core_cost`
 - Airline enrichment for Looker/PostgreSQL reporting must use GTO v3 `/airlines`
 - Destination enrichment for package classification must use GTO v3 `/destinations`
 - Carrier data should be stored on both reporting levels:
@@ -107,6 +110,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
   - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
   - airline-name repair CLI: `npm --workspace apps/api run refresh:gto-looker-airline-names`
+  - profit reconciliation CLI: `npm --workspace apps/api run reconcile:gto-looker-profit -- --xlsx=/absolute/path/to/file.xlsx --from=YYYY-MM-DD --to=YYYY-MM-DD --threshold-pct=10`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
@@ -133,6 +137,18 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - supplier-specific transfer currency handling such as `SunTransfers`
   - airticket supplier-tag currency handling like `[EUR]`, `[UAH]`, `[KZT]`
   - sanity fallback to `UAH` when `price_buy` currency labels are implausible versus sell price or whole-order revenue
+- The project-wide GTO profit engine must persist the chosen audit path:
+  - `accounting_class`: `airticket_only`, `package_with_flight`, `combi_with_flight`, `hotel_only_or_hotel_led`, `standalone_transfer`, `standalone_insurance`, or `other`
+  - `profit_basis_used`: `zero_for_non_cnf`, `raw_margin`, `amount_details_net_basis`, `discount_fallback`, or `special_reconciliation_rule`
+  - `has_incomplete_core_cost`: true when any confirmed core component (`hotel`, `airticket`, `transfer`) has null/zero `price_buy`
+- The reconciliation CLI should compare reporting profit against Excel truth (`Commission/Discount`) and bucket serious mismatches into:
+  - `incomplete_core_cost`
+  - `airticket_amount_details_basis`
+  - `package_revenue_basis`
+  - `hotel_no_flight_margin_mismatch`
+  - `currency_label_issue`
+  - `ancillary_cost_issue`
+  - `unknown_manual_logic`
 - Looker/PostgreSQL export must exclude test-agent orders using an exact normalized match (`trim` + case-insensitive) against:
   - detail-side `agent_name`
   - summary-side `company_name`

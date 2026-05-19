@@ -55,6 +55,20 @@ type GtoConfig = {
 
 type ProductGroup = 'hotel' | 'airticket' | 'transfer' | 'insurance' | 'excursion' | 'other';
 type ProductSegment = 'Package' | 'Transfer' | 'Insurance' | 'Excursion' | 'Combi' | 'Hotel' | 'Airtickets' | 'Other';
+type AccountingClass =
+  | 'airticket_only'
+  | 'package_with_flight'
+  | 'combi_with_flight'
+  | 'hotel_only_or_hotel_led'
+  | 'standalone_transfer'
+  | 'standalone_insurance'
+  | 'other';
+type ProfitBasis =
+  | 'zero_for_non_cnf'
+  | 'raw_margin'
+  | 'amount_details_net_basis'
+  | 'discount_fallback'
+  | 'special_reconciliation_rule';
 
 type DetailEnvelope = {
   orderId: number;
@@ -89,6 +103,15 @@ type ExistingLineEnrichment = {
   airlineCodes: string[];
   airlineNames: string[];
   carriers: CarrierStats[];
+};
+
+type OrderFinancials = {
+  costEur: number;
+  profitEur: number;
+  profitPct: number;
+  accountingClass: AccountingClass;
+  profitBasisUsed: ProfitBasis;
+  hasIncompleteCoreCost: boolean;
 };
 
 let schedulerStarted = false;
@@ -381,6 +404,30 @@ function classifyProductSegment(
   return 'Other';
 }
 
+function classifyAccountingClass(
+  orderLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }>,
+  hasOrderDestination: boolean,
+): AccountingClass {
+  if (orderLines.length === 0) return 'other';
+
+  const groups = new Set(orderLines.map((line) => line.productGroup));
+  const hasHotel = groups.has('hotel');
+  const hasAirticket = groups.has('airticket');
+
+  if (groups.size === 1) {
+    const onlyGroup = orderLines[0]?.productGroup;
+    if (onlyGroup === 'airticket') return 'airticket_only';
+    if (onlyGroup === 'transfer') return 'standalone_transfer';
+    if (onlyGroup === 'insurance') return 'standalone_insurance';
+  }
+
+  if (hasHotel && hasAirticket && hasOrderDestination) return 'package_with_flight';
+  if (hasHotel && hasAirticket) return 'combi_with_flight';
+  if (hasHotel || hasOrderDestination) return 'hotel_only_or_hotel_led';
+
+  return 'other';
+}
+
 function isCoreServiceRow(row: JsonRecord) {
   const rawType = String(row.type || '').toLowerCase();
   return rawType === 'airticket' || rawType === 'transfer';
@@ -396,6 +443,19 @@ function isAncillaryServiceRow(row: JsonRecord) {
 
   const productGroup = productGroupForService(row);
   return productGroup === 'other' || productGroup === 'insurance' || productGroup === 'excursion';
+}
+
+function shouldUseSpecialReconciliationRule(
+  accountingClass: AccountingClass,
+  rawProfitEur: number,
+  discountEur: number,
+) {
+  if (!['package_with_flight', 'combi_with_flight', 'hotel_only_or_hotel_led'].includes(accountingClass)) {
+    return false;
+  }
+
+  if (discountEur <= 0 || rawProfitEur <= 0) return false;
+  return rawProfitEur >= discountEur * 3 && rawProfitEur - discountEur >= 100;
 }
 
 function discountFallbackEur(
@@ -476,12 +536,20 @@ function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
   toEur: (amount: number | null, currency?: string | null) => number | null,
-) {
+  hasOrderDestination: boolean,
+): OrderFinancials {
   const orderStatus = String(detail.status || summary.status || '');
   const orderCurrency = String(detail.currency || summary.currency || 'UAH');
   const balanceCurrency = String(detail.balance_currency || orderCurrency);
   const balanceAmount = parseAmount(detail.balance_amount) || 0;
   const totalAmount = parseAmount(detail.total_amount) || 0;
+  const hotelLines = Array.isArray(detail.hotel) ? detail.hotel : [];
+  const serviceLines = Array.isArray(detail.service) ? detail.service : [];
+  const allLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }> = [
+    ...hotelLines.map((line: JsonRecord) => ({ productGroup: 'hotel' as ProductGroup, raw: line })),
+    ...serviceLines.map((line: JsonRecord) => ({ productGroup: productGroupForService(line), raw: line })),
+  ];
+  const accountingClass = classifyAccountingClass(allLines, hasOrderDestination);
   const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
   const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur);
   const priceEur = amountDetailTotals.netEur > 0
@@ -495,12 +563,15 @@ function computeOrderFinancials(
       costEur: 0,
       profitEur: 0,
       profitPct: 0,
+      accountingClass,
+      profitBasisUsed: 'zero_for_non_cnf',
+      hasIncompleteCoreCost: false,
     };
   }
 
   let costEur = 0;
-  const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
-  const services = Array.isArray(detail.service) ? detail.service : [];
+  const hotels = hotelLines;
+  const services = serviceLines;
   const confirmedHotels = hotels.filter((row: any) => row.status === 'CNF');
   const confirmedCoreServices = services.filter((row: any) => row.status === 'CNF' && isCoreServiceRow(row));
   const hasIncompleteCoreCost = confirmedHotels.some(hasMissingBuyCost)
@@ -525,6 +596,9 @@ function computeOrderFinancials(
       costEur: round2(Math.max(priceEur - discountEur, 0)),
       profitEur: discountEur,
       profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
+      accountingClass,
+      profitBasisUsed: 'discount_fallback',
+      hasIncompleteCoreCost,
     };
   }
 
@@ -536,6 +610,9 @@ function computeOrderFinancials(
       profitPct: impliedSingleAirticket.netRevenueEur > 0
         ? Math.round((profitEur / impliedSingleAirticket.netRevenueEur) * 100)
         : 0,
+      accountingClass,
+      profitBasisUsed: 'amount_details_net_basis',
+      hasIncompleteCoreCost,
     };
   }
 
@@ -613,13 +690,29 @@ function computeOrderFinancials(
     costEur += serviceCostEur;
   }
 
-  const profitEur = priceEur - costEur;
-  const profitPct = priceEur > 0 ? Math.round((profitEur / priceEur) * 100) : 0;
+  const rawCostEur = round2(costEur);
+  const rawProfitEur = round2(priceEur - rawCostEur);
+  const discountEur = amountDetailTotals.discountEur > 0
+    ? amountDetailTotals.discountEur
+    : discountFallbackEur(detail, orderCurrency, toEur);
+  if (shouldUseSpecialReconciliationRule(accountingClass, rawProfitEur, discountEur)) {
+    return {
+      costEur: round2(Math.max(priceEur - discountEur, 0)),
+      profitEur: discountEur,
+      profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
+      accountingClass,
+      profitBasisUsed: 'special_reconciliation_rule',
+      hasIncompleteCoreCost,
+    };
+  }
 
   return {
-    costEur: round2(costEur),
-    profitEur: round2(profitEur),
-    profitPct,
+    costEur: rawCostEur,
+    profitEur: rawProfitEur,
+    profitPct: priceEur > 0 ? Math.round((rawProfitEur / priceEur) * 100) : 0,
+    accountingClass,
+    profitBasisUsed: 'raw_margin',
+    hasIncompleteCoreCost,
   };
 }
 
@@ -917,7 +1010,6 @@ async function buildReportingRows(
     const orderId = Number(detail.order_id || row.orderId);
     const totalAmountOriginal = parseAmount(detail.total_amount);
     const balanceAmountOriginal = parseAmount(detail.balance_amount);
-    const financials = computeOrderFinancials(detail, summary, toEur);
     const existingOrderEnrichment = context.existingOrderEnrichment.get(orderId);
     const resolvedDestination = resolveOrderDestination(
       detail,
@@ -933,6 +1025,7 @@ async function buildReportingRows(
     const hasOrderDestination = context.reuseExistingEnrichment && existingOrderEnrichment?.hasOrderDestination
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
+    const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
     const orderAirlineNames = new Set<string>();
@@ -964,6 +1057,9 @@ async function buildReportingRows(
       costAmountEur: decimalValue(financials.costEur),
       profitEur: decimalValue(financials.profitEur),
       profitPct: financials.profitPct,
+      accountingClass: financials.accountingClass,
+      profitBasisUsed: financials.profitBasisUsed,
+      hasIncompleteCoreCost: financials.hasIncompleteCoreCost,
       bookingRateDate: bookingDate ? parseDateOnly(bookingDate) : null,
       touristsCount: Array.isArray(detail.tourist) ? detail.tourist.length : 0,
       countriesCount: countries.length,
