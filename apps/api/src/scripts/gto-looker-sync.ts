@@ -8,12 +8,19 @@ function readArg(name: string) {
 }
 
 async function main() {
-  const mode = (readArg('mode') || 'manual') as 'daily' | 'manual' | 'backfill';
+  const mode = (readArg('mode') || 'manual') as
+    | 'daily'
+    | 'manual'
+    | 'backfill'
+    | 'recent_created_refresh'
+    | 'updated_refresh'
+    | 'future_start_catchup'
+    | 'recent_month_catchup';
   const dateFrom = readArg('from');
   const dateTo = readArg('to');
 
   if (!dateFrom || !dateTo) {
-    throw new Error('Usage: tsx src/scripts/gto-looker-sync.ts --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD');
+    throw new Error('Usage: tsx src/scripts/gto-looker-sync.ts --mode=<manual|backfill|recent_created_refresh|updated_refresh|future_start_catchup|recent_month_catchup> --from=YYYY-MM-DD --to=YYYY-MM-DD');
   }
 
   const result = await syncGtoLookerOrders({

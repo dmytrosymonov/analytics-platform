@@ -107,21 +107,27 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - different codes + same normalized name: keep both codes and emit a warning
 - Sync service:
   - `apps/api/src/services/gto-looker-sync.service.ts`
-  - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
+  - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=<manual|backfill|recent_created_refresh|updated_refresh|future_start_catchup|recent_month_catchup> --from=YYYY-MM-DD --to=YYYY-MM-DD`
   - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
   - airline-name repair CLI: `npm --workspace apps/api run refresh:gto-looker-airline-names`
   - profit reconciliation CLI: `npm --workspace apps/api run reconcile:gto-looker-profit -- --xlsx=/absolute/path/to/file.xlsx --from=YYYY-MM-DD --to=YYYY-MM-DD --threshold-pct=10`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
-  - runs every `60` minutes in `Europe/Kyiv` timezone (`0 * * * *`)
-  - refresh window is the last 2 calendar days including the current Kyiv business date
+  - recent-created refresh runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
+  - recent-created refresh scans Kyiv today + yesterday and keeps only orders created in the exact last 24 hours
+  - nightly updated refresh runs every day at `01:00` Kyiv (`0 1 * * *`)
+  - nightly updated refresh scans future-start orders (`today .. today+365 days`) and refreshes only those with source `updated_at` newer than `reporting_gto_orders.updated_at`
+  - if future-start nightly scan returns no usable `updated_at` values, the nightly job falls back to refreshing the full future-start candidate set once for that run
   - sync execution must process order windows in small batches and commit each batch separately instead of building one giant in-memory write set for the full window
   - current protective sync settings are:
     - detail fetch concurrency `4`
     - detail batch size `100`
     - a short pause between committed batches
   - `reporting_gto_sync_runs` should be updated after each committed batch so long backfills show partial progress and can be diagnosed without waiting for a final all-or-nothing finish
+  - one-time operational catch-up before relying on `updated_at`-based nightly refresh:
+    - `recent_month_catchup` for orders created from `2026-05-01`
+    - `future_start_catchup` for all future-start orders in `today .. today+365 days`
 - Coverage nuance:
   - the main incremental/daily Looker export is still creation-date based
   - it does not automatically revisit older already-finished orders outside the rolling 4-day created-at window
@@ -129,6 +135,13 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - this backfill inserted `521` missing orders and `1,196` order lines into the reporting tables
   - status mix of that backfill: `380 CNF`, `140 CNX`, `1 XNP`
   - recorded decision: keep daily refresh unchanged; do not expand it to all old finished orders
+- Operational rule for long-running GTO sync/backfill processes:
+  - always launch them in detached background mode on the server
+  - write stdout/stderr to a server-side log file and keep a PID file
+  - do not keep an interactive SSH session attached to the whole run
+  - after launch, poll status no more frequently than once every 5 minutes
+  - react only if the process exits unexpectedly, stops writing progress, or a validation check shows failure
+  - otherwise keep chat traffic minimal and report only start, failure, and final completion
 - Currency conversion for this export must use GTO v3 historical rates for the booking creation day (`created_at` date), not today's rate
 - Order-level profit in the Looker export must follow the same GTO financial logic as the main connector:
   - revenue from `balance_amount` when present, else `total_amount`

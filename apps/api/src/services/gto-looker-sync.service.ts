@@ -11,8 +11,11 @@ import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
-const DEFAULT_SYNC_CRON = '0 * * * *';
-const DEFAULT_REFRESH_WINDOW_DAYS = 2;
+const DEFAULT_RECENT_CREATED_CRON = '*/30 * * * *';
+const DEFAULT_UPDATED_REFRESH_CRON = '0 1 * * *';
+const DEFAULT_RECENT_CREATED_WINDOW_HOURS = 24;
+const DEFAULT_UPDATED_REFRESH_WINDOW_HOURS = 48;
+const DEFAULT_FUTURE_START_WINDOW_DAYS = 365;
 const DETAIL_CONCURRENCY = 4;
 const DETAIL_BATCH_SIZE = 100;
 const BATCH_PAUSE_MS = 750;
@@ -20,7 +23,14 @@ const INSERT_CHUNK = 500;
 const DELETE_CHUNK = 500;
 
 type JsonRecord = Record<string, any>;
-type SyncMode = 'daily' | 'manual' | 'backfill';
+type SyncMode =
+  | 'daily'
+  | 'manual'
+  | 'backfill'
+  | 'recent_created_refresh'
+  | 'updated_refresh'
+  | 'future_start_catchup'
+  | 'recent_month_catchup';
 
 type SyncParams = {
   mode: SyncMode;
@@ -97,6 +107,7 @@ type ExistingOrderEnrichment = {
   destinationId: string | null;
   hasOrderDestination: boolean;
   packageDestinationName: string | null;
+  updatedAt: Date | null;
 };
 
 type ExistingLineEnrichment = {
@@ -112,6 +123,11 @@ type OrderFinancials = {
   accountingClass: AccountingClass;
   profitBasisUsed: ProfitBasis;
   hasIncompleteCoreCost: boolean;
+};
+
+type SummarySelection = {
+  summaries: JsonRecord[];
+  warnings: string[];
 };
 
 let schedulerStarted = false;
@@ -143,6 +159,19 @@ function addDays(date: string, days: number): string {
   const next = parseIsoDate(date);
   next.setUTCDate(next.getUTCDate() + days);
   return toIsoDate(next);
+}
+
+function subtractHours(date: Date, hours: number) {
+  return new Date(date.getTime() - hours * 3600_000);
+}
+
+function computeTimezoneDate(timezone = DEFAULT_TIMEZONE, now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
 }
 
 function parseDateTime(value?: string | number | null): Date | null {
@@ -804,16 +833,28 @@ async function fetchOrderListWindow(
   http: ReturnType<typeof createHttpClient>,
   dateFrom: string,
   dateTo: string,
+  options?: {
+    sortBy?: 'created_at' | 'date_start';
+    status?: string;
+  },
 ): Promise<JsonRecord[]> {
   const perPage = 1000;
   const rows: JsonRecord[] = [];
   let page = 1;
   let excluded = 0;
+  const sortBy = options?.sortBy || 'created_at';
 
   for (;;) {
     const resp = await fetchWithRetry(`orders_list:${dateFrom}:${dateTo}:page:${page}`, () =>
       http.get('/orders_list', {
-        params: { date_from: dateFrom, date_to: dateTo, sort_by: 'created_at', per_page: perPage, page },
+        params: {
+          date_from: dateFrom,
+          date_to: dateTo,
+          sort_by: sortBy,
+          status: options?.status,
+          per_page: perPage,
+          page,
+        },
       }),
     );
 
@@ -828,7 +869,17 @@ async function fetchOrderListWindow(
     excluded += pageRows.length - keptRows.length;
     rows.push(...keptRows);
     logger.info(
-      { page, pageRows: pageRows.length, keptRows: keptRows.length, excludedRows: excluded, total: rows.length, dateFrom, dateTo },
+      {
+        page,
+        pageRows: pageRows.length,
+        keptRows: keptRows.length,
+        excludedRows: excluded,
+        total: rows.length,
+        dateFrom,
+        dateTo,
+        sortBy,
+        status: options?.status || null,
+      },
       'Fetched GTO orders_list page',
     );
 
@@ -894,6 +945,7 @@ async function fetchExistingEnrichment(orderIds: bigint[]) {
         destinationId: true,
         hasOrderDestination: true,
         packageDestinationName: true,
+        updatedAt: true,
       },
     }),
     (prisma as any).reportingGtoOrderLine.findMany({
@@ -921,6 +973,7 @@ async function fetchExistingEnrichment(orderIds: bigint[]) {
       destinationId: row.destinationId || null,
       hasOrderDestination: Boolean(row.hasOrderDestination),
       packageDestinationName: row.packageDestinationName || null,
+      updatedAt: row.updatedAt || null,
     });
   }
 
@@ -958,6 +1011,124 @@ async function fetchExistingEnrichment(orderIds: bigint[]) {
     existingOrderEnrichment,
     existingLineEnrichment,
   };
+}
+
+function isSourceUpdatedNewer(sourceUpdatedAt: Date | null, existingUpdatedAt: Date | null) {
+  if (!sourceUpdatedAt) return false;
+  if (!existingUpdatedAt) return true;
+  return sourceUpdatedAt.getTime() > existingUpdatedAt.getTime();
+}
+
+async function selectRecentCreatedSummaries(
+  http: ReturnType<typeof createHttpClient>,
+  timezone = DEFAULT_TIMEZONE,
+): Promise<SummarySelection> {
+  const now = new Date();
+  const cutoff = subtractHours(now, DEFAULT_RECENT_CREATED_WINDOW_HOURS);
+  const today = computeTimezoneDate(timezone, now);
+  const yesterday = addDays(today, -1);
+  const rows = await fetchOrderListWindow(http, yesterday, today, { sortBy: 'created_at' });
+  const summaries = rows.filter((row) => {
+    const createdAt = parseDateTime(row.created_at);
+    return createdAt ? createdAt.getTime() >= cutoff.getTime() : false;
+  });
+  return {
+    summaries,
+    warnings: [`Filtered ${summaries.length} created-at candidates from ${rows.length} summaries for last ${DEFAULT_RECENT_CREATED_WINDOW_HOURS}h window`],
+  };
+}
+
+async function selectUpdatedFutureStartSummaries(
+  http: ReturnType<typeof createHttpClient>,
+  config: GtoConfig,
+  dateFrom: string,
+  dateTo: string,
+): Promise<SummarySelection> {
+  const warnings: string[] = [];
+  const rows = await fetchOrderListWindow(http, dateFrom, dateTo, { sortBy: 'date_start' });
+  const cutoff = subtractHours(new Date(), DEFAULT_UPDATED_REFRESH_WINDOW_HOURS);
+  let validUpdatedAtRows = 0;
+  let skippedInvalidUpdatedAt = 0;
+  const candidates: JsonRecord[] = [];
+
+  for (const row of rows) {
+    const sourceUpdatedAt = parseDateTime(row.updated_at);
+    if (!sourceUpdatedAt) {
+      skippedInvalidUpdatedAt += 1;
+      continue;
+    }
+    validUpdatedAtRows += 1;
+    if (sourceUpdatedAt.getTime() >= cutoff.getTime()) {
+      candidates.push(row);
+    }
+  }
+
+  warnings.push(`Scanned ${rows.length} future-start summaries for updated_at refresh`);
+  warnings.push(`Found ${validUpdatedAtRows} future-start summaries with valid updated_at`);
+  if (skippedInvalidUpdatedAt > 0) {
+    warnings.push(`Skipped ${skippedInvalidUpdatedAt} future-start summaries with missing or invalid updated_at`);
+  }
+
+  if (rows.length > 0 && validUpdatedAtRows === 0) {
+    warnings.push('updated_at unavailable for future-start nightly scan; falling back to full future-start refresh');
+    return {
+      summaries: rows,
+      warnings,
+    };
+  }
+
+  const orderIds = candidates
+    .map((row) => Number(row.order_id))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => BigInt(value));
+  const existing = orderIds.length ? await fetchExistingEnrichment(orderIds) : {
+    existingOrderEnrichment: new Map<number, ExistingOrderEnrichment>(),
+    existingLineEnrichment: new Map<string, ExistingLineEnrichment>(),
+  };
+
+  const summaries = candidates.filter((row) => {
+    const orderId = Number(row.order_id);
+    const existingOrder = existing.existingOrderEnrichment.get(orderId);
+    const sourceUpdatedAt = parseDateTime(row.updated_at);
+    return isSourceUpdatedNewer(sourceUpdatedAt, existingOrder?.updatedAt || null);
+  });
+
+  warnings.push(`Selected ${summaries.length} future-start orders with newer updated_at in last ${DEFAULT_UPDATED_REFRESH_WINDOW_HOURS}h`);
+  return {
+    summaries,
+    warnings,
+  };
+}
+
+async function selectSummariesForMode(
+  http: ReturnType<typeof createHttpClient>,
+  config: GtoConfig,
+  params: SyncParams,
+): Promise<SummarySelection> {
+  switch (params.mode) {
+    case 'recent_created_refresh':
+      return selectRecentCreatedSummaries(http, DEFAULT_TIMEZONE);
+    case 'updated_refresh':
+      return selectUpdatedFutureStartSummaries(http, config, params.dateFrom, params.dateTo);
+    case 'future_start_catchup':
+      return {
+        summaries: await fetchOrderListWindow(http, params.dateFrom, params.dateTo, { sortBy: 'date_start' }),
+        warnings: [`Scanned future-start catch-up window ${params.dateFrom}..${params.dateTo}`],
+      };
+    case 'recent_month_catchup':
+      return {
+        summaries: await fetchOrderListWindow(http, params.dateFrom, params.dateTo, { sortBy: 'created_at' }),
+        warnings: [`Scanned recent-month catch-up window ${params.dateFrom}..${params.dateTo}`],
+      };
+    case 'daily':
+    case 'manual':
+    case 'backfill':
+    default:
+      return {
+        summaries: await fetchOrderListWindow(http, params.dateFrom, params.dateTo, { sortBy: 'created_at' }),
+        warnings: [],
+      };
+  }
 }
 
 function decimalValue(value: number | null): string | null {
@@ -1268,16 +1439,18 @@ async function updateSyncRunProgress(runId: string, data: {
 }
 
 function computeDailyWindow(timezone = DEFAULT_TIMEZONE) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  const today = formatter.format(new Date());
+  const today = computeTimezoneDate(timezone);
   return {
-    dateFrom: addDays(today, -(DEFAULT_REFRESH_WINDOW_DAYS - 1)),
+    dateFrom: addDays(today, -1),
     dateTo: today,
+  };
+}
+
+function computeFutureStartWindow(timezone = DEFAULT_TIMEZONE) {
+  const today = computeTimezoneDate(timezone);
+  return {
+    dateFrom: today,
+    dateTo: addDays(today, DEFAULT_FUTURE_START_WINDOW_DAYS),
   };
 }
 
@@ -1305,7 +1478,8 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
       params: { apikey: config.apiKey },
     }, 'gto-looker-sync');
 
-    const summaries = await fetchOrderListWindow(http, params.dateFrom, params.dateTo);
+    const selection = await selectSummariesForMode(http, config, params);
+    const summaries = selection.summaries;
     const fetchedUniqueOrderIds = new Set(summaries.map((row) => Number(row.order_id))).size;
     const buildContext: BuildContext = {
       rateCache: new Map(),
@@ -1317,6 +1491,7 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
       existingLineEnrichment: new Map(),
     };
     const warnings = [
+      ...selection.warnings,
       ...buildContext.airlineDictionary.duplicateCodeWarnings,
       ...buildContext.airlineDictionary.duplicateNameWarnings,
     ];
@@ -1468,24 +1643,49 @@ export function startGtoLookerSyncScheduler() {
   schedulerStarted = true;
 
   cron.schedule(
-    DEFAULT_SYNC_CRON,
+    DEFAULT_RECENT_CREATED_CRON,
     async () => {
       const { dateFrom, dateTo } = computeDailyWindow(DEFAULT_TIMEZONE);
       try {
         await syncGtoLookerOrders({
-          mode: 'daily',
+          mode: 'recent_created_refresh',
           dateFrom,
           dateTo,
           triggeredBy: 'scheduler',
         });
       } catch (error: any) {
-        logger.error({ err: error?.message || String(error), dateFrom, dateTo }, 'Scheduled GTO Looker sync failed');
+        logger.error({ err: error?.message || String(error), dateFrom, dateTo }, 'Scheduled recent-created GTO Looker sync failed');
       }
     },
     { timezone: DEFAULT_TIMEZONE },
   );
 
-  logger.info({ cron: DEFAULT_SYNC_CRON, timezone: DEFAULT_TIMEZONE }, 'Scheduled GTO Looker sync');
+  cron.schedule(
+    DEFAULT_UPDATED_REFRESH_CRON,
+    async () => {
+      const { dateFrom, dateTo } = computeFutureStartWindow(DEFAULT_TIMEZONE);
+      try {
+        await syncGtoLookerOrders({
+          mode: 'updated_refresh',
+          dateFrom,
+          dateTo,
+          triggeredBy: 'scheduler',
+        });
+      } catch (error: any) {
+        logger.error({ err: error?.message || String(error), dateFrom, dateTo }, 'Scheduled updated GTO Looker sync failed');
+      }
+    },
+    { timezone: DEFAULT_TIMEZONE },
+  );
+
+  logger.info(
+    {
+      recentCreatedCron: DEFAULT_RECENT_CREATED_CRON,
+      updatedRefreshCron: DEFAULT_UPDATED_REFRESH_CRON,
+      timezone: DEFAULT_TIMEZONE,
+    },
+    'Scheduled GTO Looker sync jobs',
+  );
 }
 
 export function getDailyLookerWindow() {
