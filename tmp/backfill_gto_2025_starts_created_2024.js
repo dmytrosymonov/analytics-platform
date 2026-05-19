@@ -866,7 +866,7 @@ async function main() {
 
   console.log(JSON.stringify({
     candidateOrders: candidateRows.length,
-    missingOrders: missingRows.length,
+    refreshedOrders: candidateRows.length,
     successfulDetails: successful.length,
     failedDetails: details.filter((row) => row.error).length,
     insertedOrders,
