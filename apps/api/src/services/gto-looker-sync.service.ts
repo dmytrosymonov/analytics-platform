@@ -79,6 +79,11 @@ type ProfitBasis =
   | 'amount_details_net_basis'
   | 'discount_fallback'
   | 'special_reconciliation_rule';
+type SalesBasis =
+  | 'amount_details_total_sell'
+  | 'total_plus_discount_same_currency'
+  | 'net_fallback_warning'
+  | 'cnx_zero_gross';
 
 type DetailEnvelope = {
   orderId: number;
@@ -123,6 +128,16 @@ type OrderFinancials = {
   accountingClass: AccountingClass;
   profitBasisUsed: ProfitBasis;
   hasIncompleteCoreCost: boolean;
+};
+
+type OrderSales = {
+  grossAmountOriginal: number | null;
+  grossAmountCurrency: string | null;
+  grossAmountEur: number | null;
+  commissionAmountOriginal: number | null;
+  commissionAmountCurrency: string | null;
+  commissionAmountEur: number | null;
+  salesBasisUsed: SalesBasis;
 };
 
 type SummarySelection = {
@@ -527,6 +542,124 @@ function amountDetailsTotals(
     discountEur: round2(discountEur),
     netEur: round2(sellEur - discountEur),
     rows: amountDetails,
+  };
+}
+
+function computeOrderSales(
+  detail: JsonRecord,
+  summary: JsonRecord,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+): OrderSales {
+  const orderStatus = String(detail.status || summary.status || '').toUpperCase();
+  const orderCurrency = normalizeCurrencyCode(detail.currency || summary.currency) || 'UAH';
+  const totalAmountOriginal = parseAmount(detail.total_amount);
+  const amountDetails = Array.isArray(detail.amount_details) ? detail.amount_details : [];
+
+  let grossAmountEur = 0;
+  let commissionAmountEur = 0;
+  let grossAmountOriginal = 0;
+  let commissionAmountOriginal = 0;
+  let hasGrossRows = false;
+  let hasCommissionRows = false;
+  let hasAmountDetails = amountDetails.length > 0;
+  let allGrossZero = hasAmountDetails;
+  const grossCurrencies = new Set<string>();
+  const commissionCurrencies = new Set<string>();
+
+  for (const row of amountDetails) {
+    const currency = normalizeCurrencyCode(row?.currency) || orderCurrency;
+    const totalSellOriginal = parseAmount(row?.total_sell) || 0;
+    const discountOriginal = parseAmount(row?.discount) || 0;
+
+    if (totalSellOriginal > 0) {
+      hasGrossRows = true;
+      allGrossZero = false;
+      grossAmountOriginal += totalSellOriginal;
+      grossAmountEur += toEur(totalSellOriginal, currency) ?? 0;
+      grossCurrencies.add(currency);
+    }
+
+    if (discountOriginal > 0) {
+      hasCommissionRows = true;
+      commissionAmountOriginal += discountOriginal;
+      commissionAmountEur += toEur(discountOriginal, currency) ?? 0;
+      commissionCurrencies.add(currency);
+    }
+  }
+
+  if (orderStatus === 'CNX' && hasAmountDetails && allGrossZero) {
+    return {
+      grossAmountOriginal: 0,
+      grossAmountCurrency: orderCurrency,
+      grossAmountEur: 0,
+      commissionAmountOriginal: hasCommissionRows && commissionCurrencies.size === 1 ? round2(commissionAmountOriginal) : null,
+      commissionAmountCurrency: hasCommissionRows && commissionCurrencies.size === 1 ? Array.from(commissionCurrencies)[0] : null,
+      commissionAmountEur: hasCommissionRows ? round2(commissionAmountEur) : null,
+      salesBasisUsed: 'cnx_zero_gross',
+    };
+  }
+
+  if (hasGrossRows) {
+    return {
+      grossAmountOriginal: grossCurrencies.size === 1 ? round2(grossAmountOriginal) : null,
+      grossAmountCurrency: grossCurrencies.size === 1 ? Array.from(grossCurrencies)[0] : null,
+      grossAmountEur: round2(grossAmountEur),
+      commissionAmountOriginal: hasCommissionRows && commissionCurrencies.size === 1 ? round2(commissionAmountOriginal) : null,
+      commissionAmountCurrency: hasCommissionRows && commissionCurrencies.size === 1 ? Array.from(commissionCurrencies)[0] : null,
+      commissionAmountEur: hasCommissionRows ? round2(commissionAmountEur) : null,
+      salesBasisUsed: 'amount_details_total_sell',
+    };
+  }
+
+  if (totalAmountOriginal !== null && totalAmountOriginal !== undefined) {
+    const compatibleCommission = hasCommissionRows
+      && commissionCurrencies.size === 1
+      && commissionCurrencies.has(orderCurrency);
+
+    if (compatibleCommission) {
+      const grossOriginal = totalAmountOriginal + commissionAmountOriginal;
+      return {
+        grossAmountOriginal: round2(grossOriginal),
+        grossAmountCurrency: orderCurrency,
+        grossAmountEur: round2(toEur(grossOriginal, orderCurrency) ?? grossOriginal),
+        commissionAmountOriginal: round2(commissionAmountOriginal),
+        commissionAmountCurrency: orderCurrency,
+        commissionAmountEur: round2(commissionAmountEur),
+        salesBasisUsed: 'total_plus_discount_same_currency',
+      };
+    }
+
+    if (orderStatus === 'CNX' && totalAmountOriginal <= 0) {
+      return {
+        grossAmountOriginal: 0,
+        grossAmountCurrency: orderCurrency,
+        grossAmountEur: 0,
+        commissionAmountOriginal: hasCommissionRows && commissionCurrencies.size === 1 ? round2(commissionAmountOriginal) : null,
+        commissionAmountCurrency: hasCommissionRows && commissionCurrencies.size === 1 ? Array.from(commissionCurrencies)[0] : null,
+        commissionAmountEur: hasCommissionRows ? round2(commissionAmountEur) : null,
+        salesBasisUsed: 'cnx_zero_gross',
+      };
+    }
+
+    return {
+      grossAmountOriginal: round2(totalAmountOriginal),
+      grossAmountCurrency: orderCurrency,
+      grossAmountEur: round2(toEur(totalAmountOriginal, orderCurrency) ?? totalAmountOriginal),
+      commissionAmountOriginal: hasCommissionRows && commissionCurrencies.size === 1 ? round2(commissionAmountOriginal) : null,
+      commissionAmountCurrency: hasCommissionRows && commissionCurrencies.size === 1 ? Array.from(commissionCurrencies)[0] : null,
+      commissionAmountEur: hasCommissionRows ? round2(commissionAmountEur) : null,
+      salesBasisUsed: 'net_fallback_warning',
+    };
+  }
+
+  return {
+    grossAmountOriginal: null,
+    grossAmountCurrency: null,
+    grossAmountEur: null,
+    commissionAmountOriginal: hasCommissionRows && commissionCurrencies.size === 1 ? round2(commissionAmountOriginal) : null,
+    commissionAmountCurrency: hasCommissionRows && commissionCurrencies.size === 1 ? Array.from(commissionCurrencies)[0] : null,
+    commissionAmountEur: hasCommissionRows ? round2(commissionAmountEur) : null,
+    salesBasisUsed: 'net_fallback_warning',
   };
 }
 
@@ -1210,6 +1343,7 @@ async function buildReportingRows(
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
     const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
+    const sales = computeOrderSales(detail, summary, toEur);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
     const orderAirlineNames = new Set<string>();
@@ -1238,6 +1372,13 @@ async function buildReportingRows(
       totalAmountEur: decimalValue(toEur(totalAmountOriginal, detail.currency)),
       balanceAmountOriginal: decimalValue(balanceAmountOriginal),
       balanceAmountEur: decimalValue(toEur(balanceAmountOriginal, detail.balance_currency || detail.currency)),
+      grossAmountOriginal: decimalValue(sales.grossAmountOriginal),
+      grossAmountCurrency: sales.grossAmountCurrency,
+      grossAmountEur: decimalValue(sales.grossAmountEur),
+      commissionAmountOriginal: decimalValue(sales.commissionAmountOriginal),
+      commissionAmountCurrency: sales.commissionAmountCurrency,
+      commissionAmountEur: decimalValue(sales.commissionAmountEur),
+      salesBasisUsed: sales.salesBasisUsed,
       costAmountEur: decimalValue(financials.costEur),
       profitEur: decimalValue(financials.profitEur),
       profitPct: financials.profitPct,

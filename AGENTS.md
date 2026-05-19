@@ -74,6 +74,14 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `cost_amount_eur`
   - `profit_eur`
   - `profit_pct`
+- `reporting_gto_orders` also keeps a separate gross-sales layer for visualization and reconciliation:
+  - `gross_amount_original`
+  - `gross_amount_currency`
+  - `gross_amount_eur`
+  - `commission_amount_original`
+  - `commission_amount_currency`
+  - `commission_amount_eur`
+  - `sales_basis_used`
 - `reporting_gto_orders` now also includes:
   - `destination_id`
   - `structure_id`
@@ -111,6 +119,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
   - airline-name repair CLI: `npm --workspace apps/api run refresh:gto-looker-airline-names`
   - profit reconciliation CLI: `npm --workspace apps/api run reconcile:gto-looker-profit -- --xlsx=/absolute/path/to/file.xlsx --from=YYYY-MM-DD --to=YYYY-MM-DD --threshold-pct=10`
+  - sales reconciliation CLI: `npm --workspace apps/api run reconcile:gto-looker-sales -- --xlsx=/absolute/path/to/file.xlsx --from=YYYY-MM-DD --to=YYYY-MM-DD --threshold-eur=1`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
@@ -154,6 +163,11 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `accounting_class`: `airticket_only`, `package_with_flight`, `combi_with_flight`, `hotel_only_or_hotel_led`, `standalone_transfer`, `standalone_insurance`, or `other`
   - `profit_basis_used`: `zero_for_non_cnf`, `raw_margin`, `amount_details_net_basis`, `discount_fallback`, or `special_reconciliation_rule`
   - `has_incomplete_core_cost`: true when any confirmed core component (`hotel`, `airticket`, `transfer`) has null/zero `price_buy`
+- Sales semantics for the Looker/PostgreSQL export are split explicitly:
+  - `total_amount_*` and `balance_amount_*` remain net / settlement-style values from the private API
+  - dashboard / visualization sales should use `gross_amount_eur`
+  - preferred gross source is `amount_details[].total_sell`
+  - `sales_basis_used` must record whether gross came from direct `amount_details`, same-currency `total + discount`, a warning fallback, or a CNX zero-gross case
 - The reconciliation CLI should compare reporting profit against Excel truth (`Commission/Discount`) and bucket serious mismatches into:
   - `incomplete_core_cost`
   - `airticket_amount_details_basis`
