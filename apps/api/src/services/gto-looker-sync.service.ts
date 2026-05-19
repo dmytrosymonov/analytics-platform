@@ -381,6 +381,40 @@ function classifyProductSegment(
   return 'Other';
 }
 
+function isCoreServiceRow(row: JsonRecord) {
+  const rawType = String(row.type || '').toLowerCase();
+  return rawType === 'airticket' || rawType === 'transfer';
+}
+
+function hasMissingBuyCost(row: JsonRecord) {
+  return (parseAmount(row.price_buy) || 0) <= 0;
+}
+
+function isAncillaryServiceRow(row: JsonRecord) {
+  const rawType = String(row.type || '').toLowerCase();
+  if (rawType !== 'service') return false;
+
+  const productGroup = productGroupForService(row);
+  return productGroup === 'other' || productGroup === 'insurance' || productGroup === 'excursion';
+}
+
+function discountFallbackEur(
+  detail: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const amountDetails = Array.isArray(detail.amount_details) ? detail.amount_details : [];
+  let discountEur = 0;
+
+  for (const row of amountDetails) {
+    const discountOriginal = parseAmount(row?.discount) || 0;
+    if (discountOriginal <= 0) continue;
+    discountEur += toEur(discountOriginal, row?.currency || orderCurrency) ?? 0;
+  }
+
+  return round2(discountEur);
+}
+
 function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -407,9 +441,29 @@ function computeOrderFinancials(
   const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
   const services = Array.isArray(detail.service) ? detail.service : [];
   const confirmedHotels = hotels.filter((row: any) => row.status === 'CNF');
-  const confirmedServices = services.filter((row: any) => row.status === 'CNF');
+  const confirmedCoreServices = services.filter((row: any) => row.status === 'CNF' && isCoreServiceRow(row));
+  const hasIncompleteCoreCost = confirmedHotels.some(hasMissingBuyCost)
+    || confirmedCoreServices.some(hasMissingBuyCost);
+  const hasConfirmedMainTravelProduct = confirmedHotels.length > 0 || confirmedCoreServices.length > 0;
+  const costBearingServices = services.filter((row: any) => {
+    const status = normalizeLineStatus(row.status);
+    if (status === 'CNF') return true;
+    if (status === 'PEN' && hasConfirmedMainTravelProduct && isAncillaryServiceRow(row)) {
+      return (parseAmount(row.price_buy) || 0) > 0;
+    }
+    return false;
+  });
   const eurTransferSuppliers = new Set(['suntransfers']);
   const supplierNameMap = buildSupplierNameMap(detail);
+
+  if (hasIncompleteCoreCost) {
+    const discountEur = discountFallbackEur(detail, orderCurrency, toEur);
+    return {
+      costEur: round2(Math.max(priceEur - discountEur, 0)),
+      profitEur: discountEur,
+      profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
+    };
+  }
 
   for (const hotel of confirmedHotels) {
     const priceBuy = parseAmount(hotel.price_buy) || 0;
@@ -431,7 +485,7 @@ function computeOrderFinancials(
     costEur += hotelCost;
   }
 
-  for (const service of confirmedServices) {
+  for (const service of costBearingServices) {
     const priceBuy = parseAmount(service.price_buy) || 0;
     const priceSell = parseAmount(service.price) || 0;
     if (priceBuy <= 0) continue;
