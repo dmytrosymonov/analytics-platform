@@ -415,6 +415,63 @@ function discountFallbackEur(
   return round2(discountEur);
 }
 
+function amountDetailsTotals(
+  detail: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const amountDetails = Array.isArray(detail.amount_details) ? detail.amount_details : [];
+  let sellEur = 0;
+  let discountEur = 0;
+
+  for (const row of amountDetails) {
+    const totalSellOriginal = parseAmount(row?.total_sell) || 0;
+    const discountOriginal = parseAmount(row?.discount) || 0;
+    const currency = row?.currency || orderCurrency;
+    sellEur += toEur(totalSellOriginal, currency) ?? 0;
+    discountEur += toEur(discountOriginal, currency) ?? 0;
+  }
+
+  return {
+    rowCount: amountDetails.length,
+    sellEur: round2(sellEur),
+    discountEur: round2(discountEur),
+    netEur: round2(sellEur - discountEur),
+    rows: amountDetails,
+  };
+}
+
+function singleAirticketOrderImpliedTotals(
+  detail: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
+  const services = Array.isArray(detail.service) ? detail.service : [];
+  if (hotels.length !== 0 || services.length !== 1) return null;
+
+  const service = services[0];
+  if (String(service?.type || '').toLowerCase() !== 'airticket') return null;
+
+  const totals = amountDetailsTotals(detail, orderCurrency, toEur);
+  if (totals.rowCount !== 1) return null;
+
+  const amountDetail = totals.rows[0];
+  const sellOriginal = parseAmount(service?.price) || 0;
+  const buyOriginal = parseAmount(service?.price_buy) || 0;
+  const totalSellEur = toEur(parseAmount(amountDetail?.total_sell) || 0, amountDetail?.currency || orderCurrency) ?? 0;
+
+  if (sellOriginal <= 0 || buyOriginal <= 0 || totalSellEur <= 0) return null;
+
+  const impliedRate = totalSellEur / sellOriginal;
+  return {
+    impliedSellEur: round2(totalSellEur),
+    impliedBuyEur: round2(buyOriginal * impliedRate),
+    discountEur: totals.discountEur,
+    netRevenueEur: totals.netEur,
+  };
+}
+
 function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -425,7 +482,11 @@ function computeOrderFinancials(
   const balanceCurrency = String(detail.balance_currency || orderCurrency);
   const balanceAmount = parseAmount(detail.balance_amount) || 0;
   const totalAmount = parseAmount(detail.total_amount) || 0;
-  const priceEur = balanceAmount > 0
+  const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
+  const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur);
+  const priceEur = amountDetailTotals.netEur > 0
+    ? amountDetailTotals.netEur
+    : balanceAmount > 0
     ? (toEur(balanceAmount, balanceCurrency) ?? 0)
     : (toEur(totalAmount, orderCurrency) ?? 0);
 
@@ -457,11 +518,24 @@ function computeOrderFinancials(
   const supplierNameMap = buildSupplierNameMap(detail);
 
   if (hasIncompleteCoreCost) {
-    const discountEur = discountFallbackEur(detail, orderCurrency, toEur);
+    const discountEur = amountDetailTotals.discountEur > 0
+      ? amountDetailTotals.discountEur
+      : discountFallbackEur(detail, orderCurrency, toEur);
     return {
       costEur: round2(Math.max(priceEur - discountEur, 0)),
       profitEur: discountEur,
       profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
+    };
+  }
+
+  if (impliedSingleAirticket) {
+    const profitEur = round2(impliedSingleAirticket.netRevenueEur - impliedSingleAirticket.impliedBuyEur);
+    return {
+      costEur: impliedSingleAirticket.impliedBuyEur,
+      profitEur,
+      profitPct: impliedSingleAirticket.netRevenueEur > 0
+        ? Math.round((profitEur / impliedSingleAirticket.netRevenueEur) * 100)
+        : 0,
     };
   }
 
