@@ -22,7 +22,7 @@ function normalizeName(value: unknown): string {
 }
 
 function findAirlineCode(item: Record<string, unknown>): string {
-  for (const key of ['code', 'iata', 'iata_code', 'airline_code']) {
+  for (const key of ['code', 'iata', 'iata_code', 'code_iata', 'airline_code']) {
     const code = normalizeCode(item[key]);
     if (code) return code;
   }

@@ -92,6 +92,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - includes `order_id`, `airline_code`, `airline_name`, `segment_count`, `synced_at`
 - Airline deduplication policy is by normalized airline code, not by airline name
 - Raw airticket carriers come from `service.flight_details.segment[].airline`
+- GTO v3 `/airlines` uses `code_iata` for carrier code mapping; the enrichment parser must read that field
 - Order-level package marker must now use raw private API `destination_id` resolved through GTO v3 `/destinations`
 - `destination_name` in private API may be empty and must not block package classification if `destination_id` resolves
 - `reporting_gto_order_lines` must persist raw `currency_buy` when present
@@ -105,6 +106,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `apps/api/src/services/gto-looker-sync.service.ts`
   - manual CLI: `npm --workspace apps/api run sync:gto-looker -- --mode=backfill --from=YYYY-MM-DD --to=YYYY-MM-DD`
   - cleanup CLI: `npm --workspace apps/api run cleanup:gto-looker-test-orders`
+  - airline-name repair CLI: `npm --workspace apps/api run refresh:gto-looker-airline-names`
   - admin API routes: `/api/v1/looker/gto-orders/status`, `/api/v1/looker/gto-orders/default-window`, `/api/v1/looker/gto-orders/sync`
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
