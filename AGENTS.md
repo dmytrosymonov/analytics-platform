@@ -162,6 +162,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - The project-wide GTO profit engine must persist the chosen audit path:
   - `accounting_class`: `airticket_only`, `package_with_flight`, `combi_with_flight`, `hotel_only_or_hotel_led`, `standalone_transfer`, `standalone_insurance`, or `other`
   - `profit_basis_used`: `zero_for_non_cnf`, `raw_margin`, `amount_details_net_basis`, `discount_fallback`, or `special_reconciliation_rule`
+  - `cost_basis_used`: `api_rate_direct`, `amount_details_implied_fx`, `discount_adjusted_margin`, or `incomplete_core_fallback`
   - `has_incomplete_core_cost`: true when any confirmed core component (`hotel`, `airticket`, `transfer`) has null/zero `price_buy`
 - Sales semantics for the Looker/PostgreSQL export are split explicitly:
   - `total_amount_*` and `balance_amount_*` remain net / settlement-style values from the private API

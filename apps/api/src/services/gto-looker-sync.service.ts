@@ -79,6 +79,11 @@ type ProfitBasis =
   | 'amount_details_net_basis'
   | 'discount_fallback'
   | 'special_reconciliation_rule';
+type CostBasis =
+  | 'api_rate_direct'
+  | 'amount_details_implied_fx'
+  | 'discount_adjusted_margin'
+  | 'incomplete_core_fallback';
 type SalesBasis =
   | 'amount_details_total_sell'
   | 'total_plus_discount_same_currency'
@@ -127,6 +132,7 @@ type OrderFinancials = {
   profitPct: number;
   accountingClass: AccountingClass;
   profitBasisUsed: ProfitBasis;
+  costBasisUsed: CostBasis;
   hasIncompleteCoreCost: boolean;
 };
 
@@ -499,6 +505,9 @@ function shouldUseSpecialReconciliationRule(
   }
 
   if (discountEur <= 0 || rawProfitEur <= 0) return false;
+  if (accountingClass === 'hotel_only_or_hotel_led') {
+    return rawProfitEur >= discountEur * 1.25 && rawProfitEur - discountEur >= 50;
+  }
   return rawProfitEur >= discountEur * 3 && rawProfitEur - discountEur >= 100;
 }
 
@@ -543,6 +552,37 @@ function amountDetailsTotals(
     netEur: round2(sellEur - discountEur),
     rows: amountDetails,
   };
+}
+
+function lineDirectSellEur(
+  raw: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const priceSell = parseAmount(raw.price) || 0;
+  if (priceSell <= 0) return 0;
+  return toEur(priceSell, raw.currency || orderCurrency) ?? 0;
+}
+
+function computeGrossScaleForLines(
+  lines: JsonRecord[],
+  detail: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  const totals = amountDetailsTotals(detail, orderCurrency, toEur);
+  if (totals.sellEur <= 0 || lines.length === 0) return null;
+
+  let directSellEur = 0;
+  for (const line of lines) {
+    directSellEur += lineDirectSellEur(line, orderCurrency, toEur);
+  }
+
+  if (directSellEur <= 0) return null;
+  const scale = totals.sellEur / directSellEur;
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  if (scale < 0.7 || scale > 1.3) return null;
+  return scale;
 }
 
 function computeOrderSales(
@@ -740,6 +780,7 @@ function computeOrderFinancials(
       profitPct: 0,
       accountingClass,
       profitBasisUsed: 'zero_for_non_cnf',
+      costBasisUsed: 'api_rate_direct',
       hasIncompleteCoreCost: false,
     };
   }
@@ -773,6 +814,7 @@ function computeOrderFinancials(
       profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
       accountingClass,
       profitBasisUsed: 'discount_fallback',
+      costBasisUsed: 'incomplete_core_fallback',
       hasIncompleteCoreCost,
     };
   }
@@ -787,9 +829,21 @@ function computeOrderFinancials(
         : 0,
       accountingClass,
       profitBasisUsed: 'amount_details_net_basis',
+      costBasisUsed: 'amount_details_implied_fx',
       hasIncompleteCoreCost,
     };
   }
+
+  const activeHotels = hotels.filter((row: any) => normalizeLineStatus(row.status) !== 'CNX');
+  const activeServices = services.filter((row: any) => normalizeLineStatus(row.status) !== 'CNX');
+  const airSellLines = activeServices.filter((row: any) => String(row.type || '').toLowerCase() === 'airticket');
+  const orderGrossScale = computeGrossScaleForLines(
+    [...activeHotels, ...activeServices],
+    detail,
+    orderCurrency,
+    toEur,
+  );
+  let costBasisUsed: CostBasis = 'api_rate_direct';
 
   for (const hotel of confirmedHotels) {
     const priceBuy = parseAmount(hotel.price_buy) || 0;
@@ -836,18 +890,28 @@ function computeOrderFinancials(
         : transferCostConverted;
     } else if (service.type === 'airticket') {
       const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
+      const taggedBuyCurrency = supplierTagCurrency(supplierNameMap, service.supplier_id);
       const buyCurrency = explicitBuyCurrency
-        || supplierTagCurrency(supplierNameMap, service.supplier_id)
+        || taggedBuyCurrency
         || String(service.currency || orderCurrency);
       const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
       const airSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
       const airCostUah = toEur(priceBuy, 'UAH') ?? airCostConverted;
-
-      serviceCostEur = !explicitBuyCurrency && ((airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
-        (priceEur > 0 && airCostConverted > priceEur)
-      )
-        ? airCostUah
-        : airCostConverted;
+      const canUseImpliedFx = Boolean(orderGrossScale)
+        && airSellLines.length > 0
+        && buyCurrency === String(service.currency || orderCurrency)
+        && buyCurrency !== 'EUR'
+        && !taggedBuyCurrency;
+      if (canUseImpliedFx && orderGrossScale) {
+        serviceCostEur = airCostConverted * orderGrossScale;
+        costBasisUsed = 'amount_details_implied_fx';
+      } else {
+        serviceCostEur = !explicitBuyCurrency && ((airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
+          (priceEur > 0 && airCostConverted > priceEur)
+        )
+          ? airCostUah
+          : airCostConverted;
+      }
     } else {
       const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
       const serviceCurrency = explicitBuyCurrency || String(service.currency || orderCurrency);
@@ -877,6 +941,7 @@ function computeOrderFinancials(
       profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
       accountingClass,
       profitBasisUsed: 'special_reconciliation_rule',
+      costBasisUsed: 'discount_adjusted_margin',
       hasIncompleteCoreCost,
     };
   }
@@ -887,6 +952,7 @@ function computeOrderFinancials(
     profitPct: priceEur > 0 ? Math.round((rawProfitEur / priceEur) * 100) : 0,
     accountingClass,
     profitBasisUsed: 'raw_margin',
+    costBasisUsed,
     hasIncompleteCoreCost,
   };
 }
@@ -1384,6 +1450,7 @@ async function buildReportingRows(
       profitPct: financials.profitPct,
       accountingClass: financials.accountingClass,
       profitBasisUsed: financials.profitBasisUsed,
+      costBasisUsed: financials.costBasisUsed,
       hasIncompleteCoreCost: financials.hasIncompleteCoreCost,
       bookingRateDate: bookingDate ? parseDateOnly(bookingDate) : null,
       touristsCount: Array.isArray(detail.tourist) ? detail.tourist.length : 0,

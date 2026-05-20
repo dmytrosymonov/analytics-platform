@@ -258,6 +258,7 @@ model ReportingGtoOrder {
   profitPct               Int?      @map("profit_pct")
   accountingClass         String?   @map("accounting_class")
   profitBasisUsed         String?   @map("profit_basis_used")
+  costBasisUsed           String?   @map("cost_basis_used")
   hasIncompleteCoreCost   Boolean   @default(false) @map("has_incomplete_core_cost")
   bookingRateDate         DateTime? @map("booking_rate_date") @db.Date
   touristsCount           Int       @default(0) @map("tourists_count")

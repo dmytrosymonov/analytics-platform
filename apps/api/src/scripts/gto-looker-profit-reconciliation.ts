@@ -24,6 +24,7 @@ type ReportingOrderRow = {
   profitEur: any;
   accountingClass: string | null;
   profitBasisUsed: string | null;
+  costBasisUsed: string | null;
   hasIncompleteCoreCost: boolean;
   hasOrderDestination: boolean;
 };
@@ -39,9 +40,9 @@ type ReportingLineRow = {
 
 type ReconciliationBucket =
   | 'incomplete_core_cost'
-  | 'airticket_amount_details_basis'
-  | 'package_revenue_basis'
-  | 'hotel_no_flight_margin_mismatch'
+  | 'airticket_implied_fx_needed'
+  | 'package_air_component_fx'
+  | 'hotel_discount_adjustment'
   | 'currency_label_issue'
   | 'ancillary_cost_issue'
   | 'unknown_manual_logic';
@@ -145,19 +146,22 @@ function loadExcelRows(xlsxPath: string): ExcelRow[] {
 
 function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLineRow[], excelRow: ExcelRow): ReconciliationBucket {
   if (order?.hasIncompleteCoreCost) return 'incomplete_core_cost';
-  if (order?.accountingClass === 'airticket_only' && order?.profitBasisUsed === 'amount_details_net_basis') {
-    return 'airticket_amount_details_basis';
+  if (order?.costBasisUsed === 'amount_details_implied_fx' && order?.accountingClass === 'airticket_only') {
+    return 'airticket_implied_fx_needed';
   }
   if (lines.some((line) => ['CNF', 'PEN'].includes(String(line.status || '').toUpperCase())
     && line.productGroup === 'other'
     && decimalToNumber(line.priceBuyOriginal) > 0)) {
     return 'ancillary_cost_issue';
   }
-  if (order?.accountingClass === 'package_with_flight' || order?.accountingClass === 'combi_with_flight') {
-    return 'package_revenue_basis';
+  if (
+    order?.costBasisUsed === 'amount_details_implied_fx'
+    && (order?.accountingClass === 'package_with_flight' || order?.accountingClass === 'combi_with_flight')
+  ) {
+    return 'package_air_component_fx';
   }
-  if (order?.accountingClass === 'hotel_only_or_hotel_led' && excelRow.flightCostOriginal <= 0) {
-    return 'hotel_no_flight_margin_mismatch';
+  if (order?.costBasisUsed === 'discount_adjusted_margin' && order?.accountingClass === 'hotel_only_or_hotel_led' && excelRow.flightCostOriginal <= 0) {
+    return 'hotel_discount_adjustment';
   }
   if (lines.some((line) => {
     const currency = String(line.currency || '').trim().toUpperCase();
@@ -203,6 +207,7 @@ async function main() {
         profitEur: true,
         accountingClass: true,
         profitBasisUsed: true,
+        costBasisUsed: true,
         hasIncompleteCoreCost: true,
         hasOrderDestination: true,
       },
@@ -223,7 +228,7 @@ async function main() {
 
   const orderMap = new Map<number, ReportingOrderRow>();
   for (const order of orders) {
-    orderMap.set(Number(order.orderId), order as ReportingOrderRow);
+    orderMap.set(Number(order.orderId), order as unknown as ReportingOrderRow);
   }
 
   const linesByOrderId = new Map<number, ReportingLineRow[]>();
@@ -272,6 +277,7 @@ async function main() {
       profitDeltaPct: deltaPct,
       accountingClass: order?.accountingClass || null,
       profitBasisUsed: order?.profitBasisUsed || null,
+      costBasisUsed: order?.costBasisUsed || null,
       hasIncompleteCoreCost: Boolean(order?.hasIncompleteCoreCost),
       reconciliationBucket: classifyBucket(order, orderLines, row),
       serious,
