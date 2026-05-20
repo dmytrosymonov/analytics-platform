@@ -121,5 +121,53 @@
     "expectedRealIncomeOriginal": 1442.47,
     "expectedRealIncomeCurrency": "EUR",
     "expectedRealIncomeEur": 1442.47
+  },
+  {
+    "orderId": 671855,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 47.89,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 47.89
+  },
+  {
+    "orderId": 683205,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 29.71,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 29.71,
+    "expectedBucket": "api_hidden_cost_missing",
+    "note": "UI shows an extra 2 EUR cost row that is absent from live private API."
+  },
+  {
+    "orderId": 683760,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 1228.91,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 23.37,
+    "expectedBucket": "airticket_basis_wrong",
+    "note": "Single airticket order; UI real income equals sell minus discount minus buy in UAH."
+  },
+  {
+    "orderId": 680080,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 47.89,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 47.89,
+    "expectedBucket": "api_hidden_cost_missing",
+    "note": "UI shows hidden cost row(s) not present in live private API; also contains multi-basket add-ons."
+  },
+  {
+    "orderId": 595381,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 2457.00,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 54.56,
+    "expectedBucket": "airticket_basis_wrong",
+    "note": "Single airticket order; UI real income equals sell minus discount minus buy in UAH."
   }
 ]

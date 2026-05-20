@@ -16,6 +16,7 @@ type TruthRow = {
   source: 'xlsx' | 'screenshot';
   exclude: boolean;
   note?: string | null;
+  expectedBucket?: ReconciliationBucket | null;
 };
 
 type ExcelRow = {
@@ -37,6 +38,7 @@ type ScreenshotTruthRow = {
   expectedRealIncomeCurrency?: string;
   expectedRealIncomeEur?: number;
   note?: string;
+  expectedBucket?: ReconciliationBucket;
 };
 
 type ReportingOrderRow = {
@@ -64,8 +66,11 @@ type ReportingLineRow = {
 
 type ReconciliationBucket =
   | 'technical_excluded_order'
+  | 'api_hidden_cost_missing'
   | 'amount_details_row_margin'
   | 'ambiguous_addon_mapping'
+  | 'airticket_basis_wrong'
+  | 'multi_basket_mapping_issue'
   | 'incomplete_core_cost'
   | 'airticket_implied_fx_needed'
   | 'package_air_component_fx'
@@ -185,11 +190,13 @@ function loadScreenshotTruthRows(jsonPath: string): TruthRow[] {
     source: 'screenshot' as const,
     exclude: Boolean(row.exclude),
     note: row.note || null,
+    expectedBucket: row.expectedBucket || null,
   })).filter((row) => Number.isFinite(row.orderId) && row.orderId > 0);
 }
 
 function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLineRow[], truthRow: TruthRow): ReconciliationBucket {
   if (truthRow.exclude) return 'technical_excluded_order';
+  if (truthRow.expectedBucket) return truthRow.expectedBucket;
   if (order?.hasIncompleteCoreCost) return 'incomplete_core_cost';
   if (order?.profitBasisUsed === 'amount_details_row_margin' || order?.costBasisUsed === 'amount_details_row_margin') {
     return 'amount_details_row_margin';

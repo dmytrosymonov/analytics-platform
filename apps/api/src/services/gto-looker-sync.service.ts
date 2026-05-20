@@ -726,23 +726,6 @@ function mapAmountDetailsToLines(
   return { rows: mappedRows, ambiguous: false };
 }
 
-function excludedStandaloneAddonRevenueEur(
-  mappedRows: AmountDetailMappingRow[],
-  toEur: (amount: number | null, currency?: string | null) => number | null,
-) {
-  let excludedRevenueEur = 0;
-
-  for (const row of mappedRows) {
-    if (row.discount !== 0 || row.mappedLines.length !== 1) continue;
-    const [line] = row.mappedLines;
-    const lineBuy = parseAmount(line.raw.price_buy) || 0;
-    if (line.productGroup !== 'other' || lineBuy > 0) continue;
-    excludedRevenueEur += toEur(row.totalSell, row.currency) ?? 0;
-  }
-
-  return round2(excludedRevenueEur);
-}
-
 function computeOrderSales(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -875,6 +858,12 @@ function singleAirticketOrderImpliedTotals(
 
   const totals = amountDetailsTotals(detail, orderCurrency, toEur);
   if (totals.rowCount !== 1) return null;
+  const amountDetail = totals.rows[0];
+  const serviceCurrency = normalizeCurrencyCode(service?.currency || orderCurrency) || orderCurrency;
+  const amountDetailCurrency = normalizeCurrencyCode(amountDetail?.currency || orderCurrency) || orderCurrency;
+  const balanceCurrency = normalizeCurrencyCode(detail.balance_currency || orderCurrency) || orderCurrency;
+  const hasSettlementCurrencyMismatch = balanceCurrency !== serviceCurrency || amountDetailCurrency !== serviceCurrency;
+  if (!hasSettlementCurrencyMismatch) return null;
   const balanceAmount = parseAmount(detail.balance_amount) || 0;
   const balanceEur = toEur(balanceAmount, detail.balance_currency || orderCurrency) ?? 0;
 
@@ -887,7 +876,6 @@ function singleAirticketOrderImpliedTotals(
     };
   }
 
-  const amountDetail = totals.rows[0];
   const sellOriginal = parseAmount(service?.price) || 0;
   const buyOriginal = parseAmount(service?.price_buy) || 0;
   const totalSellEur = toEur(parseAmount(amountDetail?.total_sell) || 0, amountDetail?.currency || orderCurrency) ?? 0;
@@ -930,7 +918,6 @@ function computeOrderFinancials(
     : balanceAmount > 0
     ? (toEur(balanceAmount, balanceCurrency) ?? 0)
     : (toEur(totalAmount, orderCurrency) ?? 0);
-  let revenueAdjustmentEur = 0;
 
   if (orderStatus !== 'CNF') {
     return {
@@ -1014,13 +1001,10 @@ function computeOrderFinancials(
   ];
 
   if (amountRows.length > 0 && mappableLines.length > 0) {
-    const mapped = mapAmountDetailsToLines(amountRows, mappableLines);
-    if (!mapped.ambiguous) {
-      revenueAdjustmentEur = excludedStandaloneAddonRevenueEur(mapped.rows, toEur);
-    }
+    mapAmountDetailsToLines(amountRows, mappableLines);
   }
 
-  const priceEur = round2(Math.max(basePriceEur - revenueAdjustmentEur, 0));
+  const priceEur = round2(basePriceEur);
 
   if (impliedSingleAirticket) {
     const profitEur = round2(impliedSingleAirticket.netRevenueEur - impliedSingleAirticket.impliedBuyEur);
