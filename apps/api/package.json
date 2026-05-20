@@ -14,7 +14,8 @@
     "cleanup:gto-looker-test-orders": "tsx src/scripts/gto-looker-clean-test-orders.ts",
     "refresh:gto-looker-airline-names": "tsx src/scripts/gto-looker-refresh-airline-names.ts",
     "reconcile:gto-looker-profit": "tsx src/scripts/gto-looker-profit-reconciliation.ts",
-    "reconcile:gto-looker-sales": "tsx src/scripts/gto-looker-sales-reconciliation.ts"
+    "reconcile:gto-looker-sales": "tsx src/scripts/gto-looker-sales-reconciliation.ts",
+    "calibrate:gto-looker-daily-profit": "tsx src/scripts/gto-looker-daily-profit-calibration.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

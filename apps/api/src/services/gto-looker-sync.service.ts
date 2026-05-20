@@ -56,6 +56,20 @@ type SyncResult = {
   warnings: string[];
 };
 
+type PreviewResult = {
+  mode: SyncMode;
+  dateFrom: string;
+  dateTo: string;
+  fetchedOrderRows: number;
+  fetchedUniqueOrderIds: number;
+  syncedOrderRows: number;
+  syncedLineRows: number;
+  detailErrorRows: number;
+  orderRows: any[];
+  lineRows: any[];
+  warnings: string[];
+};
+
 type GtoConfig = {
   apiKey: string;
   baseUrl: string;
@@ -487,6 +501,44 @@ function isCoreServiceRow(row: JsonRecord) {
 
 function hasMissingBuyCost(row: JsonRecord) {
   return (parseAmount(row.price_buy) || 0) <= 0;
+}
+
+function isZeroValueLine(row: JsonRecord) {
+  return (parseAmount(row.price) || 0) <= 0 && (parseAmount(row.price_buy) || 0) <= 0;
+}
+
+function isExplicitZeroCostAddon(row: JsonRecord) {
+  if ((parseAmount(row.price) || 0) <= 0 || (parseAmount(row.price_buy) || 0) > 0) return false;
+
+  const text = [
+    row.name,
+    row.full_name,
+    row.service_name,
+    row.service_type_name,
+    row.remarks,
+    row.comments,
+  ].map((value) => String(value || '').toLocaleLowerCase('uk-UA')).join(' ');
+
+  return [
+    'extra luggage',
+    'luggage',
+    'baggage',
+    'багаж',
+    'доплата',
+    'addon',
+    'add-on',
+    'supplement',
+  ].some((needle) => text.includes(needle));
+}
+
+function requiresCoreBuyCost(row: JsonRecord) {
+  if (isZeroValueLine(row)) return false;
+  if (isExplicitZeroCostAddon(row)) return false;
+  return (parseAmount(row.price) || 0) > 0;
+}
+
+function hasMissingRequiredBuyCost(row: JsonRecord) {
+  return requiresCoreBuyCost(row) && hasMissingBuyCost(row);
 }
 
 function isAncillaryServiceRow(row: JsonRecord) {
@@ -931,13 +983,26 @@ function computeOrderFinancials(
     };
   }
 
+  const hasNonCancelledSourceLine = allLines.some(({ raw }) => normalizeLineStatus(raw.status) !== 'CNX');
+  if (!hasNonCancelledSourceLine && Math.abs(totalAmount) < 0.005 && amountDetailTotals.sellEur <= 0) {
+    return {
+      costEur: 0,
+      profitEur: 0,
+      profitPct: 0,
+      accountingClass,
+      profitBasisUsed: 'special_reconciliation_rule',
+      costBasisUsed: 'api_rate_direct',
+      hasIncompleteCoreCost: false,
+    };
+  }
+
   let costEur = 0;
   const hotels = hotelLines;
   const services = serviceLines;
   const confirmedHotels = hotels.filter((row: any) => row.status === 'CNF');
   const confirmedCoreServices = services.filter((row: any) => row.status === 'CNF' && isCoreServiceRow(row));
-  const hasIncompleteCoreCost = confirmedHotels.some(hasMissingBuyCost)
-    || confirmedCoreServices.some(hasMissingBuyCost);
+  const hasIncompleteCoreCost = confirmedHotels.some(hasMissingRequiredBuyCost)
+    || confirmedCoreServices.some(hasMissingRequiredBuyCost);
   const hasConfirmedMainTravelProduct = confirmedHotels.length > 0 || confirmedCoreServices.length > 0;
   const costBearingServices = services.filter((row: any) => {
     const status = normalizeLineStatus(row.status);
@@ -1832,6 +1897,67 @@ async function updateSyncRunProgress(runId: string, data: {
   });
 }
 
+async function createBuildContext(config: GtoConfig, reuseExistingEnrichment: boolean): Promise<BuildContext> {
+  return {
+    rateCache: new Map(),
+    airlineDictionary: await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl),
+    destinationDictionary: await DestinationService.getDestinationDictionary(config.apiKey, config.v3BaseUrl),
+    unknownAirlineCodes: new Set(),
+    reuseExistingEnrichment,
+    existingOrderEnrichment: new Map(),
+    existingLineEnrichment: new Map(),
+  };
+}
+
+async function buildLookerRowsForSummaries(
+  summaries: JsonRecord[],
+  config: GtoConfig,
+  http: ReturnType<typeof createHttpClient>,
+  buildContext: BuildContext,
+  progressOffset = 0,
+  progressTotal = summaries.length,
+) {
+  const orderRows: any[] = [];
+  const lineRows: any[] = [];
+  const lineAirlineRows: any[] = [];
+  let detailErrorRows = 0;
+
+  for (let offset = 0; offset < summaries.length; offset += DETAIL_BATCH_SIZE) {
+    const summaryBatch = summaries.slice(offset, offset + DETAIL_BATCH_SIZE);
+    const batchOrderIds = summaryBatch
+      .map((row) => Number(row.order_id))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => BigInt(value));
+
+    if (buildContext.reuseExistingEnrichment) {
+      const existing = await fetchExistingEnrichment(batchOrderIds);
+      buildContext.existingOrderEnrichment = existing.existingOrderEnrichment;
+      buildContext.existingLineEnrichment = existing.existingLineEnrichment;
+    } else {
+      buildContext.existingOrderEnrichment = new Map();
+      buildContext.existingLineEnrichment = new Map();
+    }
+
+    const details = await fetchOrderDetails(http, summaryBatch, progressOffset + offset, progressTotal);
+    const built = await buildReportingRows(details, config, buildContext);
+    orderRows.push(...built.orderRows);
+    lineRows.push(...built.lineRows);
+    lineAirlineRows.push(...built.lineAirlineRows);
+    detailErrorRows += built.failed.length;
+
+    if (offset + DETAIL_BATCH_SIZE < summaries.length && BATCH_PAUSE_MS > 0) {
+      await sleep(BATCH_PAUSE_MS);
+    }
+  }
+
+  return {
+    orderRows,
+    lineRows,
+    lineAirlineRows,
+    detailErrorRows,
+  };
+}
+
 function computeDailyWindow(timezone = DEFAULT_TIMEZONE) {
   const today = computeTimezoneDate(timezone);
   return {
@@ -1845,6 +1971,47 @@ function computeFutureStartWindow(timezone = DEFAULT_TIMEZONE) {
   return {
     dateFrom: today,
     dateTo: addDays(today, DEFAULT_FUTURE_START_WINDOW_DAYS),
+  };
+}
+
+export async function previewGtoLookerOrders(params: SyncParams): Promise<PreviewResult> {
+  const config = await getGtoConfig();
+  const http = createHttpClient({
+    baseURL: config.baseUrl,
+    timeout: config.timeoutMs,
+    params: { apikey: config.apiKey },
+  }, 'gto-looker-preview');
+
+  const selection = await selectSummariesForMode(http, config, params);
+  const summaries = selection.summaries;
+  const fetchedUniqueOrderIds = new Set(summaries.map((row) => Number(row.order_id))).size;
+  const buildContext = await createBuildContext(config, params.mode !== 'backfill');
+  const built = await buildLookerRowsForSummaries(summaries, config, http, buildContext);
+  const warnings = [
+    ...selection.warnings,
+    ...buildContext.airlineDictionary.duplicateCodeWarnings,
+    ...buildContext.airlineDictionary.duplicateNameWarnings,
+  ];
+
+  if (built.detailErrorRows > 0) {
+    warnings.push(`Failed to preview ${built.detailErrorRows} orders in current sync window`);
+  }
+  if (buildContext.unknownAirlineCodes.size > 0) {
+    warnings.push(`Unknown airline codes in GTO airticket segments: ${Array.from(buildContext.unknownAirlineCodes).sort().join(', ')}`);
+  }
+
+  return {
+    mode: params.mode,
+    dateFrom: params.dateFrom,
+    dateTo: params.dateTo,
+    fetchedOrderRows: summaries.length,
+    fetchedUniqueOrderIds,
+    syncedOrderRows: built.orderRows.length,
+    syncedLineRows: built.lineRows.length,
+    detailErrorRows: built.detailErrorRows,
+    orderRows: built.orderRows,
+    lineRows: built.lineRows,
+    warnings,
   };
 }
 
@@ -1875,15 +2042,7 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
     const selection = await selectSummariesForMode(http, config, params);
     const summaries = selection.summaries;
     const fetchedUniqueOrderIds = new Set(summaries.map((row) => Number(row.order_id))).size;
-    const buildContext: BuildContext = {
-      rateCache: new Map(),
-      airlineDictionary: await AirlineService.getAirlineDictionary(config.apiKey, config.v3BaseUrl),
-      destinationDictionary: await DestinationService.getDestinationDictionary(config.apiKey, config.v3BaseUrl),
-      unknownAirlineCodes: new Set(),
-      reuseExistingEnrichment: params.mode !== 'backfill',
-      existingOrderEnrichment: new Map(),
-      existingLineEnrichment: new Map(),
-    };
+    const buildContext = await createBuildContext(config, params.mode !== 'backfill');
     const warnings = [
       ...selection.warnings,
       ...buildContext.airlineDictionary.duplicateCodeWarnings,
@@ -1900,25 +2059,13 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
 
     for (let offset = 0; offset < summaries.length; offset += DETAIL_BATCH_SIZE) {
       const summaryBatch = summaries.slice(offset, offset + DETAIL_BATCH_SIZE);
-      const batchOrderIds = summaryBatch
-        .map((row) => Number(row.order_id))
-        .filter((value) => Number.isFinite(value) && value > 0)
-        .map((value) => BigInt(value));
-      if (buildContext.reuseExistingEnrichment) {
-        const existing = await fetchExistingEnrichment(batchOrderIds);
-        buildContext.existingOrderEnrichment = existing.existingOrderEnrichment;
-        buildContext.existingLineEnrichment = existing.existingLineEnrichment;
-      } else {
-        buildContext.existingOrderEnrichment = new Map();
-        buildContext.existingLineEnrichment = new Map();
-      }
-      const details = await fetchOrderDetails(http, summaryBatch, offset, summaries.length);
-      const { orderRows, lineRows, lineAirlineRows, failed } = await buildReportingRows(details, config, buildContext);
+      const built = await buildLookerRowsForSummaries(summaryBatch, config, http, buildContext, offset, summaries.length);
+      const { orderRows, lineRows, lineAirlineRows } = built;
       const replaceStats = await replaceReportingRows(orderRows, lineRows, lineAirlineRows);
 
       syncedOrderRows += orderRows.length;
       syncedLineRows += lineRows.length;
-      detailErrorRows += failed.length;
+      detailErrorRows += built.detailErrorRows;
       insertedOrderRows += replaceStats.insertedOrderRows;
       insertedLineRows += replaceStats.insertedLineRows;
       deletedOrderRows += replaceStats.deletedOrderRows;
@@ -1957,7 +2104,6 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
     if (buildContext.unknownAirlineCodes.size > 0) {
       warnings.push(`Unknown airline codes in GTO airticket segments: ${Array.from(buildContext.unknownAirlineCodes).sort().join(', ')}`);
     }
-
     const result: SyncResult = {
       runId: run.id,
       mode: params.mode,

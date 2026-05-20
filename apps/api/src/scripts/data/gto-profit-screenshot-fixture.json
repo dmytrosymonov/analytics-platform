@@ -123,6 +123,16 @@
     "expectedRealIncomeEur": 1442.47
   },
   {
+    "orderId": 684690,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 7978.64,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 151.73,
+    "expectedBucket": "amount_details_row_margin",
+    "note": "Summed package real income from screenshot: 5460.06 UAH main basket + 2518.58 UAH transfer extra. Converted using order total 193132.12 UAH / 3673.11 EUR."
+  },
+  {
     "orderId": 671855,
     "source": "screenshot",
     "exclude": false,
