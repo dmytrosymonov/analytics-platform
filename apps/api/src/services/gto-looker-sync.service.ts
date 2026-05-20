@@ -76,11 +76,13 @@ type AccountingClass =
 type ProfitBasis =
   | 'zero_for_non_cnf'
   | 'raw_margin'
+  | 'amount_details_row_margin'
   | 'amount_details_net_basis'
   | 'discount_fallback'
   | 'special_reconciliation_rule';
 type CostBasis =
   | 'api_rate_direct'
+  | 'amount_details_row_margin'
   | 'amount_details_implied_fx'
   | 'discount_adjusted_margin'
   | 'incomplete_core_fallback';
@@ -585,6 +587,145 @@ function computeGrossScaleForLines(
   return scale;
 }
 
+function convertCurrencyAmount(
+  amount: number | null,
+  fromCurrency: string | null | undefined,
+  toCurrency: string | null | undefined,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+  eurRateLookup?: (currency: string) => number | null,
+) {
+  if (amount === null || amount === undefined) return null;
+  const from = normalizeCurrencyCode(fromCurrency) || 'EUR';
+  const to = normalizeCurrencyCode(toCurrency) || from;
+  if (from === to) return round2(amount);
+  const eurAmount = toEur(amount, from);
+  if (eurAmount === null || eurAmount === undefined) return null;
+  if (to === 'EUR') return round2(eurAmount);
+  const targetRate = eurRateLookup?.(to);
+  if (!targetRate || targetRate <= 0) return null;
+  return round2(eurAmount * targetRate);
+}
+
+function amountsEqualWithinTolerance(left: number, right: number, tolerance = 0.5) {
+  return Math.abs(round2(left) - round2(right)) <= tolerance;
+}
+
+function resolveMainTravelBuyCurrency(
+  row: JsonRecord,
+  orderCurrency: string,
+  priceEur: number,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+  supplierNameMap: Map<string, string>,
+  eurTransferSuppliers: Set<string>,
+) {
+  const priceBuy = parseAmount(row.price_buy) || 0;
+  const priceSell = parseAmount(row.price) || 0;
+  const explicitBuyCurrency = normalizeCurrencyCode(row.currency_buy);
+  const lineCurrency = normalizeCurrencyCode(row.currency || orderCurrency) || orderCurrency;
+
+  if (String(row.type || '').toLowerCase() === 'transfer') {
+    const transferSupplier = cleanSupplierName(row.supplier_name || row.service_supplier_name).toLowerCase();
+    const transferCurrency = explicitBuyCurrency || (eurTransferSuppliers.has(transferSupplier) ? 'EUR' : lineCurrency);
+    if (explicitBuyCurrency) return explicitBuyCurrency;
+    const transferCostConverted = toEur(priceBuy, transferCurrency) ?? 0;
+    const transferSellConverted = toEur(priceSell, lineCurrency) ?? 0;
+    if (
+      transferCurrency !== 'UAH'
+      && ((transferSellConverted > 0 && transferCostConverted > transferSellConverted * 2)
+        || (priceEur > 0 && transferCostConverted > priceEur))
+    ) {
+      return 'UAH';
+    }
+    return transferCurrency;
+  }
+
+  if (String(row.type || '').toLowerCase() === 'airticket') {
+    const taggedBuyCurrency = supplierTagCurrency(supplierNameMap, row.supplier_id);
+    const buyCurrency = explicitBuyCurrency || taggedBuyCurrency || lineCurrency;
+    if (explicitBuyCurrency || taggedBuyCurrency) return buyCurrency;
+    const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
+    const airSellConverted = toEur(priceSell, lineCurrency) ?? 0;
+    if (
+      (airSellConverted > 0 && airCostConverted > airSellConverted * 2)
+      || (priceEur > 0 && airCostConverted > priceEur)
+    ) {
+      return 'UAH';
+    }
+    return buyCurrency;
+  }
+
+  const buyCurrency = explicitBuyCurrency || lineCurrency;
+  if (explicitBuyCurrency) return explicitBuyCurrency;
+  const costConverted = toEur(priceBuy, buyCurrency) ?? 0;
+  const sellConverted = toEur(priceSell, lineCurrency) ?? 0;
+  if (
+    (sellConverted > 0 && costConverted > sellConverted)
+    || (priceEur > 0 && costConverted > priceEur)
+  ) {
+    return 'UAH';
+  }
+  return buyCurrency;
+}
+
+type AmountDetailMappingLine = {
+  id: string;
+  raw: JsonRecord;
+  productGroup: ProductGroup;
+  sellOriginal: number;
+  sellCurrency: string;
+};
+
+type AmountDetailMappingRow = {
+  index: number;
+  totalSell: number;
+  discount: number;
+  currency: string;
+  mappedLines: AmountDetailMappingLine[];
+};
+
+function mapAmountDetailsToLines(
+  amountRows: AmountDetailMappingRow[],
+  lines: AmountDetailMappingLine[],
+) {
+  if (amountRows.length === 0) return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
+  if (amountRows.length === 1) {
+    return {
+      rows: [{ ...amountRows[0], mappedLines: [...lines] }],
+      ambiguous: false,
+    };
+  }
+
+  const unmatched = [...lines];
+  const mappedRows: AmountDetailMappingRow[] = [];
+
+  for (const row of amountRows.filter((candidate) => candidate.discount === 0)) {
+    const candidates = unmatched.filter((line) =>
+      line.sellCurrency === row.currency
+      && amountsEqualWithinTolerance(line.sellOriginal, row.totalSell, 1),
+    );
+
+    if (candidates.length > 1) {
+      return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
+    }
+
+    if (candidates.length === 1) {
+      const [line] = candidates;
+      mappedRows.push({ ...row, mappedLines: [line] });
+      const index = unmatched.findIndex((candidate) => candidate.id === line.id);
+      if (index >= 0) unmatched.splice(index, 1);
+    }
+  }
+
+  const remainingRows = amountRows.filter((row) => !mappedRows.some((mapped) => mapped.index === row.index));
+  if (remainingRows.length !== 1) {
+    return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
+  }
+
+  mappedRows.push({ ...remainingRows[0], mappedLines: unmatched });
+  mappedRows.sort((left, right) => left.index - right.index);
+  return { rows: mappedRows, ambiguous: false };
+}
+
 function computeOrderSales(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -751,6 +892,7 @@ function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
   toEur: (amount: number | null, currency?: string | null) => number | null,
+  convertAmount: (amount: number | null, fromCurrency?: string | null, toCurrency?: string | null) => number | null,
   hasOrderDestination: boolean,
 ): OrderFinancials {
   const orderStatus = String(detail.status || summary.status || '');
@@ -803,6 +945,14 @@ function computeOrderFinancials(
   });
   const eurTransferSuppliers = new Set(['suntransfers']);
   const supplierNameMap = buildSupplierNameMap(detail);
+  const profitBearingServices = services.filter((row: any) => {
+    const status = normalizeLineStatus(row.status);
+    if (status === 'CNF') return true;
+    if (status === 'PEN' && hasConfirmedMainTravelProduct && isAncillaryServiceRow(row)) {
+      return (parseAmount(row.price_buy) || 0) > 0;
+    }
+    return false;
+  });
 
   if (hasIncompleteCoreCost) {
     const discountEur = amountDetailTotals.discountEur > 0
@@ -817,6 +967,107 @@ function computeOrderFinancials(
       costBasisUsed: 'incomplete_core_fallback',
       hasIncompleteCoreCost,
     };
+  }
+
+  const amountRows: AmountDetailMappingRow[] = amountDetailTotals.rows
+    .map((row, index) => ({
+      index,
+      totalSell: round2(parseAmount(row?.total_sell) || 0),
+      discount: round2(parseAmount(row?.discount) || 0),
+      currency: normalizeCurrencyCode(row?.currency) || orderCurrency,
+      mappedLines: [],
+    }))
+    .filter((row) => row.totalSell > 0 || row.discount > 0);
+
+  const mappableLines: AmountDetailMappingLine[] = [
+    ...confirmedHotels.map((row: JsonRecord, index: number) => ({
+      id: `hotel:${index}`,
+      raw: row,
+      productGroup: 'hotel' as ProductGroup,
+      sellOriginal: parseAmount(row.price) || 0,
+      sellCurrency: normalizeCurrencyCode(row.currency) || orderCurrency,
+    })),
+    ...profitBearingServices.map((row: JsonRecord, index: number) => ({
+      id: `service:${index}`,
+      raw: row,
+      productGroup: productGroupForService(row),
+      sellOriginal: parseAmount(row.price) || 0,
+      sellCurrency: normalizeCurrencyCode(row.currency) || orderCurrency,
+    })),
+  ];
+
+  if (amountRows.length > 0 && mappableLines.length > 0) {
+    const mapped = mapAmountDetailsToLines(amountRows, mappableLines);
+    if (!mapped.ambiguous) {
+      let mappedCostEur = 0;
+      let mappedProfitEur = 0;
+      let mappingFailed = false;
+
+      for (const amountRow of mapped.rows) {
+        if (amountRow.mappedLines.length === 0) {
+          mappingFailed = true;
+          break;
+        }
+
+        let directRowSell = 0;
+        let directRowCost = 0;
+
+        for (const line of amountRow.mappedLines) {
+          const sellInRowCurrency = convertAmount(line.sellOriginal, line.sellCurrency, amountRow.currency);
+          if (sellInRowCurrency !== null && sellInRowCurrency !== undefined) {
+            directRowSell += sellInRowCurrency;
+          }
+
+          const buyOriginal = parseAmount(line.raw.price_buy) || 0;
+          if (buyOriginal <= 0) continue;
+
+          const resolvedBuyCurrency = resolveMainTravelBuyCurrency(
+            line.raw,
+            orderCurrency,
+            priceEur,
+            toEur,
+            supplierNameMap,
+            eurTransferSuppliers,
+          );
+          const buyInRowCurrency = convertAmount(buyOriginal, resolvedBuyCurrency, amountRow.currency);
+          if (buyInRowCurrency === null || buyInRowCurrency === undefined) {
+            mappingFailed = true;
+            break;
+          }
+          directRowCost += buyInRowCurrency;
+        }
+
+        if (mappingFailed || directRowSell <= 0) {
+          mappingFailed = true;
+          break;
+        }
+
+        const rowScale = amountRow.totalSell / directRowSell;
+        if (!Number.isFinite(rowScale) || rowScale <= 0 || rowScale < 0.5 || rowScale > 1.5) {
+          mappingFailed = true;
+          break;
+        }
+
+        const rowNett = round2(directRowCost * rowScale);
+        const rowProfit = round2(amountRow.totalSell - amountRow.discount - rowNett);
+        mappedCostEur += toEur(rowNett, amountRow.currency) ?? 0;
+        mappedProfitEur += toEur(rowProfit, amountRow.currency) ?? 0;
+      }
+
+      if (!mappingFailed) {
+        const costEur = round2(mappedCostEur);
+        const profitEur = round2(mappedProfitEur);
+        return {
+          costEur,
+          profitEur,
+          profitPct: priceEur > 0 ? Math.round((profitEur / priceEur) * 100) : 0,
+          accountingClass,
+          profitBasisUsed: 'amount_details_row_margin',
+          costBasisUsed: 'amount_details_row_margin',
+          hasIncompleteCoreCost,
+        };
+      }
+    }
   }
 
   if (impliedSingleAirticket) {
@@ -1369,6 +1620,14 @@ async function buildReportingRows(
       if (!rates) return round2(amount);
       return CurrencyService.toEur(amount, String(currency || 'EUR'), rates);
     };
+    const convertAmount = (amount: number | null, fromCurrency?: string | null, toCurrency?: string | null) =>
+      convertCurrencyAmount(
+        amount,
+        fromCurrency,
+        toCurrency,
+        toEur,
+        (currency) => rates?.rates?.[currency] ?? null,
+      );
 
     const hotelLines = Array.isArray(detail.hotel) ? detail.hotel : [];
     const serviceLines = Array.isArray(detail.service) ? detail.service : [];
@@ -1408,7 +1667,7 @@ async function buildReportingRows(
     const hasOrderDestination = context.reuseExistingEnrichment && existingOrderEnrichment?.hasOrderDestination
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
-    const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
+    const financials = computeOrderFinancials(detail, summary, toEur, convertAmount, hasOrderDestination);
     const sales = computeOrderSales(detail, summary, toEur);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();

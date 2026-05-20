@@ -1,8 +1,22 @@
 import XLSX from 'xlsx';
+import fs from 'fs';
 import { prisma } from '../lib/prisma';
 import { redis } from '../lib/redis';
 import { decrypt } from '../lib/encryption';
 import { CurrencyService } from '../lib/currency.service';
+
+type TruthRow = {
+  orderId: number;
+  status: string;
+  numberOfPax: number;
+  structure: string;
+  createdAt: Date | null;
+  profitTruthEur: number;
+  flightCostOriginal: number;
+  source: 'xlsx' | 'screenshot';
+  exclude: boolean;
+  note?: string | null;
+};
 
 type ExcelRow = {
   orderId: number;
@@ -13,6 +27,16 @@ type ExcelRow = {
   commissionOriginal: number;
   commissionCurrency: string;
   flightCostOriginal: number;
+};
+
+type ScreenshotTruthRow = {
+  orderId: number;
+  source: 'screenshot';
+  exclude?: boolean;
+  expectedRealIncomeOriginal?: number;
+  expectedRealIncomeCurrency?: string;
+  expectedRealIncomeEur?: number;
+  note?: string;
 };
 
 type ReportingOrderRow = {
@@ -39,12 +63,16 @@ type ReportingLineRow = {
 };
 
 type ReconciliationBucket =
+  | 'technical_excluded_order'
+  | 'amount_details_row_margin'
+  | 'ambiguous_addon_mapping'
   | 'incomplete_core_cost'
   | 'airticket_implied_fx_needed'
   | 'package_air_component_fx'
   | 'hotel_discount_adjustment'
   | 'currency_label_issue'
   | 'ancillary_cost_issue'
+  | 'legacy_raw_margin_fallback'
   | 'unknown_manual_logic';
 
 function readArg(name: string) {
@@ -144,8 +172,28 @@ function loadExcelRows(xlsxPath: string): ExcelRow[] {
     .filter((row) => Number.isFinite(row.orderId) && row.orderId > 0);
 }
 
-function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLineRow[], excelRow: ExcelRow): ReconciliationBucket {
+function loadScreenshotTruthRows(jsonPath: string): TruthRow[] {
+  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as ScreenshotTruthRow[];
+  return raw.map((row) => ({
+    orderId: Number(row.orderId),
+    status: '',
+    numberOfPax: 0,
+    structure: 'gto.ua',
+    createdAt: null,
+    profitTruthEur: round2(Number(row.expectedRealIncomeEur || 0)),
+    flightCostOriginal: 0,
+    source: 'screenshot' as const,
+    exclude: Boolean(row.exclude),
+    note: row.note || null,
+  })).filter((row) => Number.isFinite(row.orderId) && row.orderId > 0);
+}
+
+function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLineRow[], truthRow: TruthRow): ReconciliationBucket {
+  if (truthRow.exclude) return 'technical_excluded_order';
   if (order?.hasIncompleteCoreCost) return 'incomplete_core_cost';
+  if (order?.profitBasisUsed === 'amount_details_row_margin' || order?.costBasisUsed === 'amount_details_row_margin') {
+    return 'amount_details_row_margin';
+  }
   if (order?.costBasisUsed === 'amount_details_implied_fx' && order?.accountingClass === 'airticket_only') {
     return 'airticket_implied_fx_needed';
   }
@@ -160,7 +208,7 @@ function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLi
   ) {
     return 'package_air_component_fx';
   }
-  if (order?.costBasisUsed === 'discount_adjusted_margin' && order?.accountingClass === 'hotel_only_or_hotel_led' && excelRow.flightCostOriginal <= 0) {
+  if (order?.costBasisUsed === 'discount_adjusted_margin' && order?.accountingClass === 'hotel_only_or_hotel_led' && truthRow.flightCostOriginal <= 0) {
     return 'hotel_discount_adjustment';
   }
   if (lines.some((line) => {
@@ -170,23 +218,42 @@ function classifyBucket(order: ReportingOrderRow | undefined, lines: ReportingLi
   })) {
     return 'currency_label_issue';
   }
+  if (order?.profitBasisUsed === 'raw_margin' || order?.costBasisUsed === 'api_rate_direct') {
+    return 'legacy_raw_margin_fallback';
+  }
   return 'unknown_manual_logic';
 }
 
 async function main() {
   const xlsxPath = readArg('xlsx');
+  const truthJsonPath = readArg('truth-json');
   const thresholdPct = Number(readArg('threshold-pct') || 10);
   const dateFromArg = readArg('from');
   const dateToArg = readArg('to');
 
-  if (!xlsxPath) {
-    throw new Error('Usage: tsx src/scripts/gto-looker-profit-reconciliation.ts --xlsx=/path/to/file.xlsx [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--threshold-pct=10]');
+  if (!xlsxPath && !truthJsonPath) {
+    throw new Error('Usage: tsx src/scripts/gto-looker-profit-reconciliation.ts (--xlsx=/path/to/file.xlsx | --truth-json=/path/to/file.json) [--from=YYYY-MM-DD] [--to=YYYY-MM-DD] [--threshold-pct=10]');
   }
 
-  const allExcelRows = loadExcelRows(xlsxPath);
-  const dateFrom = dateFromArg || allExcelRows.map((row) => toIsoDate(row.createdAt)).filter(Boolean).sort()[0] || null;
-  const dateTo = dateToArg || allExcelRows.map((row) => toIsoDate(row.createdAt)).filter(Boolean).sort().slice(-1)[0] || null;
-  const excelRows = allExcelRows.filter((row) => {
+  const allTruthRows = truthJsonPath
+    ? loadScreenshotTruthRows(truthJsonPath)
+    : loadExcelRows(xlsxPath!).map((row) => ({
+      orderId: row.orderId,
+      status: row.status,
+      numberOfPax: row.numberOfPax,
+      structure: row.structure,
+      createdAt: row.createdAt,
+      profitTruthEur: 0,
+      flightCostOriginal: row.flightCostOriginal,
+      source: 'xlsx' as const,
+      exclude: false,
+      note: null,
+    }));
+
+  const dateFrom = dateFromArg || allTruthRows.map((row) => toIsoDate(row.createdAt)).filter(Boolean).sort()[0] || null;
+  const dateTo = dateToArg || allTruthRows.map((row) => toIsoDate(row.createdAt)).filter(Boolean).sort().slice(-1)[0] || null;
+  const truthRowsInput = allTruthRows.filter((row) => {
+    if (!row.createdAt) return truthJsonPath ? true : false;
     const createdDate = toIsoDate(row.createdAt);
     if (!createdDate) return false;
     if (dateFrom && createdDate < dateFrom) return false;
@@ -194,7 +261,7 @@ async function main() {
     return true;
   });
 
-  const orderIds = excelRows.map((row) => BigInt(row.orderId));
+  const orderIds = truthRowsInput.map((row) => BigInt(row.orderId));
   const [orders, lines, config] = await Promise.all([
     prisma.reportingGtoOrder.findMany({
       where: { orderId: { in: orderIds } },
@@ -240,29 +307,35 @@ async function main() {
   }
 
   const rateCache = new Map<string, Awaited<ReturnType<typeof CurrencyService.getRatesForDate>>>();
+  const excelById = xlsxPath ? new Map(loadExcelRows(xlsxPath).map((row) => [row.orderId, row])) : new Map<number, ExcelRow>();
   const truthRows = [];
-  for (const row of excelRows) {
+  for (const row of truthRowsInput) {
     const order = orderMap.get(row.orderId);
     const bookingDate = toIsoDate(order?.createdAt || row.createdAt);
-    let truthProfitEur = 0;
-    if (row.commissionOriginal > 0) {
-      const cacheKey = bookingDate || 'fallback';
-      let rates = rateCache.get(cacheKey);
-      if (!rates) {
-        rates = bookingDate
-          ? await CurrencyService.getRatesForDate(config.apiKey, config.v3BaseUrl, bookingDate)
-          : await CurrencyService.getRatesForDate(config.apiKey, config.v3BaseUrl, new Date().toISOString().slice(0, 10));
-        rateCache.set(cacheKey, rates);
+    let truthProfitEur = row.profitTruthEur;
+    if (row.source === 'xlsx') {
+      const excelRow = excelById.get(row.orderId);
+      if (excelRow && excelRow.commissionOriginal > 0) {
+        const cacheKey = bookingDate || 'fallback';
+        let rates = rateCache.get(cacheKey);
+        if (!rates) {
+          rates = bookingDate
+            ? await CurrencyService.getRatesForDate(config.apiKey, config.v3BaseUrl, bookingDate)
+            : await CurrencyService.getRatesForDate(config.apiKey, config.v3BaseUrl, new Date().toISOString().slice(0, 10));
+          rateCache.set(cacheKey, rates);
+        }
+        truthProfitEur = round2(CurrencyService.toEur(excelRow.commissionOriginal, excelRow.commissionCurrency || 'EUR', rates) ?? 0);
       }
-      truthProfitEur = round2(CurrencyService.toEur(row.commissionOriginal, row.commissionCurrency || 'EUR', rates) ?? 0);
     }
 
     const reportingProfitEur = round2(decimalToNumber(order?.profitEur));
     const deltaEur = round2(reportingProfitEur - truthProfitEur);
-    const deltaPct = truthProfitEur > 0
+    const deltaPct = row.exclude
+      ? 0
+      : truthProfitEur > 0
       ? round2((Math.abs(deltaEur) / truthProfitEur) * 100)
       : (Math.abs(reportingProfitEur) > 10 ? 9999 : 0);
-    const serious = deltaPct > thresholdPct;
+    const serious = !row.exclude && deltaPct > thresholdPct;
     const orderLines = linesByOrderId.get(row.orderId) || [];
     truthRows.push({
       orderId: row.orderId,
@@ -282,6 +355,9 @@ async function main() {
       reconciliationBucket: classifyBucket(order, orderLines, row),
       serious,
       missingInReporting: !order,
+      excludedFromCalibration: row.exclude,
+      truthSource: row.source,
+      note: row.note || null,
     });
   }
 
@@ -303,7 +379,8 @@ async function main() {
 
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
-    xlsxPath,
+    xlsxPath: xlsxPath || null,
+    truthJsonPath: truthJsonPath || null,
     dateFrom,
     dateTo,
     thresholdPct,

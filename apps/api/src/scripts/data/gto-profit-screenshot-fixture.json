@@ -1,0 +1,125 @@
+[
+  {
+    "orderId": 683415,
+    "source": "screenshot",
+    "exclude": true,
+    "note": "Technical cancelled order; exclude from calibration."
+  },
+  {
+    "orderId": 686275,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 8.56,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 8.56,
+    "note": "Summed across three packages: -97.12 + 15.68 + 90.00 EUR."
+  },
+  {
+    "orderId": 685720,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 2428.69,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 46.43,
+    "note": "Summed package real income in UAH; converted to EUR using screenshot package rate."
+  },
+  {
+    "orderId": 686335,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 173.09,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 173.09
+  },
+  {
+    "orderId": 682690,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 3234.22,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 61.51,
+    "note": "Converted to EUR using screenshot total NETT rate."
+  },
+  {
+    "orderId": 683624,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 5508.47,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 104.76,
+    "note": "Main package only; add-on package has zero real income."
+  },
+  {
+    "orderId": 683095,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 184.74,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 184.74
+  },
+  {
+    "orderId": 688830,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 27.87,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 27.87
+  },
+  {
+    "orderId": 689185,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 9665.79,
+    "expectedRealIncomeCurrency": "UAH",
+    "expectedRealIncomeEur": 184.78,
+    "note": "Converted to EUR using screenshot total NETT rate."
+  },
+  {
+    "orderId": 687625,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 55.65,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 55.65
+  },
+  {
+    "orderId": 689325,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 160.74,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 160.74
+  },
+  {
+    "orderId": 687410,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 297.49,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 297.49
+  },
+  {
+    "orderId": 680625,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 124.65,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 124.65
+  },
+  {
+    "orderId": 684665,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 127.4,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 127.4
+  },
+  {
+    "orderId": 685435,
+    "source": "screenshot",
+    "exclude": false,
+    "expectedRealIncomeOriginal": 1442.47,
+    "expectedRealIncomeCurrency": "EUR",
+    "expectedRealIncomeEur": 1442.47
+  }
+]
