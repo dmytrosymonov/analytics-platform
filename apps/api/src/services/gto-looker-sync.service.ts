@@ -726,6 +726,23 @@ function mapAmountDetailsToLines(
   return { rows: mappedRows, ambiguous: false };
 }
 
+function excludedStandaloneAddonRevenueEur(
+  mappedRows: AmountDetailMappingRow[],
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+) {
+  let excludedRevenueEur = 0;
+
+  for (const row of mappedRows) {
+    if (row.discount !== 0 || row.mappedLines.length !== 1) continue;
+    const [line] = row.mappedLines;
+    const lineBuy = parseAmount(line.raw.price_buy) || 0;
+    if (line.productGroup !== 'other' || lineBuy > 0) continue;
+    excludedRevenueEur += toEur(row.totalSell, row.currency) ?? 0;
+  }
+
+  return round2(excludedRevenueEur);
+}
+
 function computeOrderSales(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -892,7 +909,6 @@ function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
   toEur: (amount: number | null, currency?: string | null) => number | null,
-  convertAmount: (amount: number | null, fromCurrency?: string | null, toCurrency?: string | null) => number | null,
   hasOrderDestination: boolean,
 ): OrderFinancials {
   const orderStatus = String(detail.status || summary.status || '');
@@ -909,11 +925,12 @@ function computeOrderFinancials(
   const accountingClass = classifyAccountingClass(allLines, hasOrderDestination);
   const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
   const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur);
-  const priceEur = amountDetailTotals.netEur > 0
+  const basePriceEur = amountDetailTotals.netEur > 0
     ? amountDetailTotals.netEur
     : balanceAmount > 0
     ? (toEur(balanceAmount, balanceCurrency) ?? 0)
     : (toEur(totalAmount, orderCurrency) ?? 0);
+  let revenueAdjustmentEur = 0;
 
   if (orderStatus !== 'CNF') {
     return {
@@ -959,9 +976,9 @@ function computeOrderFinancials(
       ? amountDetailTotals.discountEur
       : discountFallbackEur(detail, orderCurrency, toEur);
     return {
-      costEur: round2(Math.max(priceEur - discountEur, 0)),
+      costEur: round2(Math.max(basePriceEur - discountEur, 0)),
       profitEur: discountEur,
-      profitPct: priceEur > 0 ? Math.round((discountEur / priceEur) * 100) : 0,
+      profitPct: basePriceEur > 0 ? Math.round((discountEur / basePriceEur) * 100) : 0,
       accountingClass,
       profitBasisUsed: 'discount_fallback',
       costBasisUsed: 'incomplete_core_fallback',
@@ -999,76 +1016,11 @@ function computeOrderFinancials(
   if (amountRows.length > 0 && mappableLines.length > 0) {
     const mapped = mapAmountDetailsToLines(amountRows, mappableLines);
     if (!mapped.ambiguous) {
-      let mappedCostEur = 0;
-      let mappedProfitEur = 0;
-      let mappingFailed = false;
-
-      for (const amountRow of mapped.rows) {
-        if (amountRow.mappedLines.length === 0) {
-          mappingFailed = true;
-          break;
-        }
-
-        let directRowSell = 0;
-        let directRowCost = 0;
-
-        for (const line of amountRow.mappedLines) {
-          const sellInRowCurrency = convertAmount(line.sellOriginal, line.sellCurrency, amountRow.currency);
-          if (sellInRowCurrency !== null && sellInRowCurrency !== undefined) {
-            directRowSell += sellInRowCurrency;
-          }
-
-          const buyOriginal = parseAmount(line.raw.price_buy) || 0;
-          if (buyOriginal <= 0) continue;
-
-          const resolvedBuyCurrency = resolveMainTravelBuyCurrency(
-            line.raw,
-            orderCurrency,
-            priceEur,
-            toEur,
-            supplierNameMap,
-            eurTransferSuppliers,
-          );
-          const buyInRowCurrency = convertAmount(buyOriginal, resolvedBuyCurrency, amountRow.currency);
-          if (buyInRowCurrency === null || buyInRowCurrency === undefined) {
-            mappingFailed = true;
-            break;
-          }
-          directRowCost += buyInRowCurrency;
-        }
-
-        if (mappingFailed || directRowSell <= 0) {
-          mappingFailed = true;
-          break;
-        }
-
-        const rowScale = amountRow.totalSell / directRowSell;
-        if (!Number.isFinite(rowScale) || rowScale <= 0 || rowScale < 0.5 || rowScale > 1.5) {
-          mappingFailed = true;
-          break;
-        }
-
-        const rowNett = round2(directRowCost * rowScale);
-        const rowProfit = round2(amountRow.totalSell - amountRow.discount - rowNett);
-        mappedCostEur += toEur(rowNett, amountRow.currency) ?? 0;
-        mappedProfitEur += toEur(rowProfit, amountRow.currency) ?? 0;
-      }
-
-      if (!mappingFailed) {
-        const costEur = round2(mappedCostEur);
-        const profitEur = round2(mappedProfitEur);
-        return {
-          costEur,
-          profitEur,
-          profitPct: priceEur > 0 ? Math.round((profitEur / priceEur) * 100) : 0,
-          accountingClass,
-          profitBasisUsed: 'amount_details_row_margin',
-          costBasisUsed: 'amount_details_row_margin',
-          hasIncompleteCoreCost,
-        };
-      }
+      revenueAdjustmentEur = excludedStandaloneAddonRevenueEur(mapped.rows, toEur);
     }
   }
+
+  const priceEur = round2(Math.max(basePriceEur - revenueAdjustmentEur, 0));
 
   if (impliedSingleAirticket) {
     const profitEur = round2(impliedSingleAirticket.netRevenueEur - impliedSingleAirticket.impliedBuyEur);
@@ -1620,15 +1572,6 @@ async function buildReportingRows(
       if (!rates) return round2(amount);
       return CurrencyService.toEur(amount, String(currency || 'EUR'), rates);
     };
-    const convertAmount = (amount: number | null, fromCurrency?: string | null, toCurrency?: string | null) =>
-      convertCurrencyAmount(
-        amount,
-        fromCurrency,
-        toCurrency,
-        toEur,
-        (currency) => rates?.rates?.[currency] ?? null,
-      );
-
     const hotelLines = Array.isArray(detail.hotel) ? detail.hotel : [];
     const serviceLines = Array.isArray(detail.service) ? detail.service : [];
     const allLines: Array<{ productGroup: ProductGroup; raw: JsonRecord }> = [
@@ -1667,7 +1610,7 @@ async function buildReportingRows(
     const hasOrderDestination = context.reuseExistingEnrichment && existingOrderEnrichment?.hasOrderDestination
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
-    const financials = computeOrderFinancials(detail, summary, toEur, convertAmount, hasOrderDestination);
+    const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
     const sales = computeOrderSales(detail, summary, toEur);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
