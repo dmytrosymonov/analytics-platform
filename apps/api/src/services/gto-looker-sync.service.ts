@@ -30,7 +30,8 @@ type SyncMode =
   | 'recent_created_refresh'
   | 'updated_refresh'
   | 'future_start_catchup'
-  | 'recent_month_catchup';
+  | 'recent_month_catchup'
+  | 'historical_2024_catchup';
 
 type SyncParams = {
   mode: SyncMode;
@@ -1551,6 +1552,50 @@ async function selectUpdatedFutureStartSummaries(
   };
 }
 
+async function selectHistorical2024CatchupSummaries(
+  http: ReturnType<typeof createHttpClient>,
+  dateFrom: string,
+  dateTo: string,
+): Promise<SummarySelection> {
+  const [createdRows, startRows] = await Promise.all([
+    fetchOrderListWindow(http, dateFrom, dateTo, { sortBy: 'created_at' }),
+    fetchOrderListWindow(http, dateFrom, dateTo, { sortBy: 'date_start' }),
+  ]);
+
+  const merged = new Map<number, JsonRecord>();
+
+  for (const row of createdRows) {
+    const orderId = Number(row.order_id);
+    if (Number.isFinite(orderId) && orderId > 0) {
+      merged.set(orderId, row);
+    }
+  }
+
+  let duplicateRows = 0;
+  let startOnlyRows = 0;
+  for (const row of startRows) {
+    const orderId = Number(row.order_id);
+    if (!Number.isFinite(orderId) || orderId <= 0) continue;
+    if (merged.has(orderId)) {
+      duplicateRows += 1;
+      continue;
+    }
+    merged.set(orderId, row);
+    startOnlyRows += 1;
+  }
+
+  return {
+    summaries: Array.from(merged.values()),
+    warnings: [
+      `Scanned ${createdRows.length} summaries for historical 2024 created_at window ${dateFrom}..${dateTo}`,
+      `Scanned ${startRows.length} summaries for historical 2024 date_start window ${dateFrom}..${dateTo}`,
+      `Merged ${merged.size} unique historical 2024 order ids`,
+      `Found ${duplicateRows} overlapping order ids present in both 2024 candidate windows`,
+      `Added ${startOnlyRows} start-date-only orders from 2024 window`,
+    ],
+  };
+}
+
 async function selectSummariesForMode(
   http: ReturnType<typeof createHttpClient>,
   config: GtoConfig,
@@ -1571,6 +1616,8 @@ async function selectSummariesForMode(
         summaries: await fetchOrderListWindow(http, params.dateFrom, params.dateTo, { sortBy: 'created_at' }),
         warnings: [`Scanned recent-month catch-up window ${params.dateFrom}..${params.dateTo}`],
       };
+    case 'historical_2024_catchup':
+      return selectHistorical2024CatchupSummaries(http, params.dateFrom, params.dateTo);
     case 'daily':
     case 'manual':
     case 'backfill':
