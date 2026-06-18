@@ -1,20 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-
-type ProfitBasis =
-  | 'zero_for_non_cnf'
-  | 'raw_margin'
-  | 'amount_details_row_margin'
-  | 'amount_details_net_basis'
-  | 'discount_fallback'
-  | 'special_reconciliation_rule';
-
-type CostBasis =
-  | 'api_rate_direct'
-  | 'amount_details_row_margin'
-  | 'amount_details_implied_fx'
-  | 'discount_adjusted_margin'
-  | 'incomplete_core_fallback';
+import {
+  calculateCanonicalProfit,
+  CanonicalProfitLine,
+  CostBasis,
+  CURRENT_PROFIT_LOGIC_VERSION,
+  ProfitBasis,
+} from '../services/gto-looker-profit-engine';
 
 type ReportingLine = {
   lineId: string;
@@ -42,6 +34,7 @@ type ReportingOrder = {
   profitBasisUsed: string | null;
   costBasisUsed: string | null;
   hasIncompleteCoreCost: boolean;
+  profitLogicVersion: number | null;
   touristsCount: number;
   lines: ReportingLine[];
 };
@@ -87,43 +80,16 @@ function normalizeStatus(value?: string | null) {
   return String(value || '').trim().toUpperCase();
 }
 
-function isConfirmedLine(line: ReportingLine) {
-  return normalizeStatus(line.status) === 'CNF';
-}
-
-function isPositive(value: unknown) {
-  return decimalToNumber(value) > 0;
-}
-
-function isCoreLine(line: ReportingLine) {
-  return ['hotel', 'airticket', 'transfer'].includes(String(line.productGroup || '').toLowerCase());
-}
-
-function isZeroValueLine(line: ReportingLine) {
-  return decimalToNumber(line.priceOriginal) <= 0 && decimalToNumber(line.priceBuyOriginal) <= 0;
-}
-
-function isExplicitZeroCostAddon(line: ReportingLine) {
-  if (decimalToNumber(line.priceOriginal) <= 0 || decimalToNumber(line.priceBuyOriginal) > 0) return false;
-  const text = [
-    line.productGroup,
-    line.rawType,
-    line.serviceTypeName,
-  ].map((value) => String(value || '').toLocaleLowerCase('uk-UA')).join(' ');
-  return ['luggage', 'baggage', 'багаж', 'доплата', 'addon', 'add-on', 'supplement'].some((needle) => text.includes(needle));
-}
-
-function hasMissingRequiredBuyCost(line: ReportingLine) {
-  if (!isCoreLine(line)) return false;
-  if (!isConfirmedLine(line)) return false;
-  if (isZeroValueLine(line)) return false;
-  if (isExplicitZeroCostAddon(line)) return false;
-  return decimalToNumber(line.priceOriginal) > 0 && decimalToNumber(line.priceBuyOriginal) <= 0;
-}
-
-function isCostBearingLine(line: ReportingLine) {
-  if (!isConfirmedLine(line)) return false;
-  return isPositive(line.priceBuyEur);
+function toCanonicalProfitLine(line: ReportingLine): CanonicalProfitLine {
+  return {
+    productGroup: line.productGroup,
+    rawType: line.rawType,
+    serviceTypeName: line.serviceTypeName,
+    status: line.status,
+    priceOriginal: decimalToNumber(line.priceOriginal),
+    priceBuyOriginal: decimalToNumber(line.priceBuyOriginal),
+    priceBuyEur: round2(decimalToNumber(line.priceBuyEur)),
+  };
 }
 
 function calculateProfit(order: ReportingOrder): RecalculatedProfit {
@@ -140,7 +106,6 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
   }
 
   const revenueEur = round2(decimalToNumber(order.totalAmountEur));
-  const hasIncompleteCoreCost = order.lines.some(hasMissingRequiredBuyCost);
   const currentProfitBasis = String(order.profitBasisUsed || '');
   const currentCostBasis = String(order.costBasisUsed || '');
 
@@ -150,10 +115,10 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
     profitPct: Number(order.profitPct || 0),
     profitBasisUsed: (currentProfitBasis || 'raw_margin') as ProfitBasis,
     costBasisUsed: (currentCostBasis || 'api_rate_direct') as CostBasis,
-    hasIncompleteCoreCost,
+    hasIncompleteCoreCost: Boolean(order.hasIncompleteCoreCost),
   });
 
-  if (hasIncompleteCoreCost) {
+  if (order.hasIncompleteCoreCost) {
     return {
       costAmountEur: round2(decimalToNumber(order.costAmountEur)),
       profitEur: round2(decimalToNumber(order.profitEur)),
@@ -170,19 +135,7 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
     return preserveCurrent();
   }
 
-  const costAmountEur = round2(order.lines
-    .filter(isCostBearingLine)
-    .reduce((sum, line) => sum + decimalToNumber(line.priceBuyEur), 0));
-  const profitEur = round2(revenueEur - costAmountEur);
-
-  return {
-    costAmountEur,
-    profitEur,
-    profitPct: revenueEur > 0 ? Math.round((profitEur / revenueEur) * 100) : 0,
-    profitBasisUsed: 'raw_margin',
-    costBasisUsed: 'api_rate_direct',
-    hasIncompleteCoreCost: false,
-  };
+  return calculateCanonicalProfit(order.orderStatus, revenueEur, order.lines.map(toCanonicalProfitLine));
 }
 
 function hasChanged(order: ReportingOrder, next: RecalculatedProfit) {
@@ -191,7 +144,8 @@ function hasChanged(order: ReportingOrder, next: RecalculatedProfit) {
     || Number(order.profitPct || 0) !== next.profitPct
     || String(order.profitBasisUsed || '') !== next.profitBasisUsed
     || String(order.costBasisUsed || '') !== next.costBasisUsed
-    || Boolean(order.hasIncompleteCoreCost) !== next.hasIncompleteCoreCost;
+    || Boolean(order.hasIncompleteCoreCost) !== next.hasIncompleteCoreCost
+    || Number(order.profitLogicVersion || 0) !== CURRENT_PROFIT_LOGIC_VERSION;
 }
 
 function buildWhere(dateFrom?: string, dateTo?: string, structure?: string) {
@@ -267,6 +221,8 @@ async function updateOrder(orderId: bigint, next: RecalculatedProfit) {
       profitBasisUsed: next.profitBasisUsed,
       costBasisUsed: next.costBasisUsed,
       hasIncompleteCoreCost: next.hasIncompleteCoreCost,
+      profitLogicVersion: CURRENT_PROFIT_LOGIC_VERSION,
+      profitRecalculatedAt: new Date(),
       syncedAt: new Date(),
     },
   });
@@ -341,6 +297,8 @@ async function main() {
             currentCostBasisUsed: order.costBasisUsed,
             proposedCostBasisUsed: next.costBasisUsed,
             hasIncompleteCoreCost: next.hasIncompleteCoreCost,
+            currentProfitLogicVersion: order.profitLogicVersion,
+            proposedProfitLogicVersion: CURRENT_PROFIT_LOGIC_VERSION,
           });
         }
 

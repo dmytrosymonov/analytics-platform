@@ -164,6 +164,21 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - `profit_basis_used`: `zero_for_non_cnf`, `raw_margin`, `amount_details_row_margin`, `amount_details_net_basis`, `discount_fallback`, or `special_reconciliation_rule`
   - `cost_basis_used`: `api_rate_direct`, `amount_details_row_margin`, `amount_details_implied_fx`, `discount_adjusted_margin`, or `incomplete_core_fallback`
   - `has_incomplete_core_cost`: true when any confirmed core component (`hotel`, `airticket`, `transfer`) has null/zero `price_buy`
+- Production rule: profit must now be calculated by one canonical shared engine for all structures, with no structure-based formula branches
+- Canonical profit logic must be used by all refresh paths:
+  - `sync:gto-looker`
+  - scheduler refresh jobs
+  - manual backfills and catch-ups
+  - DB-only recalculation
+- Legacy `amount_details_implied_fx` / `amount_details_net_basis` branches are not allowed as the normal production path when reliable line-level себестоимость exists
+- Reporting rows now track profit-version rollout without changing the Data Studio target tables:
+  - `profit_logic_version`
+  - `profit_recalculated_at`
+- Source refresh and derived recalculation are separate operations:
+  - API/source refresh updates order state from GTO
+  - DB-only recalculation updates only derived profit fields on existing `reporting_gto_orders`
+  - changing profit math must not require a full API backfill by default
+- Data Studio must continue reading the existing `reporting_gto_*` tables and current schema contract; profit rollouts are in-place updates, not table swaps
 - Sales semantics for the Looker/PostgreSQL export are split explicitly:
   - `total_amount_*` and `balance_amount_*` remain net / settlement-style values from the private API
   - dashboard / visualization sales should use `gross_amount_eur`
@@ -246,11 +261,14 @@ These can be used in future for enriching reports with geography/hotel context.
 
 - Ad-hoc sales analytics for this workspace should first use the local process memo at `docs/gto-local-sales-analytics-process.md`
 - Treat `docs/gto-local-sales-analytics-process.md` as the index of local GTO analytical artifacts before reading scripts or reprocessing raw JSONL data
-- Current local GTO cache for follow-up analytics questions covers orders created from 2025-01-01 through 2026-05-17:
-  - `tmp/gto-sales-2025-01-01_to_2026-05-17/orders-list.jsonl`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-17/order-details.jsonl`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-17/currency-rates.json`
-  - `tmp/gto-sales-2025-01-01_to_2026-05-17/manifest.json`
+- Current local GTO cache for follow-up analytics questions covers orders created from 2025-01-01 through 2026-06-05, plus all orders with `date_start` in 2025, including orders created before 2025-01-01:
+  - `tmp/gto-sales-2025-01-01_to_2026-06-05/orders-list.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-06-05/order-details.jsonl`
+  - `tmp/gto-sales-2025-01-01_to_2026-06-05/currency-rates.json`
+  - `tmp/gto-sales-2025-01-01_to_2026-06-05/manifest.json`
+- The current local cache was fully refreshed on 2026-06-05 for all final order details, so comments include live `role` and `type` fields where the API provides them.
+- Current local cache counts: 22,446 unique orders/details; created-at layer has 21,925 orders; 2025 start-date supplement has 14,493 orders, including 521 orders created before 2025-01-01; comment metadata coverage is 196,224 comments with `role` and `type`.
+- One live `/order_data` refresh returned 500 for order `650101`; the snapshot preserved its previous successful detail row and records this in `detail-errors.json`.
 - Standalone April 2026 created-orders export with comments:
   - folder: `tmp/gto-created-2026-04-export/`
   - best upload-ready file: `tmp/gto-created-2026-04-export/orders-with-comments.jsonl`
@@ -261,8 +279,11 @@ These can be used in future for enriching reports with geography/hotel context.
   - detail CSV: `reports/gto-wizzair-segments-detail-2025-01-01_to_2026-05-15.csv`
   - methodology note: `reports/gto-wizzair-segments-monthly-2025-01-01_to_2026-05-15.md`
   - management DOCX: `output/doc/gto_wizzair_segments_management_report_2025_2026.docx`
-- PostgreSQL reporting export also contains a one-time supplement for orders with `date_start` in `2025` and `created_at` before `2025-01-01`; this supplement exists in reporting tables, not in the local JSONL cache
+- PostgreSQL reporting export also contains a one-time supplement for orders with `date_start` in `2025` and `created_at` before `2025-01-01`; as of the 2026-06-05 local refresh, the current local JSONL cache also includes this 2025 start-date supplement.
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-27/`
 - Previous cache snapshot remains available in `tmp/gto-sales-2025-01-01_to_2026-04-10/`
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-25/`
+- Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-17/`
 - Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-15/`
 - Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-04-29/`
 - Previous main snapshot also remains available in `tmp/gto-sales-2025-01-01_to_2026-05-04/`

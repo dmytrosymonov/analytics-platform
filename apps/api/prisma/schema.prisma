@@ -260,6 +260,8 @@ model ReportingGtoOrder {
   profitBasisUsed         String?   @map("profit_basis_used")
   costBasisUsed           String?   @map("cost_basis_used")
   hasIncompleteCoreCost   Boolean   @default(false) @map("has_incomplete_core_cost")
+  profitLogicVersion      Int?      @map("profit_logic_version")
+  profitRecalculatedAt    DateTime? @map("profit_recalculated_at")
   bookingRateDate         DateTime? @map("booking_rate_date") @db.Date
   touristsCount           Int       @default(0) @map("tourists_count")
   countriesCount          Int       @default(0) @map("countries_count")

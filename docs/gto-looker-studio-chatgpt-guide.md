@@ -6,10 +6,12 @@
 ## What Is Already Done
 
 - PostgreSQL export is already built and running.
-- Refresh is already scheduled every `60` minutes in `Europe/Kyiv` timezone.
+- Data Studio should keep using the existing `reporting_gto_*` tables; profit rollouts are in-place updates, not datasource swaps.
 - Currency conversion to EUR is already handled in the backend using GTO v3 historical FX rates on the booking creation date.
 - Data sources are already connected in Looker Studio.
 - Test-agent orders are already excluded in the backend export by exact normalized match against `agent_name` and `company_name`.
+- Profit is now expected to come from one canonical backend calculator for all structures.
+- Profit logic rollouts should use DB-only recalculation on existing reporting rows when source data has not changed.
 
 ## PostgreSQL Source
 
@@ -60,11 +62,16 @@ Typical fields:
 - `order_currency`
 - `total_amount_original`
 - `total_amount_eur`
+- `gross_amount_original`
+- `gross_amount_currency`
+- `gross_amount_eur`
 - `balance_amount_original`
 - `balance_amount_eur`
 - `cost_amount_eur`
 - `profit_eur`
 - `profit_pct`
+- `profit_logic_version`
+- `profit_recalculated_at`
 - `primary_country_name`
 - `country_names`
 - `supplier_names`
@@ -211,6 +218,27 @@ Default business interpretation:
 
 - profit-focused management views should default to `CNF`
 - cross-status analysis is still allowed when the user explicitly selects other statuses
+
+## Profit Rollout Rule
+
+- If source order data changed in GTO, use the normal API refresh flow.
+- If only profit math changed, do not replace the Data Studio datasource and do not rebuild a second reporting base.
+- In that case use DB-only profit recalculation on `reporting_gto_orders`, then refresh Looker Studio caches if needed.
+- `profit_logic_version` is the rollout marker proving that the current reporting row was recalculated by the active canonical engine.
+
+## Sales Metric Rule
+
+For sales / total-sum comparisons against the GTO system export:
+
+- use `SUM(gross_amount_eur)` as the sales total
+- keep `SUM(total_amount_eur)` only as a separate net / settlement metric
+- do not label `total_amount_eur` as generic `Sales` or `Total sum`
+
+Important for created-date investigations:
+
+- compare only the intended structure slice, for example `structure_name = gto.ua`
+- do not silently merge `online.gto.global` or blank-structure orders into the `gto.ua` slice
+- if an Excel export mixes structures, separate them before comparing totals
 
 ## Recommended Dashboard Structure
 

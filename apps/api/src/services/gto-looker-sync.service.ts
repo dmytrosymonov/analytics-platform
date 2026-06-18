@@ -6,6 +6,13 @@ import { CurrencyService } from '../lib/currency.service';
 import { AirlineService } from '../lib/airline.service';
 import { DestinationService } from '../lib/destination.service';
 import { logger } from '../lib/logger';
+import {
+  calculateCanonicalProfit,
+  CanonicalProfitLine,
+  CostBasis,
+  CURRENT_PROFIT_LOGIC_VERSION,
+  ProfitBasis,
+} from './gto-looker-profit-engine';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
@@ -88,19 +95,6 @@ type AccountingClass =
   | 'standalone_transfer'
   | 'standalone_insurance'
   | 'other';
-type ProfitBasis =
-  | 'zero_for_non_cnf'
-  | 'raw_margin'
-  | 'amount_details_row_margin'
-  | 'amount_details_net_basis'
-  | 'discount_fallback'
-  | 'special_reconciliation_rule';
-type CostBasis =
-  | 'api_rate_direct'
-  | 'amount_details_row_margin'
-  | 'amount_details_implied_fx'
-  | 'discount_adjusted_margin'
-  | 'incomplete_core_fallback';
 type SalesBasis =
   | 'amount_details_total_sell'
   | 'total_plus_discount_same_currency'
@@ -609,37 +603,6 @@ function amountDetailsTotals(
   };
 }
 
-function lineDirectSellEur(
-  raw: JsonRecord,
-  orderCurrency: string,
-  toEur: (amount: number | null, currency?: string | null) => number | null,
-) {
-  const priceSell = parseAmount(raw.price) || 0;
-  if (priceSell <= 0) return 0;
-  return toEur(priceSell, raw.currency || orderCurrency) ?? 0;
-}
-
-function computeGrossScaleForLines(
-  lines: JsonRecord[],
-  detail: JsonRecord,
-  orderCurrency: string,
-  toEur: (amount: number | null, currency?: string | null) => number | null,
-) {
-  const totals = amountDetailsTotals(detail, orderCurrency, toEur);
-  if (totals.sellEur <= 0 || lines.length === 0) return null;
-
-  let directSellEur = 0;
-  for (const line of lines) {
-    directSellEur += lineDirectSellEur(line, orderCurrency, toEur);
-  }
-
-  if (directSellEur <= 0) return null;
-  const scale = totals.sellEur / directSellEur;
-  if (!Number.isFinite(scale) || scale <= 0) return null;
-  if (scale < 0.7 || scale > 1.3) return null;
-  return scale;
-}
-
 function convertCurrencyAmount(
   amount: number | null,
   fromCurrency: string | null | undefined,
@@ -657,10 +620,6 @@ function convertCurrencyAmount(
   const targetRate = eurRateLookup?.(to);
   if (!targetRate || targetRate <= 0) return null;
   return round2(eurAmount * targetRate);
-}
-
-function amountsEqualWithinTolerance(left: number, right: number, tolerance = 0.5) {
-  return Math.abs(round2(left) - round2(right)) <= tolerance;
 }
 
 function resolveMainTravelBuyCurrency(
@@ -720,63 +679,70 @@ function resolveMainTravelBuyCurrency(
   return buyCurrency;
 }
 
-type AmountDetailMappingLine = {
-  id: string;
-  raw: JsonRecord;
-  productGroup: ProductGroup;
-  sellOriginal: number;
-  sellCurrency: string;
-};
-
-type AmountDetailMappingRow = {
-  index: number;
-  totalSell: number;
-  discount: number;
-  currency: string;
-  mappedLines: AmountDetailMappingLine[];
-};
-
-function mapAmountDetailsToLines(
-  amountRows: AmountDetailMappingRow[],
-  lines: AmountDetailMappingLine[],
+function computeBaseRevenueEur(
+  detail: JsonRecord,
+  summary: JsonRecord,
+  orderCurrency: string,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
 ) {
-  if (amountRows.length === 0) return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
-  if (amountRows.length === 1) {
-    return {
-      rows: [{ ...amountRows[0], mappedLines: [...lines] }],
-      ambiguous: false,
-    };
-  }
+  const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
+  const balanceCurrency = String(detail.balance_currency || orderCurrency);
+  const balanceAmount = parseAmount(detail.balance_amount) || 0;
+  const totalAmount = parseAmount(detail.total_amount) || 0;
 
-  const unmatched = [...lines];
-  const mappedRows: AmountDetailMappingRow[] = [];
+  return amountDetailTotals.netEur > 0
+    ? amountDetailTotals.netEur
+    : balanceAmount > 0
+    ? (toEur(balanceAmount, balanceCurrency) ?? 0)
+    : (toEur(totalAmount, detail.currency || summary.currency || orderCurrency) ?? 0);
+}
 
-  for (const row of amountRows.filter((candidate) => candidate.discount === 0)) {
-    const candidates = unmatched.filter((line) =>
-      line.sellCurrency === row.currency
-      && amountsEqualWithinTolerance(line.sellOriginal, row.totalSell, 1),
-    );
+function calculateSourceLinePriceBuyEur(
+  productGroup: ProductGroup,
+  raw: JsonRecord,
+  orderCurrency: string,
+  orderRevenueEur: number,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+  supplierNameMap: Map<string, string>,
+  eurTransferSuppliers: Set<string>,
+) {
+  const priceBuyOriginal = parseAmount(raw.price_buy) || 0;
+  if (priceBuyOriginal <= 0) return 0;
 
-    if (candidates.length > 1) {
-      return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
-    }
+  const buyCurrency = ['hotel', 'airticket', 'transfer'].includes(productGroup)
+    ? resolveMainTravelBuyCurrency(raw, orderCurrency, orderRevenueEur, toEur, supplierNameMap, eurTransferSuppliers)
+    : normalizeCurrencyCode(raw.currency_buy)
+      || normalizeCurrencyCode(raw.currency || orderCurrency)
+      || orderCurrency;
 
-    if (candidates.length === 1) {
-      const [line] = candidates;
-      mappedRows.push({ ...row, mappedLines: [line] });
-      const index = unmatched.findIndex((candidate) => candidate.id === line.id);
-      if (index >= 0) unmatched.splice(index, 1);
-    }
-  }
+  return round2(toEur(priceBuyOriginal, buyCurrency) ?? 0);
+}
 
-  const remainingRows = amountRows.filter((row) => !mappedRows.some((mapped) => mapped.index === row.index));
-  if (remainingRows.length !== 1) {
-    return { rows: [] as AmountDetailMappingRow[], ambiguous: true };
-  }
-
-  mappedRows.push({ ...remainingRows[0], mappedLines: unmatched });
-  mappedRows.sort((left, right) => left.index - right.index);
-  return { rows: mappedRows, ambiguous: false };
+function buildCanonicalProfitLinesFromDetail(
+  lines: Array<{ productGroup: ProductGroup; raw: JsonRecord }>,
+  orderCurrency: string,
+  orderRevenueEur: number,
+  toEur: (amount: number | null, currency?: string | null) => number | null,
+  supplierNameMap: Map<string, string>,
+  eurTransferSuppliers: Set<string>,
+): CanonicalProfitLine[] {
+  return lines.map(({ productGroup, raw }) => ({
+    productGroup,
+    rawType: String(raw.type || '') || null,
+    serviceTypeName: String(raw.service_type_name || '') || null,
+    status: String(raw.status || '') || null,
+    priceOriginal: parseAmount(raw.price) || 0,
+    priceBuyOriginal: parseAmount(raw.price_buy) || 0,
+    priceBuyEur: calculateSourceLinePriceBuyEur(
+      productGroup,
+      raw,
+      orderCurrency,
+      orderRevenueEur,
+      toEur,
+      supplierNameMap,
+      eurTransferSuppliers,
+    ),
+  }));
 }
 
 function computeOrderSales(
@@ -897,60 +863,6 @@ function computeOrderSales(
   };
 }
 
-function singleAirticketOrderImpliedTotals(
-  detail: JsonRecord,
-  orderCurrency: string,
-  toEur: (amount: number | null, currency?: string | null) => number | null,
-  supplierNameMap: Map<string, string>,
-) {
-  const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
-  const services = Array.isArray(detail.service) ? detail.service : [];
-  if (hotels.length !== 0 || services.length !== 1) return null;
-
-  const service = services[0];
-  if (String(service?.type || '').toLowerCase() !== 'airticket') return null;
-
-  const buyOriginal = parseAmount(service?.price_buy) || 0;
-  const explicitBuyCurrency = normalizeCurrencyCode(service?.currency_buy);
-  const taggedBuyCurrency = supplierTagCurrency(supplierNameMap, service?.supplier_id);
-  if (buyOriginal > 0 && (explicitBuyCurrency || taggedBuyCurrency)) return null;
-
-  const totals = amountDetailsTotals(detail, orderCurrency, toEur);
-  if (totals.rowCount !== 1) return null;
-  const amountDetail = totals.rows[0];
-  const serviceCurrency = normalizeCurrencyCode(service?.currency || orderCurrency) || orderCurrency;
-  const amountDetailCurrency = normalizeCurrencyCode(amountDetail?.currency || orderCurrency) || orderCurrency;
-  const balanceCurrency = normalizeCurrencyCode(detail.balance_currency || orderCurrency) || orderCurrency;
-  const hasSettlementCurrencyMismatch = balanceCurrency !== serviceCurrency || amountDetailCurrency !== serviceCurrency;
-  if (!hasSettlementCurrencyMismatch) return null;
-  const balanceAmount = parseAmount(detail.balance_amount) || 0;
-  const balanceEur = toEur(balanceAmount, detail.balance_currency || orderCurrency) ?? 0;
-
-  if (totals.discountEur > 0 && balanceEur > 0 && Math.abs(balanceEur - totals.netEur) <= 1) {
-    return {
-      impliedSellEur: round2(totals.sellEur),
-      impliedBuyEur: round2(totals.sellEur - totals.discountEur),
-      discountEur: totals.discountEur,
-      netRevenueEur: round2(totals.sellEur),
-    };
-  }
-
-  const sellOriginal = parseAmount(service?.price) || 0;
-  const totalSellEur = toEur(parseAmount(amountDetail?.total_sell) || 0, amountDetail?.currency || orderCurrency) ?? 0;
-  const directSellEur = toEur(sellOriginal, service?.currency || orderCurrency) ?? 0;
-
-  if (sellOriginal <= 0 || buyOriginal <= 0 || totalSellEur <= 0 || directSellEur <= 0) return null;
-  if (Math.abs(totalSellEur - directSellEur) / directSellEur > 0.25) return null;
-
-  const impliedRate = totalSellEur / sellOriginal;
-  return {
-    impliedSellEur: round2(totalSellEur),
-    impliedBuyEur: round2(buyOriginal * impliedRate),
-    discountEur: totals.discountEur,
-    netRevenueEur: totals.netEur,
-  };
-}
-
 function computeOrderFinancials(
   detail: JsonRecord,
   summary: JsonRecord,
@@ -959,8 +871,6 @@ function computeOrderFinancials(
 ): OrderFinancials {
   const orderStatus = String(detail.status || summary.status || '');
   const orderCurrency = String(detail.currency || summary.currency || 'UAH');
-  const balanceCurrency = String(detail.balance_currency || orderCurrency);
-  const balanceAmount = parseAmount(detail.balance_amount) || 0;
   const totalAmount = parseAmount(detail.total_amount) || 0;
   const hotelLines = Array.isArray(detail.hotel) ? detail.hotel : [];
   const serviceLines = Array.isArray(detail.service) ? detail.service : [];
@@ -971,12 +881,7 @@ function computeOrderFinancials(
   const accountingClass = classifyAccountingClass(allLines, hasOrderDestination);
   const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
   const supplierNameMap = buildSupplierNameMap(detail);
-  const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur, supplierNameMap);
-  const basePriceEur = amountDetailTotals.netEur > 0
-    ? amountDetailTotals.netEur
-    : balanceAmount > 0
-    ? (toEur(balanceAmount, balanceCurrency) ?? 0)
-    : (toEur(totalAmount, orderCurrency) ?? 0);
+  const basePriceEur = computeBaseRevenueEur(detail, summary, orderCurrency, toEur);
 
   if (orderStatus !== 'CNF') {
     return {
@@ -1003,7 +908,6 @@ function computeOrderFinancials(
     };
   }
 
-  let costEur = 0;
   const hotels = hotelLines;
   const services = serviceLines;
   const confirmedHotels = hotels.filter((row: any) => row.status === 'CNF');
@@ -1044,155 +948,26 @@ function computeOrderFinancials(
     };
   }
 
-  const amountRows: AmountDetailMappingRow[] = amountDetailTotals.rows
-    .map((row, index) => ({
-      index,
-      totalSell: round2(parseAmount(row?.total_sell) || 0),
-      discount: round2(parseAmount(row?.discount) || 0),
-      currency: normalizeCurrencyCode(row?.currency) || orderCurrency,
-      mappedLines: [],
-    }))
-    .filter((row) => row.totalSell > 0 || row.discount > 0);
-
-  const mappableLines: AmountDetailMappingLine[] = [
-    ...confirmedHotels.map((row: JsonRecord, index: number) => ({
-      id: `hotel:${index}`,
-      raw: row,
-      productGroup: 'hotel' as ProductGroup,
-      sellOriginal: parseAmount(row.price) || 0,
-      sellCurrency: normalizeCurrencyCode(row.currency) || orderCurrency,
-    })),
-    ...profitBearingServices.map((row: JsonRecord, index: number) => ({
-      id: `service:${index}`,
-      raw: row,
-      productGroup: productGroupForService(row),
-      sellOriginal: parseAmount(row.price) || 0,
-      sellCurrency: normalizeCurrencyCode(row.currency) || orderCurrency,
-    })),
-  ];
-
-  if (amountRows.length > 0 && mappableLines.length > 0) {
-    mapAmountDetailsToLines(amountRows, mappableLines);
-  }
-
   const priceEur = round2(basePriceEur);
-
-  if (impliedSingleAirticket) {
-    const profitEur = round2(impliedSingleAirticket.netRevenueEur - impliedSingleAirticket.impliedBuyEur);
-    return {
-      costEur: impliedSingleAirticket.impliedBuyEur,
-      profitEur,
-      profitPct: impliedSingleAirticket.netRevenueEur > 0
-        ? Math.round((profitEur / impliedSingleAirticket.netRevenueEur) * 100)
-        : 0,
-      accountingClass,
-      profitBasisUsed: 'amount_details_net_basis',
-      costBasisUsed: 'amount_details_implied_fx',
-      hasIncompleteCoreCost,
-    };
-  }
-
-  const activeHotels = hotels.filter((row: any) => normalizeLineStatus(row.status) !== 'CNX');
-  const activeServices = services.filter((row: any) => normalizeLineStatus(row.status) !== 'CNX');
-  const airSellLines = activeServices.filter((row: any) => String(row.type || '').toLowerCase() === 'airticket');
-  const orderGrossScale = computeGrossScaleForLines(
-    [...activeHotels, ...activeServices],
-    detail,
-    orderCurrency,
-    toEur,
+  const canonicalProfit = calculateCanonicalProfit(
+    orderStatus,
+    priceEur,
+    buildCanonicalProfitLinesFromDetail(
+      [
+        ...confirmedHotels.map((raw: JsonRecord) => ({ productGroup: 'hotel' as ProductGroup, raw })),
+        ...profitBearingServices.map((raw: JsonRecord) => ({ productGroup: productGroupForService(raw), raw })),
+      ],
+      orderCurrency,
+      priceEur,
+      toEur,
+      supplierNameMap,
+      eurTransferSuppliers,
+    ),
   );
-  let costBasisUsed: CostBasis = 'api_rate_direct';
-
-  for (const hotel of confirmedHotels) {
-    const priceBuy = parseAmount(hotel.price_buy) || 0;
-    const priceSell = parseAmount(hotel.price) || 0;
-    if (priceBuy <= 0) continue;
-
-    const explicitBuyCurrency = normalizeCurrencyCode(hotel.currency_buy);
-    const hotelCurrency = explicitBuyCurrency || String(hotel.currency || orderCurrency);
-    const costConverted = toEur(priceBuy, hotelCurrency) ?? 0;
-    const sellConverted = toEur(priceSell, hotel.currency || orderCurrency) ?? 0;
-    const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
-
-    const hotelCost = !explicitBuyCurrency && ((sellConverted > 0 && costConverted > sellConverted) ||
-      (priceEur > 0 && costConverted > priceEur)
-    )
-      ? costUah
-      : costConverted;
-
-    costEur += hotelCost;
-  }
-
-  for (const service of costBearingServices) {
-    const priceBuy = parseAmount(service.price_buy) || 0;
-    const priceSell = parseAmount(service.price) || 0;
-    if (priceBuy <= 0) continue;
-
-    let serviceCostEur: number;
-
-    if (service.type === 'transfer') {
-      const transferSupplier = cleanSupplierName(service.supplier_name || service.service_supplier_name).toLowerCase();
-      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
-      const transferCurrency = explicitBuyCurrency || (eurTransferSuppliers.has(transferSupplier)
-        ? 'EUR'
-        : String(service.currency || orderCurrency));
-      const transferCostConverted = toEur(priceBuy, transferCurrency) ?? 0;
-      const transferSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
-      const transferCostUah = toEur(priceBuy, 'UAH') ?? transferCostConverted;
-
-      serviceCostEur = !explicitBuyCurrency && transferCurrency !== 'UAH' && (
-        (transferSellConverted > 0 && transferCostConverted > transferSellConverted * 2) ||
-        (priceEur > 0 && transferCostConverted > priceEur)
-      )
-        ? transferCostUah
-        : transferCostConverted;
-    } else if (service.type === 'airticket') {
-      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
-      const taggedBuyCurrency = supplierTagCurrency(supplierNameMap, service.supplier_id);
-      const buyCurrency = explicitBuyCurrency
-        || taggedBuyCurrency
-        || String(service.currency || orderCurrency);
-      const airCostConverted = toEur(priceBuy, buyCurrency) ?? 0;
-      const airSellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
-      const airCostUah = toEur(priceBuy, 'UAH') ?? airCostConverted;
-      const canUseImpliedFx = Boolean(orderGrossScale)
-        && airSellLines.length > 0
-        && buyCurrency === String(service.currency || orderCurrency)
-        && buyCurrency !== 'EUR'
-        && !taggedBuyCurrency;
-      if (canUseImpliedFx && orderGrossScale) {
-        serviceCostEur = airCostConverted * orderGrossScale;
-        costBasisUsed = 'amount_details_implied_fx';
-      } else {
-        serviceCostEur = !explicitBuyCurrency && ((airSellConverted > 0 && airCostConverted > airSellConverted * 2) ||
-          (priceEur > 0 && airCostConverted > priceEur)
-        )
-          ? airCostUah
-          : airCostConverted;
-      }
-    } else {
-      const explicitBuyCurrency = normalizeCurrencyCode(service.currency_buy);
-      const serviceCurrency = explicitBuyCurrency || String(service.currency || orderCurrency);
-      const costConverted = toEur(priceBuy, serviceCurrency) ?? 0;
-      const sellConverted = toEur(priceSell, service.currency || orderCurrency) ?? 0;
-      const costUah = toEur(priceBuy, 'UAH') ?? costConverted;
-
-      serviceCostEur = !explicitBuyCurrency && ((sellConverted > 0 && costConverted > sellConverted) ||
-        (priceEur > 0 && costConverted > priceEur)
-      )
-        ? costUah
-        : costConverted;
-    }
-
-    costEur += serviceCostEur;
-  }
-
-  const rawCostEur = round2(costEur);
-  const rawProfitEur = round2(priceEur - rawCostEur);
   const discountEur = amountDetailTotals.discountEur > 0
     ? amountDetailTotals.discountEur
     : discountFallbackEur(detail, orderCurrency, toEur);
-  if (shouldUseSpecialReconciliationRule(accountingClass, rawProfitEur, discountEur)) {
+  if (shouldUseSpecialReconciliationRule(accountingClass, canonicalProfit.profitEur, discountEur)) {
     return {
       costEur: round2(Math.max(priceEur - discountEur, 0)),
       profitEur: discountEur,
@@ -1205,13 +980,13 @@ function computeOrderFinancials(
   }
 
   return {
-    costEur: rawCostEur,
-    profitEur: rawProfitEur,
-    profitPct: priceEur > 0 ? Math.round((rawProfitEur / priceEur) * 100) : 0,
+    costEur: canonicalProfit.costAmountEur,
+    profitEur: canonicalProfit.profitEur,
+    profitPct: canonicalProfit.profitPct,
     accountingClass,
-    profitBasisUsed: 'raw_margin',
-    costBasisUsed,
-    hasIncompleteCoreCost,
+    profitBasisUsed: canonicalProfit.profitBasisUsed,
+    costBasisUsed: canonicalProfit.costBasisUsed,
+    hasIncompleteCoreCost: canonicalProfit.hasIncompleteCoreCost,
   };
 }
 
@@ -1692,6 +1467,10 @@ async function buildReportingRows(
     const urgentCommentCount = comments.filter((comment: any) => String(comment.type || '').toLowerCase() === 'urgent').length;
     const countries = Array.isArray(detail.country) ? detail.country : [];
     const suppliers = Array.isArray(detail.supplier) ? detail.supplier : [];
+    const supplierNameMap = buildSupplierNameMap(detail);
+    const eurTransferSuppliers = new Set(['suntransfers']);
+    const normalizedOrderCurrency = normalizeCurrencyCode(detail.currency || summary.currency) || 'UAH';
+    const baseRevenueEur = round2(computeBaseRevenueEur(detail, summary, normalizedOrderCurrency, toEur));
 
     const orderId = Number(detail.order_id || row.orderId);
     const totalAmountOriginal = parseAmount(detail.total_amount);
@@ -1755,6 +1534,8 @@ async function buildReportingRows(
       profitBasisUsed: financials.profitBasisUsed,
       costBasisUsed: financials.costBasisUsed,
       hasIncompleteCoreCost: financials.hasIncompleteCoreCost,
+      profitLogicVersion: CURRENT_PROFIT_LOGIC_VERSION,
+      profitRecalculatedAt: new Date(),
       bookingRateDate: bookingDate ? parseDateOnly(bookingDate) : null,
       touristsCount: Array.isArray(detail.tourist) ? detail.tourist.length : 0,
       countriesCount: countries.length,
@@ -1847,7 +1628,15 @@ async function buildReportingRows(
         priceOriginal: decimalValue(priceOriginal),
         priceEur: decimalValue(toEur(priceOriginal, raw.currency)),
         priceBuyOriginal: decimalValue(priceBuyOriginal),
-        priceBuyEur: decimalValue(toEur(priceBuyOriginal, normalizeCurrencyCode(raw.currency_buy) || raw.currency)),
+        priceBuyEur: decimalValue(calculateSourceLinePriceBuyEur(
+          productGroup,
+          raw,
+          normalizedOrderCurrency,
+          baseRevenueEur,
+          toEur,
+          supplierNameMap,
+          eurTransferSuppliers,
+        )),
         discountOriginal: decimalValue(discountOriginal),
         numberOfServices: Number.isFinite(Number(raw.number_of_services)) ? Number(raw.number_of_services) : null,
         hotelName: String(raw.hotel_name || '') || null,
