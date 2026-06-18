@@ -901,6 +901,7 @@ function singleAirticketOrderImpliedTotals(
   detail: JsonRecord,
   orderCurrency: string,
   toEur: (amount: number | null, currency?: string | null) => number | null,
+  supplierNameMap: Map<string, string>,
 ) {
   const hotels = Array.isArray(detail.hotel) ? detail.hotel : [];
   const services = Array.isArray(detail.service) ? detail.service : [];
@@ -908,6 +909,11 @@ function singleAirticketOrderImpliedTotals(
 
   const service = services[0];
   if (String(service?.type || '').toLowerCase() !== 'airticket') return null;
+
+  const buyOriginal = parseAmount(service?.price_buy) || 0;
+  const explicitBuyCurrency = normalizeCurrencyCode(service?.currency_buy);
+  const taggedBuyCurrency = supplierTagCurrency(supplierNameMap, service?.supplier_id);
+  if (buyOriginal > 0 && (explicitBuyCurrency || taggedBuyCurrency)) return null;
 
   const totals = amountDetailsTotals(detail, orderCurrency, toEur);
   if (totals.rowCount !== 1) return null;
@@ -930,7 +936,6 @@ function singleAirticketOrderImpliedTotals(
   }
 
   const sellOriginal = parseAmount(service?.price) || 0;
-  const buyOriginal = parseAmount(service?.price_buy) || 0;
   const totalSellEur = toEur(parseAmount(amountDetail?.total_sell) || 0, amountDetail?.currency || orderCurrency) ?? 0;
   const directSellEur = toEur(sellOriginal, service?.currency || orderCurrency) ?? 0;
 
@@ -965,7 +970,8 @@ function computeOrderFinancials(
   ];
   const accountingClass = classifyAccountingClass(allLines, hasOrderDestination);
   const amountDetailTotals = amountDetailsTotals(detail, orderCurrency, toEur);
-  const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur);
+  const supplierNameMap = buildSupplierNameMap(detail);
+  const impliedSingleAirticket = singleAirticketOrderImpliedTotals(detail, orderCurrency, toEur, supplierNameMap);
   const basePriceEur = amountDetailTotals.netEur > 0
     ? amountDetailTotals.netEur
     : balanceAmount > 0
@@ -1014,7 +1020,6 @@ function computeOrderFinancials(
     return false;
   });
   const eurTransferSuppliers = new Set(['suntransfers']);
-  const supplierNameMap = buildSupplierNameMap(detail);
   const profitBearingServices = services.filter((row: any) => {
     const status = normalizeLineStatus(row.status);
     if (status === 'CNF') return true;
