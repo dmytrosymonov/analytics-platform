@@ -41,4 +41,5 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    process.exit(process.exitCode || 0);
   });
