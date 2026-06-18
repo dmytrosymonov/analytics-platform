@@ -15,6 +15,8 @@ const CURRENCIES_CACHE_KEY = 'gto:currencies:v3';
 const CACHE_TTL = 86400; // 24 hours
 const HISTORICAL_CACHE_TTL = 86400 * 30; // 30 days
 const CURRENCIES_CACHE_TTL = 86400 * 30; // 30 days
+const NEAREST_DATE_FALLBACK_CURRENCY = 'KZT';
+const NEAREST_DATE_FALLBACK_MAX_DAYS = 31;
 
 export class CurrencyService {
   /**
@@ -27,7 +29,12 @@ export class CurrencyService {
     return this.getRatesForDate(apiKey, v3BaseUrl, today);
   }
 
-  static async getRatesForDate(apiKey: string, v3BaseUrl: string, date: string): Promise<CurrencyRates> {
+  static async getRatesForDate(
+    apiKey: string,
+    v3BaseUrl: string,
+    date: string,
+    options: { skipNearestDateFallback?: boolean } = {},
+  ): Promise<CurrencyRates> {
     const today = new Date().toISOString().slice(0, 10);
     const normalizedDate = String(date).slice(0, 10);
     const cacheKey = normalizedDate === today
@@ -36,9 +43,31 @@ export class CurrencyService {
 
     const cached = await redis.get(cacheKey).catch(() => null);
     if (cached) {
-      return JSON.parse(cached) as CurrencyRates;
+      const cachedRates = JSON.parse(cached) as CurrencyRates;
+      if (options.skipNearestDateFallback) {
+        return cachedRates;
+      }
+      return this.ensureNearestDateCurrencyFallback(apiKey, v3BaseUrl, normalizedDate, cachedRates, cacheKey);
     }
 
+    const rates = await this.fetchExactRatesForDate(apiKey, v3BaseUrl, normalizedDate, today);
+    if (options.skipNearestDateFallback) {
+      await redis.setex(
+        cacheKey,
+        normalizedDate === today ? CACHE_TTL : HISTORICAL_CACHE_TTL,
+        JSON.stringify(rates),
+      );
+      return rates;
+    }
+    return this.ensureNearestDateCurrencyFallback(apiKey, v3BaseUrl, normalizedDate, rates, cacheKey);
+  }
+
+  private static async fetchExactRatesForDate(
+    apiKey: string,
+    v3BaseUrl: string,
+    normalizedDate: string,
+    today: string,
+  ): Promise<CurrencyRates> {
     logger.info({ v3BaseUrl, date: normalizedDate }, 'Fetching currency rates from GTO v3');
 
     try {
@@ -50,16 +79,93 @@ export class CurrencyService {
       const rates = this.parseResponse(resp.data, codeMap);
       logger.info({ ratesCount: Object.keys(rates.rates).length }, 'Currency rates fetched successfully');
 
-      await redis.setex(
-        cacheKey,
-        normalizedDate === today ? CACHE_TTL : HISTORICAL_CACHE_TTL,
-        JSON.stringify(rates),
-      );
       return rates;
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to fetch currency rates from GTO v3');
       throw err;
     }
+  }
+
+  private static async ensureNearestDateCurrencyFallback(
+    apiKey: string,
+    v3BaseUrl: string,
+    normalizedDate: string,
+    rates: CurrencyRates,
+    cacheKey: string,
+  ): Promise<CurrencyRates> {
+    const today = new Date().toISOString().slice(0, 10);
+    let resolvedRates = rates;
+
+    if (
+      normalizedDate !== today &&
+      resolvedRates.rates[NEAREST_DATE_FALLBACK_CURRENCY] === undefined
+    ) {
+      const fallback = await this.findNearestHistoricalCurrencyRate(
+        apiKey,
+        v3BaseUrl,
+        normalizedDate,
+        NEAREST_DATE_FALLBACK_CURRENCY,
+      );
+
+      if (fallback) {
+        resolvedRates = {
+          ...resolvedRates,
+          rates: {
+            ...resolvedRates.rates,
+            [NEAREST_DATE_FALLBACK_CURRENCY]: fallback.rate,
+          },
+        };
+        logger.warn(
+          {
+            requestedDate: normalizedDate,
+            fallbackDate: fallback.date,
+            currency: NEAREST_DATE_FALLBACK_CURRENCY,
+            fallbackRate: fallback.rate,
+          },
+          'Historical currency missing for requested date, using nearest available date',
+        );
+      }
+    }
+
+    await redis.setex(
+      cacheKey,
+      normalizedDate === today ? CACHE_TTL : HISTORICAL_CACHE_TTL,
+      JSON.stringify(resolvedRates),
+    );
+
+    return resolvedRates;
+  }
+
+  private static async findNearestHistoricalCurrencyRate(
+    apiKey: string,
+    v3BaseUrl: string,
+    normalizedDate: string,
+    currencyCode: string,
+  ): Promise<{ date: string; rate: number } | null> {
+    const target = new Date(`${normalizedDate}T00:00:00.000Z`);
+    for (let offset = 1; offset <= NEAREST_DATE_FALLBACK_MAX_DAYS; offset += 1) {
+      for (const direction of [-1, 1] as const) {
+        const candidate = new Date(target);
+        candidate.setUTCDate(candidate.getUTCDate() + offset * direction);
+        const candidateDate = candidate.toISOString().slice(0, 10);
+        try {
+          const candidateRates = await this.getRatesForDate(apiKey, v3BaseUrl, candidateDate, {
+            skipNearestDateFallback: true,
+          });
+          const candidateRate = candidateRates.rates[currencyCode];
+          if (candidateRate !== undefined && candidateRate > 0) {
+            return { date: candidateDate, rate: candidateRate };
+          }
+        } catch (err: any) {
+          logger.warn(
+            { date: candidateDate, currencyCode, err: err?.message },
+            'Failed to fetch nearest-date fallback currency rates',
+          );
+        }
+      }
+    }
+
+    return null;
   }
 
   static async getCurrencyCodeMap(apiKey: string, v3BaseUrl: string): Promise<Record<string, string>> {
