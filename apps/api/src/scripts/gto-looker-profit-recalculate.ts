@@ -4,11 +4,16 @@ import { prisma } from '../lib/prisma';
 type ProfitBasis =
   | 'zero_for_non_cnf'
   | 'raw_margin'
+  | 'amount_details_row_margin'
+  | 'amount_details_net_basis'
   | 'discount_fallback'
   | 'special_reconciliation_rule';
 
 type CostBasis =
   | 'api_rate_direct'
+  | 'amount_details_row_margin'
+  | 'amount_details_implied_fx'
+  | 'discount_adjusted_margin'
   | 'incomplete_core_fallback';
 
 type ReportingLine = {
@@ -136,6 +141,17 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
 
   const revenueEur = round2(decimalToNumber(order.totalAmountEur));
   const hasIncompleteCoreCost = order.lines.some(hasMissingRequiredBuyCost);
+  const currentProfitBasis = String(order.profitBasisUsed || '');
+  const currentCostBasis = String(order.costBasisUsed || '');
+
+  const preserveCurrent = (): RecalculatedProfit => ({
+    costAmountEur: round2(decimalToNumber(order.costAmountEur)),
+    profitEur: round2(decimalToNumber(order.profitEur)),
+    profitPct: Number(order.profitPct || 0),
+    profitBasisUsed: (currentProfitBasis || 'raw_margin') as ProfitBasis,
+    costBasisUsed: (currentCostBasis || 'api_rate_direct') as CostBasis,
+    hasIncompleteCoreCost,
+  });
 
   if (hasIncompleteCoreCost) {
     return {
@@ -146,6 +162,12 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
       costBasisUsed: 'incomplete_core_fallback',
       hasIncompleteCoreCost: true,
     };
+  }
+
+  const isLegacyAmountDetailsBasis = currentCostBasis === 'amount_details_implied_fx'
+    || currentProfitBasis === 'amount_details_net_basis';
+  if (!isLegacyAmountDetailsBasis) {
+    return preserveCurrent();
   }
 
   const costAmountEur = round2(order.lines
