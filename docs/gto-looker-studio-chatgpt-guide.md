@@ -449,7 +449,10 @@ Recommended global controls:
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
-- Main scheduled refresh covers only the rolling last 2 days by `created_at`.
+- Scheduled refresh has two layers:
+  - every 30 minutes: orders created in the exact last 24 hours;
+  - every day at 01:00 Kyiv: all future-start orders (`date_start = today .. today+365 days`) plus orders created in the exact last 7 days.
+- The 01:00 nightly refresh does not depend on `updated_at`; it refreshes the full candidate set and deduplicates by `order_id`.
 - Regular sync uses lighter runtime settings:
   - detail fetch concurrency `4`
   - detail batch size `100`

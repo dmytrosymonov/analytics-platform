@@ -125,16 +125,17 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - built into API startup via `startGtoLookerSyncScheduler()`
   - recent-created refresh runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
   - recent-created refresh scans Kyiv today + yesterday and keeps only orders created in the exact last 24 hours
-  - nightly updated refresh runs every day at `01:00` Kyiv (`0 1 * * *`)
-  - nightly updated refresh scans future-start orders (`today .. today+365 days`) and refreshes only those with source `updated_at` newer than `reporting_gto_orders.updated_at`
-  - if future-start nightly scan returns no usable `updated_at` values, the nightly job falls back to refreshing the full future-start candidate set once for that run
+  - nightly refresh runs every day at `01:00` Kyiv (`0 1 * * *`)
+  - nightly refresh fully refreshes all future-start orders (`date_start = today .. today+365 days`) regardless of `updated_at`
+  - nightly refresh also fully refreshes orders created in the exact last `7` days regardless of `updated_at`
+  - nightly refresh merges the future-start and recent-created candidate sets by `order_id`, so an order present in both windows is fetched and rebuilt once
   - sync execution must process order windows in small batches and commit each batch separately instead of building one giant in-memory write set for the full window
   - current protective sync settings are:
     - detail fetch concurrency `4`
     - detail batch size `100`
     - a short pause between committed batches
   - `reporting_gto_sync_runs` should be updated after each committed batch so long backfills show partial progress and can be diagnosed without waiting for a final all-or-nothing finish
-  - one-time operational catch-up before relying on `updated_at`-based nightly refresh:
+  - one-time operational catch-up before relying on broad nightly refresh:
     - `recent_month_catchup` for orders created from `2026-05-01`
     - `future_start_catchup` for all future-start orders in `today .. today+365 days`
 - Coverage nuance:

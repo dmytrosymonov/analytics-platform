@@ -21,7 +21,7 @@ const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 const DEFAULT_RECENT_CREATED_CRON = '*/30 * * * *';
 const DEFAULT_UPDATED_REFRESH_CRON = '0 1 * * *';
 const DEFAULT_RECENT_CREATED_WINDOW_HOURS = 24;
-const DEFAULT_UPDATED_REFRESH_WINDOW_HOURS = 48;
+const DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS = 7;
 const DEFAULT_FUTURE_START_WINDOW_DAYS = 365;
 const DETAIL_CONCURRENCY = 4;
 const DETAIL_BATCH_SIZE = 100;
@@ -1245,12 +1245,6 @@ async function fetchExistingEnrichment(orderIds: bigint[]) {
   };
 }
 
-function isSourceUpdatedNewer(sourceUpdatedAt: Date | null, existingUpdatedAt: Date | null) {
-  if (!sourceUpdatedAt) return false;
-  if (!existingUpdatedAt) return true;
-  return sourceUpdatedAt.getTime() > existingUpdatedAt.getTime();
-}
-
 async function selectRecentCreatedSummaries(
   http: ReturnType<typeof createHttpClient>,
   timezone = DEFAULT_TIMEZONE,
@@ -1270,65 +1264,51 @@ async function selectRecentCreatedSummaries(
   };
 }
 
-async function selectUpdatedFutureStartSummaries(
+async function selectNightlyRefreshSummaries(
   http: ReturnType<typeof createHttpClient>,
-  config: GtoConfig,
   dateFrom: string,
   dateTo: string,
 ): Promise<SummarySelection> {
-  const warnings: string[] = [];
-  const rows = await fetchOrderListWindow(http, dateFrom, dateTo, { sortBy: 'date_start' });
-  const cutoff = subtractHours(new Date(), DEFAULT_UPDATED_REFRESH_WINDOW_HOURS);
-  let validUpdatedAtRows = 0;
-  let skippedInvalidUpdatedAt = 0;
-  const candidates: JsonRecord[] = [];
-
-  for (const row of rows) {
-    const sourceUpdatedAt = parseDateTime(row.updated_at);
-    if (!sourceUpdatedAt) {
-      skippedInvalidUpdatedAt += 1;
-      continue;
-    }
-    validUpdatedAtRows += 1;
-    if (sourceUpdatedAt.getTime() >= cutoff.getTime()) {
-      candidates.push(row);
-    }
-  }
-
-  warnings.push(`Scanned ${rows.length} future-start summaries for updated_at refresh`);
-  warnings.push(`Found ${validUpdatedAtRows} future-start summaries with valid updated_at`);
-  if (skippedInvalidUpdatedAt > 0) {
-    warnings.push(`Skipped ${skippedInvalidUpdatedAt} future-start summaries with missing or invalid updated_at`);
-  }
-
-  if (rows.length > 0 && validUpdatedAtRows === 0) {
-    warnings.push('updated_at unavailable for future-start nightly scan; falling back to full future-start refresh');
-    return {
-      summaries: rows,
-      warnings,
-    };
-  }
-
-  const orderIds = candidates
-    .map((row) => Number(row.order_id))
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .map((value) => BigInt(value));
-  const existing = orderIds.length ? await fetchExistingEnrichment(orderIds) : {
-    existingOrderEnrichment: new Map<number, ExistingOrderEnrichment>(),
-    existingLineEnrichment: new Map<string, ExistingLineEnrichment>(),
-  };
-
-  const summaries = candidates.filter((row) => {
-    const orderId = Number(row.order_id);
-    const existingOrder = existing.existingOrderEnrichment.get(orderId);
-    const sourceUpdatedAt = parseDateTime(row.updated_at);
-    return isSourceUpdatedNewer(sourceUpdatedAt, existingOrder?.updatedAt || null);
+  const now = new Date();
+  const today = computeTimezoneDate(DEFAULT_TIMEZONE, now);
+  const createdDateFrom = addDays(today, -DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS);
+  const createdCutoff = subtractHours(now, DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS * 24);
+  const [futureStartRows, createdRows] = await Promise.all([
+    fetchOrderListWindow(http, dateFrom, dateTo, { sortBy: 'date_start' }),
+    fetchOrderListWindow(http, createdDateFrom, today, { sortBy: 'created_at' }),
+  ]);
+  const recentCreatedRows = createdRows.filter((row) => {
+    const createdAt = parseDateTime(row.created_at);
+    return createdAt ? createdAt.getTime() >= createdCutoff.getTime() : false;
   });
 
-  warnings.push(`Selected ${summaries.length} future-start orders with newer updated_at in last ${DEFAULT_UPDATED_REFRESH_WINDOW_HOURS}h`);
+  const merged = new Map<number, JsonRecord>();
+  let duplicateRows = 0;
+  for (const row of futureStartRows) {
+    const orderId = Number(row.order_id);
+    if (Number.isFinite(orderId) && orderId > 0) {
+      merged.set(orderId, row);
+    }
+  }
+  for (const row of recentCreatedRows) {
+    const orderId = Number(row.order_id);
+    if (!Number.isFinite(orderId) || orderId <= 0) continue;
+    if (merged.has(orderId)) {
+      duplicateRows += 1;
+      continue;
+    }
+    merged.set(orderId, row);
+  }
+
   return {
-    summaries,
-    warnings,
+    summaries: Array.from(merged.values()),
+    warnings: [
+      `Scanned ${futureStartRows.length} future-start summaries for nightly refresh window ${dateFrom}..${dateTo}`,
+      `Scanned ${createdRows.length} created-at summaries for nightly refresh window ${createdDateFrom}..${today}`,
+      `Filtered ${recentCreatedRows.length} created-at summaries for exact last ${DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS} days`,
+      `Merged ${merged.size} unique nightly refresh order ids`,
+      `Skipped ${duplicateRows} duplicate order ids already present in future-start candidates`,
+    ],
   };
 }
 
@@ -1385,7 +1365,7 @@ async function selectSummariesForMode(
     case 'recent_created_refresh':
       return selectRecentCreatedSummaries(http, DEFAULT_TIMEZONE);
     case 'updated_refresh':
-      return selectUpdatedFutureStartSummaries(http, config, params.dateFrom, params.dateTo);
+      return selectNightlyRefreshSummaries(http, params.dateFrom, params.dateTo);
     case 'future_start_catchup':
       return {
         summaries: await fetchOrderListWindow(http, params.dateFrom, params.dateTo, { sortBy: 'date_start' }),
