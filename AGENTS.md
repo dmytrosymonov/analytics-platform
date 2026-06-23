@@ -124,7 +124,7 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
 - Daily scheduler:
   - built into API startup via `startGtoLookerSyncScheduler()`
   - recent-created refresh runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
-  - recent-created refresh scans Kyiv today + yesterday and keeps only orders created in the exact last 24 hours
+  - recent-created refresh scans and fully refreshes orders created in the exact last `96` hours
   - nightly refresh runs every day at `01:00` Kyiv (`0 1 * * *`)
   - nightly refresh fully refreshes all future-start orders (`date_start = today .. today+365 days`) regardless of `updated_at`
   - nightly refresh also fully refreshes orders created in the exact last `7` days regardless of `updated_at`

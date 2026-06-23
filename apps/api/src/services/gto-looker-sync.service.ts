@@ -20,7 +20,7 @@ const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
 const DEFAULT_TIMEZONE = 'Europe/Kyiv';
 const DEFAULT_RECENT_CREATED_CRON = '*/30 * * * *';
 const DEFAULT_UPDATED_REFRESH_CRON = '0 1 * * *';
-const DEFAULT_RECENT_CREATED_WINDOW_HOURS = 24;
+const DEFAULT_RECENT_CREATED_WINDOW_HOURS = 96;
 const DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS = 7;
 const DEFAULT_FUTURE_START_WINDOW_DAYS = 365;
 const DETAIL_CONCURRENCY = 4;
@@ -1252,8 +1252,8 @@ async function selectRecentCreatedSummaries(
   const now = new Date();
   const cutoff = subtractHours(now, DEFAULT_RECENT_CREATED_WINDOW_HOURS);
   const today = computeTimezoneDate(timezone, now);
-  const yesterday = addDays(today, -1);
-  const rows = await fetchOrderListWindow(http, yesterday, today, { sortBy: 'created_at' });
+  const dateFrom = addDays(today, -Math.ceil(DEFAULT_RECENT_CREATED_WINDOW_HOURS / 24));
+  const rows = await fetchOrderListWindow(http, dateFrom, today, { sortBy: 'created_at' });
   const summaries = rows.filter((row) => {
     const createdAt = parseDateTime(row.created_at);
     return createdAt ? createdAt.getTime() >= cutoff.getTime() : false;
