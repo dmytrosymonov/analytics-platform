@@ -23,6 +23,17 @@
 
 ## Available Reporting Tables
 
+### Agent Segmentation Marts
+
+Use these as separate PostgreSQL data sources for agent-segmentation pages. Do not blend them with order-line tables.
+
+- `mart_gto_ua_agent_segment_snapshots`: daily `agent_key × snapshot_date` history, segments, GMV/CNF shares, momentum and quality signals.
+- `mart_gto_ua_agent_segments_current`: latest valid row per agent for current lists and scorecards.
+- `mart_gto_ua_agent_segment_changes`: Friday-to-Friday Upgrade, Downgrade, Same, New and Dropped transitions.
+- `mart_gto_ua_segment_daily_summary`: ready segment totals for trend charts.
+
+The backend calculates the market scope, commercial-agent exclusions, EUR GMV and all segment/momentum rules. Looker Studio only filters and displays these precomputed fields.
+
 ### 1. `public.reporting_gto_orders`
 
 Use this for order-level reporting.

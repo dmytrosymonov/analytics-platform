@@ -393,6 +393,144 @@ model ReportingGtoSyncRun {
   @@map("reporting_gto_sync_runs")
 }
 
+model ReportingGtoAgentScopeOverride {
+  id                  String   @id @default(uuid())
+  agentId             String?  @unique @map("agent_id")
+  normalizedAgentName String?  @unique @map("normalized_agent_name")
+  isCommercial        Boolean  @map("is_commercial")
+  reason              String
+  isActive            Boolean  @default(true) @map("is_active")
+  createdBy           String?  @map("created_by")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("reporting_gto_agent_scope_overrides")
+}
+
+model MartGtoUaAgentSegmentSnapshot {
+  snapshotDate              DateTime @map("snapshot_date") @db.Date
+  agentKey                  String   @map("agent_key")
+  agentId                   String?  @map("agent_id")
+  agentName                 String?  @map("agent_name")
+  agentNetwork              String?  @map("agent_network")
+  identityConfidence        String   @map("identity_confidence")
+  market                    String   @default("GTO.UA")
+  segment                   String
+  segmentRank               Int      @map("segment_rank")
+  cnf365                    Int      @default(0) @map("cnf_365")
+  gmvEur365                 Decimal  @default(0) @map("gmv_eur_365") @db.Decimal(18, 2)
+  cnfShare365               Decimal? @map("cnf_share_365") @db.Decimal(18, 8)
+  gmvShare365               Decimal? @map("gmv_share_365") @db.Decimal(18, 8)
+  cnf90                     Int      @default(0) @map("cnf_90")
+  gmvEur90                  Decimal  @default(0) @map("gmv_eur_90") @db.Decimal(18, 2)
+  cnfShare90                Decimal? @map("cnf_share_90") @db.Decimal(18, 8)
+  gmvShare90                Decimal? @map("gmv_share_90") @db.Decimal(18, 8)
+  bookingMomentum           Decimal? @map("booking_momentum") @db.Decimal(18, 8)
+  revenueMomentum           Decimal? @map("revenue_momentum") @db.Decimal(18, 8)
+  cnx90                     Int      @default(0) @map("cnx_90")
+  attemptCnxRate90          Decimal? @map("attempt_cnx_rate_90") @db.Decimal(18, 8)
+  packageCnf90              Int      @default(0) @map("package_cnf_90")
+  packageShare90            Decimal? @map("package_share_90") @db.Decimal(18, 8)
+  avgGmvPerCnf90            Decimal? @map("avg_gmv_per_cnf_90") @db.Decimal(18, 2)
+  lastCnfDate               DateTime? @map("last_cnf_date") @db.Date
+  isActive7d                Boolean  @default(false) @map("is_active_7d")
+  isActiveMtd               Boolean  @default(false) @map("is_active_mtd")
+  isGrowthCandidate         Boolean  @default(false) @map("is_growth_candidate")
+  isStable                  Boolean  @default(false) @map("is_stable")
+  isLosingMomentum          Boolean  @default(false) @map("is_losing_momentum")
+  isRetentionRisk           Boolean  @default(false) @map("is_retention_risk")
+  isStopped                 Boolean  @default(false) @map("is_stopped")
+  isHighValuePotential      Boolean  @default(false) @map("is_high_value_potential")
+  isHighFrequencyLowValue   Boolean  @default(false) @map("is_high_frequency_low_value")
+  isQualityRisk             Boolean  @default(false) @map("is_quality_risk")
+  qualityOverlay            String   @map("quality_overlay")
+  commercialOverlay         String?  @map("commercial_overlay")
+  includedInBase            Boolean  @default(true) @map("included_in_base")
+  dataQualityFlag           String?  @map("data_quality_flag")
+  logicVersion              Int      @map("logic_version")
+  refreshTimestamp          DateTime @default(now()) @map("refresh_timestamp")
+
+  @@id([snapshotDate, agentKey])
+  @@index([agentKey])
+  @@index([snapshotDate, segment])
+  @@map("mart_gto_ua_agent_segment_snapshots")
+}
+
+model MartGtoUaAgentSegmentChange {
+  fromSnapshotDate       DateTime @map("from_snapshot_date") @db.Date
+  toSnapshotDate         DateTime @map("to_snapshot_date") @db.Date
+  agentKey               String   @map("agent_key")
+  agentName              String?  @map("agent_name")
+  fromSegment            String?  @map("from_segment")
+  toSegment              String?  @map("to_segment")
+  fromRank               Int?     @map("from_rank")
+  toRank                 Int?     @map("to_rank")
+  rankDelta              Int?     @map("rank_delta")
+  transitionType         String   @map("transition_type")
+  cnf365From             Int?     @map("cnf_365_from")
+  cnf365To               Int?     @map("cnf_365_to")
+  gmvEur365From          Decimal? @map("gmv_eur_365_from") @db.Decimal(18, 2)
+  gmvEur365To            Decimal? @map("gmv_eur_365_to") @db.Decimal(18, 2)
+  gmvShare365From        Decimal? @map("gmv_share_365_from") @db.Decimal(18, 8)
+  gmvShare365To          Decimal? @map("gmv_share_365_to") @db.Decimal(18, 8)
+  bookingMomentumTo      Decimal? @map("booking_momentum_to") @db.Decimal(18, 8)
+  revenueMomentumTo      Decimal? @map("revenue_momentum_to") @db.Decimal(18, 8)
+  qualityOverlayTo       String?  @map("quality_overlay_to")
+  primaryDriverLabel     String?  @map("primary_driver_label")
+  refreshTimestamp       DateTime @default(now()) @map("refresh_timestamp")
+
+  @@id([fromSnapshotDate, toSnapshotDate, agentKey])
+  @@index([toSnapshotDate, transitionType])
+  @@map("mart_gto_ua_agent_segment_changes")
+}
+
+model MartGtoUaSegmentDailySummary {
+  snapshotDate     DateTime @map("snapshot_date") @db.Date
+  segment          String
+  segmentRank      Int      @map("segment_rank")
+  agents           Int      @default(0)
+  cnf365           Int      @default(0) @map("cnf_365")
+  gmvEur365        Decimal  @default(0) @map("gmv_eur_365") @db.Decimal(18, 2)
+  cnf90            Int      @default(0) @map("cnf_90")
+  gmvEur90         Decimal  @default(0) @map("gmv_eur_90") @db.Decimal(18, 2)
+  packageCnf90     Int      @default(0) @map("package_cnf_90")
+  cnx90            Int      @default(0) @map("cnx_90")
+  refreshTimestamp DateTime @default(now()) @map("refresh_timestamp")
+
+  @@id([snapshotDate, segment])
+  @@map("mart_gto_ua_segment_daily_summary")
+}
+
+model MartGtoUaAgentSegmentRun {
+  id                    String    @id @default(uuid())
+  status                String
+  snapshotDateFrom      DateTime  @map("snapshot_date_from") @db.Date
+  snapshotDateTo        DateTime  @map("snapshot_date_to") @db.Date
+  snapshotsRefreshed    Int       @default(0) @map("snapshots_refreshed")
+  agentsRefreshed       Int       @default(0) @map("agents_refreshed")
+  unknownIdentityOrders Int       @default(0) @map("unknown_identity_orders")
+  warnings              Json?
+  errorMessage          String?   @map("error_message") @db.Text
+  triggeredBy           String?   @map("triggered_by")
+  startedAt             DateTime  @default(now()) @map("started_at")
+  finishedAt            DateTime? @map("finished_at")
+
+  @@index([startedAt])
+  @@map("mart_gto_ua_agent_segment_runs")
+}
+
+model MartGtoUaAgentSegmentDirtyRange {
+  id               String    @id @default(uuid())
+  snapshotDateFrom DateTime  @map("snapshot_date_from") @db.Date
+  snapshotDateTo   DateTime  @map("snapshot_date_to") @db.Date
+  reason           String
+  createdAt        DateTime  @default(now()) @map("created_at")
+  resolvedAt       DateTime? @map("resolved_at")
+
+  @@index([resolvedAt, snapshotDateFrom])
+  @@map("mart_gto_ua_agent_segment_dirty_ranges")
+}
+
 model PromptTemplate {
   id              String    @id @default(uuid())
   sourceId        String    @unique @map("source_id")

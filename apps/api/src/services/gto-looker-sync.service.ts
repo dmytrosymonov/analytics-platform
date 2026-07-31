@@ -14,6 +14,7 @@ import {
   ProfitBasis,
 } from './gto-looker-profit-engine';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
+import { markGtoAgentSegmentDirtyRange, refreshYesterdayGtoAgentSegments } from './gto-agent-segmentation.service';
 
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
@@ -1653,6 +1654,21 @@ function chunk<T>(rows: T[], size: number): T[][] {
 
 async function replaceReportingRows(orderRows: any[], lineRows: any[], lineAirlineRows: any[]) {
   const orderIds = orderRows.map((row) => row.orderId);
+  const existingOrders = await (prisma as any).reportingGtoOrder.findMany({
+    where: { orderId: { in: orderIds } },
+    select: {
+      orderId: true,
+      createdAt: true,
+      agentId: true,
+      agentName: true,
+      structureName: true,
+      orderStatus: true,
+      balanceAmountEur: true,
+      totalAmountEur: true,
+      productSegment: true,
+    },
+  });
+  const existingByOrderId = new Map<string, any>(existingOrders.map((row: any) => [String(row.orderId), row]));
   let deletedLineRows = 0;
   let deletedOrderRows = 0;
   let insertedOrderRows = 0;
@@ -1692,6 +1708,28 @@ async function replaceReportingRows(orderRows: any[], lineRows: any[], lineAirli
       data: rows,
     });
   }
+
+  const asComparable = (value: unknown) => {
+    if (value === null || value === undefined) return '';
+    if (value instanceof Date) return value.toISOString();
+    return String(value);
+  };
+  const isGtoUa = (value: unknown) => String(value || '').trim().toLowerCase() === 'gto.ua';
+  const segmentationChanged = (previous: any, next: any) => !previous
+    || [
+      'createdAt', 'agentId', 'agentName', 'structureName', 'orderStatus',
+      'balanceAmountEur', 'totalAmountEur', 'productSegment',
+    ].some((field) => asComparable(previous[field]) !== asComparable(next[field]));
+  const dirtyDates = new Map<string, Date>();
+  for (const next of orderRows) {
+    const previous = existingByOrderId.get(String(next.orderId));
+    if (!segmentationChanged(previous, next)) continue;
+    if (previous && isGtoUa(previous.structureName)) dirtyDates.set(`${String(next.orderId)}:previous`, previous.createdAt);
+    if (isGtoUa(next.structureName)) dirtyDates.set(`${String(next.orderId)}:next`, next.createdAt);
+  }
+  await Promise.all(Array.from(dirtyDates.values()).map((createdAt) =>
+    markGtoAgentSegmentDirtyRange(createdAt, 'reporting_gto_order_changed'),
+  ));
 
   return {
     deletedLineRows,
@@ -2032,6 +2070,11 @@ export function startGtoLookerSyncScheduler() {
           dateTo,
           triggeredBy: 'scheduler',
         });
+        try {
+          await refreshYesterdayGtoAgentSegments('scheduler');
+        } catch (segmentError: any) {
+          logger.error({ err: segmentError?.message || String(segmentError) }, 'Scheduled GTO agent segmentation refresh failed');
+        }
       } catch (error: any) {
         logger.error({ err: error?.message || String(error), dateFrom, dateTo }, 'Scheduled updated GTO Looker sync failed');
       }
