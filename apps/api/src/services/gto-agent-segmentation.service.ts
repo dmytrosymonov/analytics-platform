@@ -203,14 +203,14 @@ SELECT
   cnf_90, round(gmv_eur_90, 2), cnf_share_90, gmv_share_90, booking_momentum, revenue_momentum,
   cnx_90, attempt_cnx_rate_90, package_cnf_90, package_share_90, round(avg_gmv_per_cnf_90, 2),
   last_cnf_date, is_active_7d, is_active_mtd,
-  (cnf_365 >= 4 AND cnf_90 >= 4 AND (booking_momentum > 1.30 OR revenue_momentum > 1.30)),
-  (booking_momentum BETWEEN 0.85 AND 1.30 AND revenue_momentum BETWEEN 0.85 AND 1.30),
-  ((booking_momentum < 0.85 OR revenue_momentum < 0.85) AND cnf_90 > 0),
-  (cnf_365 >= 11 AND (cnf_90 = 0 OR booking_momentum < 0.65 OR revenue_momentum < 0.65)),
-  (cnf_365 > 0 AND cnf_90 = 0),
-  (cnf_share_365 IS NOT NULL AND gmv_share_365 > cnf_share_365 * 1.30),
-  (gmv_share_365 IS NOT NULL AND cnf_share_365 > gmv_share_365 * 1.30),
-  (cnf_365 >= 4 AND attempts_90 >= 10 AND attempt_cnx_rate_90 >= 0.30),
+  coalesce(cnf_365 >= 4 AND cnf_90 >= 4 AND (booking_momentum > 1.30 OR revenue_momentum > 1.30), false),
+  coalesce(booking_momentum BETWEEN 0.85 AND 1.30 AND revenue_momentum BETWEEN 0.85 AND 1.30, false),
+  coalesce((booking_momentum < 0.85 OR revenue_momentum < 0.85) AND cnf_90 > 0, false),
+  coalesce(cnf_365 >= 11 AND (cnf_90 = 0 OR booking_momentum < 0.65 OR revenue_momentum < 0.65), false),
+  coalesce(cnf_365 > 0 AND cnf_90 = 0, false),
+  coalesce(cnf_share_365 IS NOT NULL AND gmv_share_365 > cnf_share_365 * 1.30, false),
+  coalesce(gmv_share_365 IS NOT NULL AND cnf_share_365 > gmv_share_365 * 1.30, false),
+  coalesce(cnf_365 >= 4 AND attempts_90 >= 10 AND attempt_cnx_rate_90 >= 0.30, false),
   CASE
     WHEN attempts_90 < 10 THEN 'Insufficient volume'
     WHEN cnf_365 >= 4 AND attempt_cnx_rate_90 >= 0.30 THEN 'Quality Risk'
