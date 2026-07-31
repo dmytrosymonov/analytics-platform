@@ -139,8 +139,8 @@ WITH base_orders AS (
     count(*) FILTER (WHERE created_date >= DATE '${window90From}')::int AS attempts_90,
     count(*) FILTER (WHERE upper(btrim(order_status)) = 'CNF' AND created_date >= DATE '${window90From}' AND product_segment = 'Package')::int AS package_cnf_90,
     max(created_date) FILTER (WHERE upper(btrim(order_status)) = 'CNF') AS last_cnf_date,
-    bool_or(upper(btrim(order_status)) = 'CNF' AND created_date >= DATE '${active7From}') AS is_active_7d,
-    bool_or(upper(btrim(order_status)) = 'CNF' AND created_date >= DATE '${monthFrom}') AS is_active_mtd
+    coalesce(bool_or(upper(btrim(order_status)) = 'CNF' AND created_date >= DATE '${active7From}'), false) AS is_active_7d,
+    coalesce(bool_or(upper(btrim(order_status)) = 'CNF' AND created_date >= DATE '${monthFrom}'), false) AS is_active_mtd
   FROM eligible_orders
   GROUP BY agent_key
 ), shares AS (
