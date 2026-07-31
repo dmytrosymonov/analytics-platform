@@ -275,11 +275,15 @@ SELECT
     ELSE NULL
   END,
   CURRENT_TIMESTAMP
-FROM mart_gto_ua_agent_segment_snapshots previous
-FULL OUTER JOIN mart_gto_ua_agent_segment_snapshots current
-  ON previous.agent_key = current.agent_key
-  AND current.snapshot_date = DATE '${friday}'
-WHERE previous.snapshot_date = DATE '${previousFriday}';
+FROM (
+  SELECT * FROM mart_gto_ua_agent_segment_snapshots
+  WHERE snapshot_date = DATE '${previousFriday}'
+) previous
+FULL OUTER JOIN (
+  SELECT * FROM mart_gto_ua_agent_segment_snapshots
+  WHERE snapshot_date = DATE '${friday}'
+) current
+  ON previous.agent_key = current.agent_key;
 `;
 }
 
