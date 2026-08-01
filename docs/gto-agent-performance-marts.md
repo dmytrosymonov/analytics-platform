@@ -12,10 +12,14 @@ All revenue is `COALESCE(balance_amount_eur, total_amount_eur)`. Financial metri
 
 | View | Grain | Use |
 | --- | --- | --- |
-| `mart_gto_ua_agent_performance_summary` | agent x created date | Custom periods, weekly activity, CNX monitoring, New Active and Reactivated activity flags. |
+| `mart_gto_ua_agent_performance_summary` | agent x created date | Use the display name `Agent Performance Daily`; it provides custom periods, CNX monitoring, New Active and Reactivated activity flags. |
 | `mart_gto_ua_agent_performance_current` | one row per agent | Top-20, current/previous week, MTD, YoY MTD, eight-week benchmark, segment and quality/momentum fields. |
 | `mart_gto_ua_agent_performance_product_destination` | agent x created date x product x order-level destination | Product and destination profile without line-level duplication. |
 | `mart_gto_ua_agent_performance_gmv_drivers` | completed week | GMV WoW bridge: active-agent base, order frequency, average check, new/re-activated/stopped agents. |
+
+## Common Calendar Anchor
+
+All four views are anchored to the last fully completed Friday in `Europe/Kyiv`. A reporting week is Saturday through Friday. Rows after that Friday are intentionally excluded, so no chart mixes an in-progress day with completed weekly and monthly comparisons.
 
 ## Status and Lifecycle Rules
 
