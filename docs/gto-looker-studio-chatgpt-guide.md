@@ -464,6 +464,7 @@ Recommended global controls:
   - every 30 minutes: orders created in the exact last 96 hours;
   - every day at 01:10 Kyiv: all future-start orders (`date_start = today .. today+365 days`) plus orders created in the exact last 60 days.
 - The 01:10 nightly refresh does not depend on `updated_at`; it refreshes the full candidate set and deduplicates by `order_id`.
+- Agent-movement pages must use the dedicated PostgreSQL performance marts, not blends of orders, lines, and segment snapshots. Their contract is documented in `docs/gto-agent-performance-marts.md`.
 - Regular sync uses lighter runtime settings:
   - detail fetch concurrency `4`
   - detail batch size `100`
