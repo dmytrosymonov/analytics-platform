@@ -462,8 +462,8 @@ Recommended global controls:
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
 - Scheduled refresh has two layers:
   - every 30 minutes: orders created in the exact last 96 hours;
-  - every day at 01:00 Kyiv: all future-start orders (`date_start = today .. today+365 days`) plus orders created in the exact last 7 days.
-- The 01:00 nightly refresh does not depend on `updated_at`; it refreshes the full candidate set and deduplicates by `order_id`.
+  - every day at 01:10 Kyiv: all future-start orders (`date_start = today .. today+365 days`) plus orders created in the exact last 60 days.
+- The 01:10 nightly refresh does not depend on `updated_at`; it refreshes the full candidate set and deduplicates by `order_id`.
 - Regular sync uses lighter runtime settings:
   - detail fetch concurrency `4`
   - detail batch size `100`

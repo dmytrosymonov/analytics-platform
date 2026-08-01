@@ -125,9 +125,9 @@ Exchange rates are fetched from GTO v3 API (`/currency_rates`) and cached in Red
   - built into API startup via `startGtoLookerSyncScheduler()`
   - recent-created refresh runs every `30` minutes in `Europe/Kyiv` timezone (`*/30 * * * *`)
   - recent-created refresh scans and fully refreshes orders created in the exact last `96` hours
-  - nightly refresh runs every day at `01:00` Kyiv (`0 1 * * *`)
+  - nightly refresh runs every day at `01:10` Kyiv (`10 1 * * *`)
   - nightly refresh fully refreshes all future-start orders (`date_start = today .. today+365 days`) regardless of `updated_at`
-  - nightly refresh also fully refreshes orders created in the exact last `7` days regardless of `updated_at`
+  - nightly refresh also fully refreshes orders created in the exact last `60` days regardless of `updated_at`
   - nightly refresh merges the future-start and recent-created candidate sets by `order_id`, so an order present in both windows is fetched and rebuilt once
   - sync execution must process order windows in small batches and commit each batch separately instead of building one giant in-memory write set for the full window
   - current protective sync settings are:
