@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger';
 import { createHttpClient } from '../../lib/http';
 import { CurrencyService, CurrencyRates } from '../../lib/currency.service';
 import { prisma } from '../../lib/prisma';
+import { normalizeGtoOrderTemporalData } from '../../services/gto-temporal-normalization.service';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -144,16 +145,6 @@ export class GTOConnector implements SourceConnector {
     const month = Number(match[2]);
     if (!year || !month || month < 1 || month > 12) return null;
     return `${RU_MONTHS[month - 1]} ${year}`;
-  }
-
-  private salesLeadDays(createdAt?: string | null, startDate?: string | null) {
-    if (!createdAt || !startDate) return null;
-    const createdMatch = String(createdAt).match(/(\d{4})-(\d{2})-(\d{2})/);
-    const startMatch = String(startDate).match(/(\d{4})-(\d{2})-(\d{2})/);
-    if (!createdMatch || !startMatch) return null;
-    const createdUtc = Date.UTC(Number(createdMatch[1]), Number(createdMatch[2]) - 1, Number(createdMatch[3]));
-    const startUtc = Date.UTC(Number(startMatch[1]), Number(startMatch[2]) - 1, Number(startMatch[3]));
-    return Math.round((startUtc - createdUtc) / 86400000);
   }
 
   private httpClient(baseUrl: string, apiKey: string, timeout: number) {
@@ -670,9 +661,20 @@ export class GTOConnector implements SourceConnector {
     const rawAgent = detail.agent_name || orderSummary?.company_name || '';
     const agentName = this.normalizeAgentName(rawAgent);
     const network = this.detectAgentNetwork(rawAgent);
-    const startDate = detail.date_start || orderSummary?.date_start || null;
     const createdAt = detail.created_at || orderSummary?.created_at || null;
-    const leadDays = this.salesLeadDays(createdAt, startDate);
+    const temporal = normalizeGtoOrderTemporalData({
+      ordersListDateStart: orderSummary?.date_start,
+      ordersListDateEnd: orderSummary?.date_end,
+      orderDataDateStart: detail.date_start,
+      orderDataDateEnd: detail.date_end,
+      createdAt,
+      lines: [
+        ...hotels.map((line: any) => ({ dateFrom: line.date_from, dateTo: line.date_to })),
+        ...services.map((line: any) => ({ dateFrom: line.date_from, dateTo: line.date_to })),
+      ],
+    });
+    const startDate = temporal.dateStart ? temporal.dateStart.toISOString().slice(0, 10) : null;
+    const leadDays = temporal.salesLeadDays;
 
     return {
       orderId:        detail.order_id || orderSummary?.order_id,

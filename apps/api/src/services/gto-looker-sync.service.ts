@@ -15,6 +15,11 @@ import {
 } from './gto-looker-profit-engine';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 import { markGtoAgentSegmentDirtyRange, refreshYesterdayGtoAgentSegments } from './gto-agent-segmentation.service';
+import {
+  evaluateGtoLineDateRange,
+  normalizeGtoOrderTemporalData,
+  parseGtoDateOnly,
+} from './gto-temporal-normalization.service';
 
 const DEFAULT_BASE_URL = 'https://api.gto.ua/api/private';
 const DEFAULT_V3_BASE_URL = 'https://api.gto.ua/api/v3';
@@ -298,16 +303,6 @@ function detectAgentNetwork(name?: string | null): string | null {
     if (normalized.includes('хоттур')) return 'Хоттур';
   }
   return null;
-}
-
-function salesLeadDays(createdAt?: string | null, startDate?: string | null) {
-  if (!createdAt || !startDate) return null;
-  const created = String(createdAt).match(/(\d{4})-(\d{2})-(\d{2})/);
-  const start = String(startDate).match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (!created || !start) return null;
-  const createdUtc = Date.UTC(Number(created[1]), Number(created[2]) - 1, Number(created[3]));
-  const startUtc = Date.UTC(Number(start[1]), Number(start[2]) - 1, Number(start[3]));
-  return Math.round((startUtc - createdUtc) / 86400000);
 }
 
 const EXCURSION_SERVICE_TYPE_NAMES = new Set([
@@ -1435,6 +1430,14 @@ async function buildReportingRows(
       ...hotelLines.map((line: JsonRecord) => ({ productGroup: 'hotel' as ProductGroup, raw: line })),
       ...serviceLines.map((line: JsonRecord) => ({ productGroup: productGroupForService(line), raw: line })),
     ];
+    const temporal = normalizeGtoOrderTemporalData({
+      ordersListDateStart: summary.date_start,
+      ordersListDateEnd: summary.date_end,
+      orderDataDateStart: detail.date_start,
+      orderDataDateEnd: detail.date_end,
+      createdAt: detail.created_at || summary.created_at,
+      lines: allLines.map(({ raw }) => ({ dateFrom: raw.date_from, dateTo: raw.date_to })),
+    });
     const activeLines = allLines.filter(({ raw }) => isActiveStatus(raw.status));
     const activeProductGroups = Array.from(new Set(activeLines.map(({ productGroup }) => productGroup)));
 
@@ -1482,8 +1485,14 @@ async function buildReportingRows(
       createdAt: parseDateTime(detail.created_at || summary.created_at) || new Date(),
       updatedAt: parseDateTime(detail.updated_at || summary.updated_at),
       confirmedAt: parseDateTime(detail.confirmed_at),
-      dateStart: parseDateOnly(detail.date_start || summary.date_start),
-      dateEnd: parseDateOnly(detail.date_end || summary.date_end),
+      dateStart: temporal.dateStart,
+      dateEnd: temporal.dateEnd,
+      sourceDateStart: temporal.sourceDateStart,
+      sourceDateEnd: temporal.sourceDateEnd,
+      dateStartSource: temporal.dateStartSource,
+      dateEndSource: temporal.dateEndSource,
+      dateQualityStatus: temporal.dateQualityStatus,
+      dateQualityFlags: temporal.dateQualityFlags,
       orderStatus: String(detail.status || summary.status || ''),
       orderStatusName: String(detail.status_name || summary.status_name || '') || null,
       creator: String(detail.creator || summary.creator || '') || null,
@@ -1548,7 +1557,7 @@ async function buildReportingRows(
       commentCount: comments.length,
       urgentCommentCount,
       hasComments: comments.length > 0,
-      salesLeadDays: salesLeadDays(detail.created_at || summary.created_at, detail.date_start || summary.date_start),
+      salesLeadDays: temporal.salesLeadDays,
       syncedAt: new Date(),
     });
 
@@ -1558,6 +1567,7 @@ async function buildReportingRows(
       const priceOriginal = parseAmount(raw.price);
       const priceBuyOriginal = parseAmount(raw.price_buy);
       const discountOriginal = parseAmount(raw.discount);
+      const lineDateRange = evaluateGtoLineDateRange({ dateFrom: raw.date_from, dateTo: raw.date_to });
       const existingLineEnrichment = context.existingLineEnrichment.get(lineId);
       const carrierStats = productGroup === 'airticket'
         ? (
@@ -1602,8 +1612,9 @@ async function buildReportingRows(
         airlineCodes: airlineCodes.join(' | ') || null,
         airlineNames: airlineNames.join(' | ') || null,
         destinationRaw: extractDestinationRaw(raw, productGroup),
-        dateFrom: parseDateOnly(raw.date_from),
-        dateTo: parseDateOnly(raw.date_to),
+        dateFrom: parseGtoDateOnly(raw.date_from),
+        dateTo: parseGtoDateOnly(raw.date_to),
+        hasInvalidDateRange: lineDateRange.hasInvalidDateRange,
         currency: String(raw.currency || '') || null,
         currencyBuy: normalizeCurrencyCode(raw.currency_buy),
         priceOriginal: decimalValue(priceOriginal),

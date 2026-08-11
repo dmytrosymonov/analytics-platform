@@ -229,6 +229,12 @@ model ReportingGtoOrder {
   confirmedAt             DateTime? @map("confirmed_at")
   dateStart               DateTime? @map("date_start") @db.Date
   dateEnd                 DateTime? @map("date_end") @db.Date
+  sourceDateStart         DateTime? @map("source_date_start") @db.Date
+  sourceDateEnd           DateTime? @map("source_date_end") @db.Date
+  dateStartSource         String?   @map("date_start_source")
+  dateEndSource           String?   @map("date_end_source")
+  dateQualityStatus       String?   @map("date_quality_status")
+  dateQualityFlags        Json?     @map("date_quality_flags")
   orderStatus             String    @map("order_status")
   orderStatusName         String?   @map("order_status_name")
   creator                 String?
@@ -321,6 +327,7 @@ model ReportingGtoOrderLine {
   destinationRaw      String?   @map("destination_raw") @db.Text
   dateFrom            DateTime? @map("date_from") @db.Date
   dateTo              DateTime? @map("date_to") @db.Date
+  hasInvalidDateRange Boolean   @default(false) @map("has_invalid_date_range")
   currency            String?
   currencyBuy         String?   @map("currency_buy")
   priceOriginal       Decimal?  @map("price_original") @db.Decimal(18, 2)
@@ -363,6 +370,25 @@ model ReportingGtoOrderLineAirline {
   @@index([airlineCode])
   @@index([airlineName])
   @@map("reporting_gto_order_line_airlines")
+}
+
+model ReportingGtoTemporalQualityRun {
+  id               String    @id @default(uuid())
+  status           String
+  createdAtFrom    DateTime? @map("created_at_from") @db.Date
+  createdAtTo      DateTime? @map("created_at_to") @db.Date
+  startedAt        DateTime  @default(now()) @map("started_at")
+  finishedAt       DateTime? @map("finished_at")
+  scannedOrders    Int       @default(0) @map("scanned_orders")
+  normalizedOrders Int       @default(0) @map("normalized_orders")
+  invalidLineRows  Int       @default(0) @map("invalid_line_rows")
+  unresolvedOrders Int       @default(0) @map("unresolved_orders")
+  warnings         Json?
+  errorMessage     String?   @map("error_message") @db.Text
+  triggeredBy      String?   @map("triggered_by")
+
+  @@index([startedAt])
+  @@map("reporting_gto_temporal_quality_runs")
 }
 
 model ReportingGtoSyncRun {

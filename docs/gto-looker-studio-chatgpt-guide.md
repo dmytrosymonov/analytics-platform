@@ -12,6 +12,7 @@
 - Test-agent orders are already excluded in the backend export by exact normalized match against `agent_name` and `company_name`.
 - Profit is now expected to come from one canonical backend calculator for all structures.
 - Profit logic rollouts should use DB-only recalculation on existing reporting rows when source data has not changed.
+- `date_start` and `date_end` are normalized backend dates for analytics. They may prefer `orders_list` or valid service dates over a malformed `order_data` value; no date repair is performed in Looker Studio.
 
 ## PostgreSQL Source
 
@@ -60,6 +61,12 @@ Typical fields:
 - `confirmed_at`
 - `date_start`
 - `date_end`
+- `source_date_start`
+- `source_date_end`
+- `date_start_source`
+- `date_end_source`
+- `date_quality_status`
+- `date_quality_flags`
 - `order_status`
 - `order_status_name`
 - `agent_name`
@@ -128,6 +135,7 @@ Typical fields:
 - `airline_codes`
 - `airline_names`
 - `status`
+- `has_invalid_date_range`
 - `currency`
 - `currency_buy`
 - `price_original`
@@ -459,6 +467,7 @@ Recommended global controls:
 - EUR must be treated as authoritative for reporting.
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
+- Use order-level `date_start` and `sales_lead_days` for travel-date and booking-depth charts. Do not derive a travel period from line rows marked `has_invalid_date_range = true`.
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
 - Scheduled refresh has two layers:
   - every 30 minutes: orders created in the exact last 96 hours;
