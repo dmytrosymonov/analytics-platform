@@ -28,6 +28,7 @@ const DEFAULT_RECENT_CREATED_CRON = '*/30 * * * *';
 const DEFAULT_UPDATED_REFRESH_CRON = '10 1 * * *';
 const DEFAULT_RECENT_CREATED_WINDOW_HOURS = 96;
 const DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS = 60;
+const DEFAULT_RECENT_COMPLETED_START_WINDOW_DAYS = 30;
 const DEFAULT_FUTURE_START_WINDOW_DAYS = 365;
 const DETAIL_CONCURRENCY = 4;
 const DETAIL_BATCH_SIZE = 100;
@@ -1299,7 +1300,7 @@ async function selectNightlyRefreshSummaries(
   return {
     summaries: Array.from(merged.values()),
     warnings: [
-      `Scanned ${futureStartRows.length} future-start summaries for nightly refresh window ${dateFrom}..${dateTo}`,
+      `Scanned ${futureStartRows.length} start-date summaries for nightly refresh window ${dateFrom}..${dateTo}`,
       `Scanned ${createdRows.length} created-at summaries for nightly refresh window ${createdDateFrom}..${today}`,
       `Filtered ${recentCreatedRows.length} created-at summaries for exact last ${DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS} days`,
       `Merged ${merged.size} unique nightly refresh order ids`,
@@ -1836,10 +1837,10 @@ function computeDailyWindow(timezone = DEFAULT_TIMEZONE) {
   };
 }
 
-function computeFutureStartWindow(timezone = DEFAULT_TIMEZONE) {
+function computeNightlyStartWindow(timezone = DEFAULT_TIMEZONE) {
   const today = computeTimezoneDate(timezone);
   return {
-    dateFrom: today,
+    dateFrom: addDays(today, -DEFAULT_RECENT_COMPLETED_START_WINDOW_DAYS),
     dateTo: addDays(today, DEFAULT_FUTURE_START_WINDOW_DAYS),
   };
 }
@@ -2073,7 +2074,7 @@ export function startGtoLookerSyncScheduler() {
   cron.schedule(
     DEFAULT_UPDATED_REFRESH_CRON,
     async () => {
-      const { dateFrom, dateTo } = computeFutureStartWindow(DEFAULT_TIMEZONE);
+      const { dateFrom, dateTo } = computeNightlyStartWindow(DEFAULT_TIMEZONE);
       try {
         await syncGtoLookerOrders({
           mode: 'updated_refresh',
@@ -2097,6 +2098,9 @@ export function startGtoLookerSyncScheduler() {
     {
       recentCreatedCron: DEFAULT_RECENT_CREATED_CRON,
       updatedRefreshCron: DEFAULT_UPDATED_REFRESH_CRON,
+      recentCompletedStartWindowDays: DEFAULT_RECENT_COMPLETED_START_WINDOW_DAYS,
+      futureStartWindowDays: DEFAULT_FUTURE_START_WINDOW_DAYS,
+      nightlyCreatedWindowDays: DEFAULT_NIGHTLY_CREATED_WINDOW_DAYS,
       timezone: DEFAULT_TIMEZONE,
     },
     'Scheduled GTO Looker sync jobs',
