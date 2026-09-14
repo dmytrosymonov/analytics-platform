@@ -1145,7 +1145,7 @@ async function fetchOrderDetails(
 
     try {
       const resp = await fetchWithRetry(`order_data:${orderId}`, () =>
-        http.get('/order_data', { params: { order_id: orderId } }),
+        http.get('/order_data', { params: { order_id: orderId, format: 'json' } }),
       );
       return {
         orderId,

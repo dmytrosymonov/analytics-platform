@@ -273,7 +273,7 @@ export class GTOConnector implements SourceConnector {
     const fetchDetail = async (orderId: number): Promise<any | null> => {
       const release = await sem.acquire();
       try {
-        const resp = await http.get('/order_data', { params: { order_id: orderId } });
+        const resp = await http.get('/order_data', { params: { order_id: orderId, format: 'json' } });
         return resp.data?.data ?? resp.data ?? null;
       } catch { return null; }
       finally { release(); }
