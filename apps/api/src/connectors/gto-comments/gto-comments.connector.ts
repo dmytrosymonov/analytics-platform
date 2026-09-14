@@ -1,6 +1,7 @@
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
 import { logger } from '../../lib/logger';
 import { createHttpClient } from '../../lib/http';
+import { parseGtoPrivateOrdersList } from '../../lib/gto-private-orders-list';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -85,11 +86,16 @@ export class GTOCommentsConnector implements SourceConnector {
         for (let attempt = 0; attempt <= retryCount; attempt++) {
           try {
             const resp = await http.get('/orders_list', {
-              params: { date_from: fmt(dateFrom), date_to: fmt(dateTo), sort_by: 'created_at', per_page: 1000, page },
+              params: {
+                date_from: fmt(dateFrom),
+                date_to: fmt(dateTo),
+                sort_by: 'created_at',
+                format: 'json',
+                per_page: 1000,
+                page,
+              },
             });
-            const data = resp.data;
-            if (Array.isArray(data)) { pageData = data; break; }
-            if (data?.data && Array.isArray(data.data)) { pageData = data.data; break; }
+            pageData = parseGtoPrivateOrdersList(resp.data);
             break;
           } catch (err: any) {
             if (attempt === retryCount) { logger.warn({ err: err.message }, 'gto-comments fetchList failed'); break; }

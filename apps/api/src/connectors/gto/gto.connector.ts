@@ -2,6 +2,7 @@ import axios from 'axios';
 import { SourceConnector, ConnectorResult } from '../base/connector.interface';
 import { logger } from '../../lib/logger';
 import { createHttpClient } from '../../lib/http';
+import { parseGtoPrivateOrdersList } from '../../lib/gto-private-orders-list';
 import { CurrencyService, CurrencyRates } from '../../lib/currency.service';
 import { prisma } from '../../lib/prisma';
 import { normalizeGtoOrderTemporalData } from '../../services/gto-temporal-normalization.service';
@@ -224,16 +225,23 @@ export class GTOConnector implements SourceConnector {
         let rawTotal: number | null = null; // total count from API if provided
         for (let attempt = 0; attempt <= retryCount; attempt++) {
           try {
-            const resp = await http.get(path, { params: { ...params, per_page: PER_PAGE, page } });
+            const resp = await http.get(path, {
+              params: {
+                ...params,
+                ...(path === '/orders_list' ? { format: 'json' } : {}),
+                per_page: PER_PAGE,
+                page,
+              },
+            });
             const data = resp.data;
-            if (Array.isArray(data)) { pageData = data; break; }
-            if (data?.data && Array.isArray(data.data)) {
-              pageData = data.data;
-              // GTO may return total count in meta fields — capture it for logging
-              rawTotal = data.total ?? data.meta?.total ?? data.count ?? null;
-              break;
-            }
-            logger.warn({ path, page, dataKeys: data ? Object.keys(data) : null }, 'fetchList: unexpected response format');
+            pageData = path === '/orders_list'
+              ? parseGtoPrivateOrdersList(data)
+              : Array.isArray(data)
+                ? data
+                : Array.isArray(data?.data)
+                  ? data.data
+                  : [];
+            rawTotal = data?.total ?? data?.meta?.total ?? data?.count ?? null;
             break;
           } catch (err: any) {
             if (attempt === retryCount) { logger.warn({ path, err: err.message }, 'fetchList failed'); break; }

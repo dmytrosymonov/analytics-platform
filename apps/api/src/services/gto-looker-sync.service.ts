@@ -6,6 +6,7 @@ import { CurrencyService } from '../lib/currency.service';
 import { AirlineService } from '../lib/airline.service';
 import { DestinationService } from '../lib/destination.service';
 import { logger } from '../lib/logger';
+import { parseGtoPrivateOrdersList } from '../lib/gto-private-orders-list';
 import {
   calculateCanonicalProfit,
   CanonicalProfitLine,
@@ -1081,18 +1082,14 @@ async function fetchOrderListWindow(
           date_to: dateTo,
           sort_by: sortBy,
           status: options?.status,
+          format: 'json',
           per_page: perPage,
           page,
         },
       }),
     );
 
-    const body = resp.data;
-    const pageRows = Array.isArray(body)
-      ? body
-      : Array.isArray(body?.data)
-        ? body.data
-        : [];
+    const pageRows = parseGtoPrivateOrdersList(resp.data) as JsonRecord[];
 
     const keptRows = pageRows.filter((row: JsonRecord) => !isIgnoredTestAgentName(String(row.company_name || '')));
     excluded += pageRows.length - keptRows.length;
