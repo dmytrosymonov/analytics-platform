@@ -1848,6 +1848,26 @@ type PaymentRow = {
   is_revoked: boolean;
 };
 
+function parseGtoPaymentsList(body: unknown): Record<string, unknown>[] {
+  if (Array.isArray(body)) return body as Record<string, unknown>[];
+  if (body && typeof body === 'object' && Array.isArray((body as { data?: unknown }).data)) {
+    return (body as { data: Record<string, unknown>[] }).data;
+  }
+
+  if (typeof body === 'string') {
+    const text = body.trim();
+    if (text.startsWith('{') || text.startsWith('[')) {
+      try {
+        return parseGtoPaymentsList(JSON.parse(text));
+      } catch (error: any) {
+        throw new Error(`GTO payments_list returned invalid JSON text: ${error?.message || String(error)}`);
+      }
+    }
+  }
+
+  throw new Error('GTO payments_list returned an unsupported response; expected a JSON array or an object with data array');
+}
+
 function formatPaymentFormLines(forms: Array<{ payment_form: string; count: number; amount_eur: number }>): string[] {
   return forms.map((form) => `${form.payment_form} — ${formatInt(form.count)} платежей, ${formatInt(form.amount_eur)} EUR`);
 }
@@ -1938,15 +1958,16 @@ async function fetchGtoPaymentsForPeriod(sourceId: string, fromDate: string, toD
         type,
         date_from: fromDate,
         date_to: toDate,
+        format: 'json',
         per_page: perPage,
         page,
       },
     });
 
-    const data = Array.isArray(resp.data?.data) ? resp.data.data : Array.isArray(resp.data) ? resp.data : [];
+    const data = parseGtoPaymentsList(resp.data);
     for (const item of data) {
       if (item?.is_revoked) continue;
-      const amount = Math.abs(parseFloat(item?.amount) || 0);
+      const amount = Math.abs(parseFloat(String(item.amount ?? '')) || 0);
       const currency = String(item?.currency_code || item?.balance_currency_code || 'EUR');
       rows.push({
         id: String(item?.id || ''),
@@ -1964,6 +1985,8 @@ async function fetchGtoPaymentsForPeriod(sourceId: string, fromDate: string, toD
     page++;
     if (page > 20) break;
   }
+
+  logger.info({ type, fromDate, toDate, rowCount: rows.length }, 'Fetched GTO payments_list');
 
   return rows;
 }
