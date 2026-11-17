@@ -1473,6 +1473,33 @@ async function buildReportingRows(
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
     const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
+    const financialAdjustments = Array.isArray(detail.financial_adjustments)
+      ? detail.financial_adjustments.filter((item: JsonRecord) =>
+        ['kickback', 'bonus'].includes(String(item?.type || '').toLowerCase()))
+        .map((item: JsonRecord) => ({
+        id: item.id == null ? null : String(item.id),
+        type: String(item.type).toLowerCase(),
+        amount: round2(parseAmount(item.amount) || 0),
+        currency: normalizeCurrencyCode(item.currency) || normalizedOrderCurrency,
+        status: item.status == null ? null : String(item.status),
+        bonus_status: item.bonus_status == null ? null : String(item.bonus_status),
+        created_at: item.created_at == null ? null : String(item.created_at),
+        updated_at: item.updated_at == null ? null : String(item.updated_at),
+      })).filter((item: JsonRecord) => item.amount > 0)
+      : [];
+    const financialAdjustmentEur = round2(financialAdjustments.reduce((sum: number, item: JsonRecord) => {
+      const type = String(item.type || '').toLowerCase();
+      const eligible = type === 'kickback'
+        ? String(item.status || '').toLowerCase() === 'confirmed'
+        : type === 'bonus' && ['accrued_not_redeemed', 'accrued_and_redeemed'].includes(String(item.bonus_status || '').toLowerCase());
+      return sum + (eligible ? (toEur(item.amount, item.currency) ?? 0) : 0);
+    }, 0));
+    if (String(detail.status || summary.status || '').toUpperCase() === 'CNF' && financialAdjustmentEur > 0) {
+      financials.costEur = round2(financials.costEur + financialAdjustmentEur);
+      financials.profitEur = round2(financials.profitEur - financialAdjustmentEur);
+      const profitRevenueEur = Math.max(baseRevenueEur, 0);
+      financials.profitPct = profitRevenueEur > 0 ? Math.round(financials.profitEur / profitRevenueEur * 100) : 0;
+    }
     const sales = computeOrderSales(detail, summary, toEur);
     const productSegment = classifyProductSegment(allLines, hasOrderDestination);
     const orderAirlineCodes = new Set<string>();
@@ -1522,6 +1549,8 @@ async function buildReportingRows(
       profitBasisUsed: financials.profitBasisUsed,
       costBasisUsed: financials.costBasisUsed,
       hasIncompleteCoreCost: financials.hasIncompleteCoreCost,
+      financialAdjustments,
+      financialAdjustmentEur: decimalValue(financialAdjustmentEur),
       profitLogicVersion: CURRENT_PROFIT_LOGIC_VERSION,
       profitRecalculatedAt: new Date(),
       bookingRateDate: bookingDate ? parseDateOnly(bookingDate) : null,

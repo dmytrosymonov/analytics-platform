@@ -467,6 +467,8 @@ Recommended global controls:
 - EUR must be treated as authoritative for reporting.
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
+- `profit_eur` includes eligible API `financial_adjustments`: confirmed kickbacks and bonuses with status `accrued_not_redeemed` or `accrued_and_redeemed` reduce profit; cancelled kickbacks and expired bonuses do not. API-omitted kickback-derived, promotional, and referral bonuses must not be synthesized.
+- Adjustment values are converted to EUR with the historical booking-date rate and persisted separately for audit. Looker Studio should use `profit_eur`, not add adjustment fields a second time.
 - Use order-level `date_start` and `sales_lead_days` for travel-date and booking-depth charts. Do not derive a travel period from line rows marked `has_invalid_date_range = true`.
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
 - Scheduled refresh has two layers:
