@@ -1,4 +1,4 @@
-export const CURRENT_PROFIT_LOGIC_VERSION = 3;
+export const CURRENT_PROFIT_LOGIC_VERSION = 4;
 
 export type ProfitBasis =
   | 'zero_for_non_cnf'

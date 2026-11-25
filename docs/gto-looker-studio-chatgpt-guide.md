@@ -467,8 +467,12 @@ Recommended global controls:
 - EUR must be treated as authoritative for reporting.
 - FX is based on booking creation date, not current date.
 - For order-level profitability use `profit_eur` from `GTO Orders`, not a Looker formula built from line rows.
-- `profit_eur` includes eligible API `financial_adjustments`: confirmed kickbacks and bonuses with status `accrued_not_redeemed` or `accrued_and_redeemed` reduce profit; cancelled kickbacks and expired bonuses do not. API-omitted kickback-derived, promotional, and referral bonuses must not be synthesized.
+- `profit_eur` includes eligible API `financial_adjustments`: confirmed kickbacks and every bonus except one explicitly marked `accrued_and_expired` reduce CNF profit. Cancelled kickbacks do not. API-omitted kickback-derived, promotional, and referral bonuses must not be synthesized.
+- The PostgreSQL JSON audit preserves every object from the API `financial_adjustments` array, including future/unknown types; only recognized eligible bonus/kickback rows affect profit.
 - Adjustment values are converted to EUR with the historical booking-date rate and persisted separately for audit. Looker Studio should use `profit_eur`, not add adjustment fields a second time.
+- Confirmed hidden service rows (`is_hidden=true`) remain valid source rows. A positive `price_buy` reduces profit even when the row's sell price is zero. PostgreSQL line audit fields include the source service name and hidden flag.
+- Existing-order refresh mode: `npm --workspace apps/api run sync:gto-looker -- --mode=existing_orders_refresh` re-fetches details for existing reporting order IDs without changing recurring scheduler windows. Missing `financial_adjustments` is a per-order failure, never an empty array.
+- After a full source refresh, DB-only profit recalculation uses persisted pre-adjustment bases and per-adjustment EUR values, and must not update `synced_at` or double-subtract adjustments.
 - Use order-level `date_start` and `sales_lead_days` for travel-date and booking-depth charts. Do not derive a travel period from line rows marked `has_invalid_date_range = true`.
 - For profitability ratio by structure or other slices, prefer `SUM(profit_eur) / SUM(total_amount_eur)` over `AVG(profit_pct)`.
 - Scheduled refresh has two layers:

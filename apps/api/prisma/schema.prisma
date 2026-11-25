@@ -261,6 +261,9 @@ model ReportingGtoOrder {
   salesBasisUsed          String?   @map("sales_basis_used")
   costAmountEur           Decimal?  @map("cost_amount_eur") @db.Decimal(18, 2)
   profitEur               Decimal?  @map("profit_eur") @db.Decimal(18, 2)
+  profitRevenueEur         Decimal?  @map("profit_revenue_eur") @db.Decimal(18, 2)
+  baseCostAmountEur       Decimal?  @map("base_cost_amount_eur") @db.Decimal(18, 2)
+  baseProfitEur           Decimal?  @map("base_profit_eur") @db.Decimal(18, 2)
   profitPct               Int?      @map("profit_pct")
   accountingClass         String?   @map("accounting_class")
   profitBasisUsed         String?   @map("profit_basis_used")
@@ -320,6 +323,9 @@ model ReportingGtoOrderLine {
   productGroup        String    @map("product_group")
   rawType             String?   @map("raw_type")
   serviceTypeName     String?   @map("service_type_name")
+  serviceName         String?   @map("service_name") @db.Text
+  serviceFullName     String?   @map("service_full_name") @db.Text
+  isHidden            Boolean?  @map("is_hidden")
   status              String?   @map("status")
   statusName          String?   @map("status_name")
   supplierId          String?   @map("supplier_id")

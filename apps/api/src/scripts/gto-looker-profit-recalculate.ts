@@ -1,33 +1,22 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import {
-  calculateCanonicalProfit,
-  CanonicalProfitLine,
   CostBasis,
   CURRENT_PROFIT_LOGIC_VERSION,
   ProfitBasis,
 } from '../services/gto-looker-profit-engine';
-
-type ReportingLine = {
-  lineId: string;
-  orderId: bigint;
-  productGroup: string;
-  rawType: string | null;
-  serviceTypeName: string | null;
-  status: string | null;
-  currencyBuy: string | null;
-  priceOriginal: unknown;
-  priceEur: unknown;
-  priceBuyOriginal: unknown;
-  priceBuyEur: unknown;
-};
+import { sumEligibleStoredAdjustments } from '../services/gto-financial-adjustments';
 
 type ReportingOrder = {
   orderId: bigint;
   createdAt: Date;
   orderStatus: string;
   structureName: string | null;
-  totalAmountEur: unknown;
+  profitRevenueEur: unknown;
+  baseCostAmountEur: unknown;
+  baseProfitEur: unknown;
+  financialAdjustments: unknown;
+  financialAdjustmentEur: unknown;
   costAmountEur: unknown;
   profitEur: unknown;
   profitPct: number | null;
@@ -36,7 +25,6 @@ type ReportingOrder = {
   hasIncompleteCoreCost: boolean;
   profitLogicVersion: number | null;
   touristsCount: number;
-  lines: ReportingLine[];
 };
 
 type RecalculatedProfit = {
@@ -46,6 +34,7 @@ type RecalculatedProfit = {
   profitBasisUsed: ProfitBasis;
   costBasisUsed: CostBasis;
   hasIncompleteCoreCost: boolean;
+  financialAdjustmentEur: number;
 };
 
 function readArg(name: string) {
@@ -80,20 +69,12 @@ function normalizeStatus(value?: string | null) {
   return String(value || '').trim().toUpperCase();
 }
 
-function toCanonicalProfitLine(line: ReportingLine): CanonicalProfitLine {
-  return {
-    productGroup: line.productGroup,
-    rawType: line.rawType,
-    serviceTypeName: line.serviceTypeName,
-    status: line.status,
-    priceOriginal: decimalToNumber(line.priceOriginal),
-    priceBuyOriginal: decimalToNumber(line.priceBuyOriginal),
-    priceBuyEur: round2(decimalToNumber(line.priceBuyEur)),
-  };
-}
-
 function calculateProfit(order: ReportingOrder): RecalculatedProfit {
   const status = normalizeStatus(order.orderStatus);
+  const adjustments = sumEligibleStoredAdjustments(order.financialAdjustments);
+  if (order.baseCostAmountEur == null || order.baseProfitEur == null || order.profitRevenueEur == null) {
+    throw new Error(`order_id=${order.orderId} has no persisted pre-adjustment profit inputs; run the full API refresh first`);
+  }
   if (status !== 'CNF') {
     return {
       costAmountEur: 0,
@@ -102,40 +83,23 @@ function calculateProfit(order: ReportingOrder): RecalculatedProfit {
       profitBasisUsed: 'zero_for_non_cnf',
       costBasisUsed: 'api_rate_direct',
       hasIncompleteCoreCost: false,
+      financialAdjustmentEur: adjustments,
     };
   }
-
-  const revenueEur = round2(decimalToNumber(order.totalAmountEur));
-  const currentProfitBasis = String(order.profitBasisUsed || '');
-  const currentCostBasis = String(order.costBasisUsed || '');
-
-  const preserveCurrent = (): RecalculatedProfit => ({
-    costAmountEur: round2(decimalToNumber(order.costAmountEur)),
-    profitEur: round2(decimalToNumber(order.profitEur)),
-    profitPct: Number(order.profitPct || 0),
-    profitBasisUsed: (currentProfitBasis || 'raw_margin') as ProfitBasis,
-    costBasisUsed: (currentCostBasis || 'api_rate_direct') as CostBasis,
+  const profitBasisUsed = String(order.profitBasisUsed || 'raw_margin') as ProfitBasis;
+  const costBasisUsed = String(order.costBasisUsed || 'api_rate_direct') as CostBasis;
+  const costAmountEur = round2(decimalToNumber(order.baseCostAmountEur) + adjustments);
+  const profitEur = round2(decimalToNumber(order.baseProfitEur) - adjustments);
+  const revenueEur = round2(decimalToNumber(order.profitRevenueEur));
+  return {
+    costAmountEur,
+    profitEur,
+    profitPct: revenueEur > 0 ? Math.round(profitEur / revenueEur * 100) : 0,
+    profitBasisUsed,
+    costBasisUsed,
     hasIncompleteCoreCost: Boolean(order.hasIncompleteCoreCost),
-  });
-
-  if (order.hasIncompleteCoreCost) {
-    return {
-      costAmountEur: round2(decimalToNumber(order.costAmountEur)),
-      profitEur: round2(decimalToNumber(order.profitEur)),
-      profitPct: Number(order.profitPct || 0),
-      profitBasisUsed: 'discount_fallback',
-      costBasisUsed: 'incomplete_core_fallback',
-      hasIncompleteCoreCost: true,
-    };
-  }
-
-  const isLegacyAmountDetailsBasis = currentCostBasis === 'amount_details_implied_fx'
-    || currentProfitBasis === 'amount_details_net_basis';
-  if (!isLegacyAmountDetailsBasis) {
-    return preserveCurrent();
-  }
-
-  return calculateCanonicalProfit(order.orderStatus, revenueEur, order.lines.map(toCanonicalProfitLine));
+    financialAdjustmentEur: adjustments,
+  };
 }
 
 function hasChanged(order: ReportingOrder, next: RecalculatedProfit) {
@@ -145,6 +109,7 @@ function hasChanged(order: ReportingOrder, next: RecalculatedProfit) {
     || String(order.profitBasisUsed || '') !== next.profitBasisUsed
     || String(order.costBasisUsed || '') !== next.costBasisUsed
     || Boolean(order.hasIncompleteCoreCost) !== next.hasIncompleteCoreCost
+    || round2(decimalToNumber(order.financialAdjustmentEur)) !== next.financialAdjustmentEur
     || Number(order.profitLogicVersion || 0) !== CURRENT_PROFIT_LOGIC_VERSION;
 }
 
@@ -188,7 +153,7 @@ function aggregate(rows: Array<{ order: ReportingOrder; next: RecalculatedProfit
     if (normalizeStatus(row.order.orderStatus) === 'CNF') {
       acc.orders += 1;
       acc.tourists += Number(row.order.touristsCount || 0);
-      acc.revenueEur += decimalToNumber(row.order.totalAmountEur);
+      acc.revenueEur += decimalToNumber(row.order.profitRevenueEur);
       acc.currentProfitEur += decimalToNumber(row.order.profitEur);
       acc.proposedProfitEur += row.next.profitEur;
       if (hasChanged(row.order, row.next)) acc.changedOrders += 1;
@@ -221,9 +186,9 @@ async function updateOrder(orderId: bigint, next: RecalculatedProfit) {
       profitBasisUsed: next.profitBasisUsed,
       costBasisUsed: next.costBasisUsed,
       hasIncompleteCoreCost: next.hasIncompleteCoreCost,
+      financialAdjustmentEur: next.financialAdjustmentEur.toFixed(2),
       profitLogicVersion: CURRENT_PROFIT_LOGIC_VERSION,
       profitRecalculatedAt: new Date(),
-      syncedAt: new Date(),
     },
   });
 }
@@ -236,6 +201,21 @@ async function main() {
   const dryRun = readFlag('dry-run') || !apply;
   const limit = Number(readArg('limit') || 500);
   const where = buildWhere(dateFrom, dateTo, structure);
+
+  const incompleteSourceCount = await prisma.reportingGtoOrder.count({
+    where: {
+      ...where,
+      OR: [
+        { profitRevenueEur: null },
+        { baseCostAmountEur: null },
+        { baseProfitEur: null },
+        { financialAdjustments: { equals: Prisma.DbNull } },
+      ],
+    },
+  });
+  if (incompleteSourceCount > 0) {
+    throw new Error(`${incompleteSourceCount} target rows lack refreshed financial source inputs; run existing_orders_refresh before recalculation`);
+  }
 
   if (apply && readFlag('dry-run')) {
     throw new Error('Use either --dry-run or --apply, not both');
@@ -253,22 +233,24 @@ async function main() {
       where: cursor ? { ...where, orderId: { gt: cursor } } : where,
       orderBy: { orderId: 'asc' },
       take: limit,
-      include: {
-        lines: {
-          select: {
-            lineId: true,
-            orderId: true,
-            productGroup: true,
-            rawType: true,
-            serviceTypeName: true,
-            status: true,
-            currencyBuy: true,
-            priceOriginal: true,
-            priceEur: true,
-            priceBuyOriginal: true,
-            priceBuyEur: true,
-          },
-        },
+      select: {
+        orderId: true,
+        createdAt: true,
+        orderStatus: true,
+        structureName: true,
+        costAmountEur: true,
+        profitEur: true,
+        profitPct: true,
+        profitBasisUsed: true,
+        costBasisUsed: true,
+        hasIncompleteCoreCost: true,
+        profitLogicVersion: true,
+        touristsCount: true,
+        profitRevenueEur: true,
+        baseCostAmountEur: true,
+        baseProfitEur: true,
+        financialAdjustments: true,
+        financialAdjustmentEur: true,
       },
     }) as unknown as ReportingOrder[];
 

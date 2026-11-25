@@ -14,6 +14,7 @@ import {
   CURRENT_PROFIT_LOGIC_VERSION,
   ProfitBasis,
 } from './gto-looker-profit-engine';
+import { buildFinancialAdjustmentSnapshots } from './gto-financial-adjustments';
 import { isIgnoredLookerTestAgentName } from './gto-looker-test-agents';
 import { markGtoAgentSegmentDirtyRange, refreshYesterdayGtoAgentSegments } from './gto-agent-segmentation.service';
 import {
@@ -46,7 +47,8 @@ type SyncMode =
   | 'updated_refresh'
   | 'future_start_catchup'
   | 'recent_month_catchup'
-  | 'historical_2024_catchup';
+  | 'historical_2024_catchup'
+  | 'existing_orders_refresh';
 
 type SyncParams = {
   mode: SyncMode;
@@ -1147,10 +1149,24 @@ async function fetchOrderDetails(
       const resp = await fetchWithRetry(`order_data:${orderId}`, () =>
         http.get('/order_data', { params: { order_id: orderId, format: 'json' } }),
       );
+      const detail = resp.data?.data ?? resp.data;
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+        throw new Error('order_data returned an invalid data object');
+      }
+      if (!Array.isArray(detail.financial_adjustments)) {
+        throw new Error('order_data financial_adjustments is missing or is not an array');
+      }
+      buildFinancialAdjustmentSnapshots(
+        detail.financial_adjustments,
+        parseAmount,
+        normalizeCurrencyCode,
+        normalizeCurrencyCode(detail.currency) || 'UAH',
+        (amount) => amount,
+      );
       return {
         orderId,
         summary: summaryById.get(orderId),
-        detail: resp.data?.data ?? resp.data,
+        detail,
       };
     } catch (error: any) {
       return {
@@ -1350,12 +1366,51 @@ async function selectHistorical2024CatchupSummaries(
   };
 }
 
+async function selectExistingReportingOrderSummaries(): Promise<SummarySelection> {
+  const rows = await (prisma as any).reportingGtoOrder.findMany({
+    orderBy: { orderId: 'asc' },
+    select: {
+      orderId: true,
+      createdAt: true,
+      updatedAt: true,
+      dateStart: true,
+      dateEnd: true,
+      orderStatus: true,
+      orderStatusName: true,
+      creator: true,
+      companyId: true,
+      companyName: true,
+      structureId: true,
+      structureName: true,
+    },
+  });
+  return {
+    summaries: rows.map((row: any) => ({
+      order_id: Number(row.orderId),
+      created_at: row.createdAt?.toISOString(),
+      updated_at: row.updatedAt?.toISOString() || null,
+      date_start: row.dateStart?.toISOString().slice(0, 10) || null,
+      date_end: row.dateEnd?.toISOString().slice(0, 10) || null,
+      status: row.orderStatus,
+      status_name: row.orderStatusName,
+      creator: row.creator,
+      company_id: row.companyId,
+      company_name: row.companyName,
+      structure_id: row.structureId,
+      structure_name: row.structureName,
+    })),
+    warnings: ['Selected existing reporting order ids directly; no orders_list date-window selection was used'],
+  };
+}
+
 async function selectSummariesForMode(
   http: ReturnType<typeof createHttpClient>,
   config: GtoConfig,
   params: SyncParams,
 ): Promise<SummarySelection> {
   switch (params.mode) {
+    case 'existing_orders_refresh':
+      return selectExistingReportingOrderSummaries();
     case 'recent_created_refresh':
       return selectRecentCreatedSummaries(http, DEFAULT_TIMEZONE);
     case 'updated_refresh':
@@ -1473,27 +1528,19 @@ async function buildReportingRows(
       ? existingOrderEnrichment.hasOrderDestination
       : resolvedDestination.hasOrderDestination;
     const financials = computeOrderFinancials(detail, summary, toEur, hasOrderDestination);
-    const financialAdjustments = Array.isArray(detail.financial_adjustments)
-      ? detail.financial_adjustments.filter((item: JsonRecord) =>
-        ['kickback', 'bonus'].includes(String(item?.type || '').toLowerCase()))
-        .map((item: JsonRecord) => ({
-        id: item.id == null ? null : String(item.id),
-        type: String(item.type).toLowerCase(),
-        amount: round2(parseAmount(item.amount) || 0),
-        currency: normalizeCurrencyCode(item.currency) || normalizedOrderCurrency,
-        status: item.status == null ? null : String(item.status),
-        bonus_status: item.bonus_status == null ? null : String(item.bonus_status),
-        created_at: item.created_at == null ? null : String(item.created_at),
-        updated_at: item.updated_at == null ? null : String(item.updated_at),
-      })).filter((item: JsonRecord) => item.amount > 0)
-      : [];
-    const financialAdjustmentEur = round2(financialAdjustments.reduce((sum: number, item: JsonRecord) => {
-      const type = String(item.type || '').toLowerCase();
-      const eligible = type === 'kickback'
-        ? String(item.status || '').toLowerCase() === 'confirmed'
-        : type === 'bonus' && ['accrued_not_redeemed', 'accrued_and_redeemed'].includes(String(item.bonus_status || '').toLowerCase());
-      return sum + (eligible ? (toEur(item.amount, item.currency) ?? 0) : 0);
-    }, 0));
+    const financialAdjustments = buildFinancialAdjustmentSnapshots(
+      detail.financial_adjustments,
+      parseAmount,
+      normalizeCurrencyCode,
+      normalizedOrderCurrency,
+      toEur,
+    );
+    const financialAdjustmentEur = round2(financialAdjustments.reduce(
+      (sum, item) => sum + (item.eligible ? item.amount_eur || 0 : 0),
+      0,
+    ));
+    const baseCostAmountEur = financials.costEur;
+    const baseProfitEur = financials.profitEur;
     if (String(detail.status || summary.status || '').toUpperCase() === 'CNF' && financialAdjustmentEur > 0) {
       financials.costEur = round2(financials.costEur + financialAdjustmentEur);
       financials.profitEur = round2(financials.profitEur - financialAdjustmentEur);
@@ -1544,6 +1591,9 @@ async function buildReportingRows(
       salesBasisUsed: sales.salesBasisUsed,
       costAmountEur: decimalValue(financials.costEur),
       profitEur: decimalValue(financials.profitEur),
+      profitRevenueEur: decimalValue(baseRevenueEur),
+      baseCostAmountEur: decimalValue(baseCostAmountEur),
+      baseProfitEur: decimalValue(baseProfitEur),
       profitPct: financials.profitPct,
       accountingClass: financials.accountingClass,
       profitBasisUsed: financials.profitBasisUsed,
@@ -1632,6 +1682,9 @@ async function buildReportingRows(
         productGroup,
         rawType: String(raw.type || '') || null,
         serviceTypeName: String(raw.service_type_name || '') || null,
+        serviceName: String(raw.name || raw.hotel_name || '') || null,
+        serviceFullName: String(raw.full_name || '') || null,
+        isHidden: typeof raw.is_hidden === 'boolean' ? raw.is_hidden : null,
         status: String(raw.status || '') || null,
         statusName: String(raw.status_name || '') || null,
         supplierId: String(raw.supplier_id || '') || null,
@@ -1684,9 +1737,7 @@ async function buildReportingRows(
 
 function chunk<T>(rows: T[], size: number): T[][] {
   const result: T[][] = [];
-  for (let index = 0; index < rows.length; index += size) {
-    result.push(rows.slice(index, index + size));
-  }
+  for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
   return result;
 }
 
@@ -1712,40 +1763,30 @@ async function replaceReportingRows(orderRows: any[], lineRows: any[], lineAirli
   let insertedOrderRows = 0;
   let insertedLineRows = 0;
 
-  for (const ids of chunk(orderIds, DELETE_CHUNK)) {
-    await (prisma as any).reportingGtoOrderLineAirline.deleteMany({
-      where: { orderId: { in: ids } },
-    });
+  await prisma.$transaction(async (tx: any) => {
+    for (const ids of chunk(orderIds, DELETE_CHUNK)) {
+      await tx.reportingGtoOrderLineAirline.deleteMany({ where: { orderId: { in: ids } } });
+      deletedLineRows += await tx.reportingGtoOrderLine.deleteMany({
+        where: { orderId: { in: ids } },
+      }).then((result: any) => result.count);
+      deletedOrderRows += await tx.reportingGtoOrder.deleteMany({
+        where: { orderId: { in: ids } },
+      }).then((result: any) => result.count);
+    }
 
-    deletedLineRows += await (prisma as any).reportingGtoOrderLine.deleteMany({
-      where: { orderId: { in: ids } },
-    }).then((result: any) => result.count);
-
-    deletedOrderRows += await (prisma as any).reportingGtoOrder.deleteMany({
-      where: { orderId: { in: ids } },
-    }).then((result: any) => result.count);
-  }
-
-  for (const rows of chunk(orderRows, INSERT_CHUNK)) {
-    if (!rows.length) continue;
-    insertedOrderRows += await (prisma as any).reportingGtoOrder.createMany({
-      data: rows,
-    }).then((result: any) => result.count);
-  }
-
-  for (const rows of chunk(lineRows, INSERT_CHUNK)) {
-    if (!rows.length) continue;
-    insertedLineRows += await (prisma as any).reportingGtoOrderLine.createMany({
-      data: rows,
-    }).then((result: any) => result.count);
-  }
-
-  for (const rows of chunk(lineAirlineRows, INSERT_CHUNK)) {
-    if (!rows.length) continue;
-    await (prisma as any).reportingGtoOrderLineAirline.createMany({
-      data: rows,
-    });
-  }
+    for (const rows of chunk(orderRows, INSERT_CHUNK)) {
+      if (!rows.length) continue;
+      insertedOrderRows += await tx.reportingGtoOrder.createMany({ data: rows }).then((result: any) => result.count);
+    }
+    for (const rows of chunk(lineRows, INSERT_CHUNK)) {
+      if (!rows.length) continue;
+      insertedLineRows += await tx.reportingGtoOrderLine.createMany({ data: rows }).then((result: any) => result.count);
+    }
+    for (const rows of chunk(lineAirlineRows, INSERT_CHUNK)) {
+      if (!rows.length) continue;
+      await tx.reportingGtoOrderLineAirline.createMany({ data: rows });
+    }
+  }, { maxWait: 10_000, timeout: 120_000 });
 
   const asComparable = (value: unknown) => {
     if (value === null || value === undefined) return '';
@@ -1836,11 +1877,18 @@ async function buildLookerRowsForSummaries(
     }
 
     const details = await fetchOrderDetails(http, summaryBatch, progressOffset + offset, progressTotal);
-    const built = await buildReportingRows(details, config, buildContext);
-    orderRows.push(...built.orderRows);
-    lineRows.push(...built.lineRows);
-    lineAirlineRows.push(...built.lineAirlineRows);
-    detailErrorRows += built.failed.length;
+    for (const detail of details) {
+      try {
+        const built = await buildReportingRows([detail], config, buildContext);
+        orderRows.push(...built.orderRows);
+        lineRows.push(...built.lineRows);
+        lineAirlineRows.push(...built.lineAirlineRows);
+        detailErrorRows += built.failed.length;
+      } catch (error: any) {
+        detailErrorRows += 1;
+        logger.warn({ orderId: detail.orderId, error: error?.message || String(error) }, 'Failed to build GTO reporting rows; preserving previous order rows');
+      }
+    }
 
     if (offset + DETAIL_BATCH_SIZE < summaries.length && BATCH_PAUSE_MS > 0) {
       await sleep(BATCH_PAUSE_MS);
@@ -2021,7 +2069,7 @@ export async function syncGtoLookerOrders(params: SyncParams): Promise<SyncResul
     await (prisma as any).reportingGtoSyncRun.update({
       where: { id: run.id },
       data: {
-        status: 'success',
+        status: params.mode === 'existing_orders_refresh' && detailErrorRows > 0 ? 'failed' : 'success',
         finishedAt: new Date(),
         fetchedOrderRows: result.fetchedOrderRows,
         fetchedUniqueOrderIds: result.fetchedUniqueOrderIds,
